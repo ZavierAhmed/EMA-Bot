@@ -100,6 +100,13 @@ export function TradeChart({ data, detail, visibility }: { data: TradeChartData;
     markers.current?.setMarkers(visibility.markers ? markerData.current : [])
   }, [visibility])
 
-  if (renderError) return <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">The chart could not be rendered. <button className="underline" onClick={() => setRenderAttempt(value => value + 1)}>Retry chart</button></div>
-  return <div ref={host} className="w-full" aria-label="Trade candlestick chart" />
+  const retry = () => {
+    setRenderError(false)
+    setRenderAttempt(value => value + 1)
+  }
+
+  return <div>
+    {renderError && <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">The chart could not be rendered. <button className="underline" onClick={retry}>Retry chart</button></div>}
+    <div ref={host} className="w-full" aria-label="Trade candlestick chart" />
+  </div>
 }
