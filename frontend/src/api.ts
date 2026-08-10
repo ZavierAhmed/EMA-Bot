@@ -9,6 +9,10 @@ export type HealthStatus = {
   database: string
 }
 
+export type BinanceSymbol = { symbol: string; baseAsset: string; quoteAsset: string; status: string; contractType: string }
+export type MonitoredSymbol = { id: number; symbol: string; baseAsset: string; quoteAsset: string; isEnabled: boolean }
+export type TradingSettings = { riskReward: number; fixedOrderSizeUsdt: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; trailingStopEnabled: boolean; updatedAtUtc: string }
+
 type AntiforgeryResponse = { token: string }
 type ApiMessage = { message?: string }
 
@@ -56,3 +60,16 @@ export async function logout(): Promise<void> {
 export async function getHealth(): Promise<HealthStatus> {
   return request<HealthStatus>('/api/health')
 }
+
+async function protectedRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const token = await antiforgeryToken()
+  return request<T>(path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token }, body: body === undefined ? undefined : JSON.stringify(body) })
+}
+
+export const getBinanceSymbols = () => request<BinanceSymbol[]>('/api/binance/symbols')
+export const getMonitoredSymbols = () => request<MonitoredSymbol[]>('/api/symbols')
+export const addMonitoredSymbol = (symbol: string) => protectedRequest<MonitoredSymbol>('/api/symbols', 'POST', { symbol })
+export const setSymbolEnabled = (id: number, isEnabled: boolean) => protectedRequest<MonitoredSymbol>(`/api/symbols/${id}/enabled`, 'PATCH', { isEnabled })
+export const removeMonitoredSymbol = (id: number) => protectedRequest<void>(`/api/symbols/${id}`, 'DELETE')
+export const getTradingSettings = () => request<TradingSettings>('/api/settings/trading')
+export const updateTradingSettings = (settings: Omit<TradingSettings, 'updatedAtUtc'>) => protectedRequest<TradingSettings>('/api/settings/trading', 'PUT', settings)

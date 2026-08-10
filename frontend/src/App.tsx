@@ -4,6 +4,8 @@ import { AppShell } from './components/AppShell'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { SymbolsPage } from './pages/SymbolsPage'
 
 function ProtectedLayout() {
   const { user, isLoading } = useAuth()
@@ -30,8 +32,8 @@ export function App() {
         <Route path="backtests" element={<PlaceholderPage title="Backtests" />} />
         <Route path="paper-trading" element={<PlaceholderPage title="Paper Trading" />} />
         <Route path="trades" element={<PlaceholderPage title="Trades" />} />
-        <Route path="symbols" element={<PlaceholderPage title="Symbols" />} />
-        <Route path="settings" element={<PlaceholderPage title="Settings" />} />
+        <Route path="symbols" element={<SymbolsPage />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

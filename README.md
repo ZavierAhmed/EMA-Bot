@@ -1,6 +1,8 @@
 # EMA Bot
 
-EMA Bot is a small private administration application for an EMA trading bot. Milestone 0 provides the secure application foundation only: an Admin login, MySQL persistence, API health reporting, and a light React shell. It is currently intended to grow toward backtesting and paper trading; no exchange integration, trading logic, charting, or live order execution exists yet.
+EMA Bot is a small private administration application for an EMA trading bot. Milestone 1 adds public Binance USDⓈ-M Futures market data, Admin-managed monitored symbols, persisted global trading settings, and a diagnostic EMA 9/15/100 signal preview.
+
+No real trades are placed, no paper trades exist, and no historical candles are permanently stored. Binance API keys are not required: this milestone uses only public market-data endpoints.
 
 ## Prerequisites
 
@@ -42,9 +44,17 @@ npm run dev
 
 Open the Vite address shown in the terminal, normally `http://localhost:5173`.
 
+## Binance market data and strategy
+
+The API uses `https://fapi.binance.com/fapi/v1/exchangeInfo` and `/fapi/v1/klines` for active USDT-margined perpetual contracts only. Supported strategy intervals are `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`, `3d`, `1w`, and `1M` (one month).
+
+EMA values use an SMA seed for their first full period, then the standard `2 / (N + 1)` multiplier. Only completed candles participate in crossover and confirmation evaluation. A crossover is either emitted immediately or confirmed by the next completed candle, according to the saved setting. The optional EMA 100 filter applies on the actual signal candle. Preview output also provides the normalized EMA 9/15 gap and its expanding/contracting state.
+
+The Symbols page lets an Admin choose individual eligible contracts. The Settings page persists one global risk/reward, fixed USDT order size, confirmation, EMA 100, and future trailing-stop toggle. Trailing-stop behavior is documented only; it is not implemented.
+
 ## Database migration
 
-The initial migration is committed at `backend/src/EmaBot.Api/Migrations`. The API applies pending migrations at startup. To apply migrations explicitly:
+Migrations are committed at `backend/src/EmaBot.Api/Migrations`. The API applies pending migrations at startup. To apply migrations explicitly:
 
 ```powershell
 dotnet ef database update --project backend/src/EmaBot.Api --startup-project backend/src/EmaBot.Api
@@ -72,7 +82,7 @@ npm run lint
 npm run build
 ```
 
-The backend tests use an in-memory test database to verify unauthenticated access is rejected, invalid login is rejected, and a valid Admin can load `/api/auth/me`. For a full MySQL smoke test, configure the secrets above, run the API, sign in through the UI, and call `GET /api/health`.
+The backend tests use an in-memory test database and mocked Binance HTTP responses. They cover auth, Binance metadata/kline parsing and rate-limit handling, EMA warmup, crossovers, confirmation expiry, EMA 100 filtering, and closed-candle behavior. For a full MySQL smoke test, configure the secrets above, run the API, sign in through the UI, and call `GET /api/health`.
 
 ## Configuration defaults
 
@@ -82,4 +92,4 @@ The backend tests use an in-memory test database to verify unauthenticated acces
 - `Trading:DefaultRiskReward` = `2.0`
 - `Trading:DefaultFixedOrderSizeUsdt` = `100`
 
-They are configuration placeholders only; no trading behavior is implemented.
+They seed the first persisted global settings record only; no trade execution behavior is implemented.

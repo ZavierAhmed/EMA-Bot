@@ -1,7 +1,9 @@
 using EmaBot.Api.Auth;
+using EmaBot.Api.Binance;
 using EmaBot.Api.Configuration;
 using EmaBot.Api.Data;
 using EmaBot.Api.Services;
+using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.Configure<BootstrapAdminOptions>(builder.Configuration.GetSection(BootstrapAdminOptions.SectionName));
+builder.Services.Configure<TradingDefaultsOptions>(builder.Configuration.GetSection(TradingDefaultsOptions.SectionName));
 
 // A real connection string is supplied through user-secrets or environment variables.
 // The credential-free fallback keeps the API startable so /api/health can report an unavailable database.
@@ -67,6 +70,15 @@ builder.Services.AddAntiforgery(options =>
 });
 
 builder.Services.AddAuthorization();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddScoped<TradingSettingsService>();
+builder.Services.AddSingleton<EmaSignalEngine>();
+builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>
+{
+    client.BaseAddress = new Uri("https://fapi.binance.com/");
+    client.Timeout = TimeSpan.FromSeconds(15);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
+});
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

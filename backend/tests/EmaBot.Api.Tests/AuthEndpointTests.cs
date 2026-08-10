@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using EmaBot.Api.Auth;
+using EmaBot.Api.Binance;
 using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
 using Microsoft.AspNetCore.DataProtection;
@@ -60,6 +61,34 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         Assert.Equal(AppRoles.Admin, payload.Role);
     }
 
+    [Fact]
+    public async Task TradingSettings_AreProtectedAndPersistUpdates()
+    {
+        using var anonymous = _factory.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/settings/trading")).StatusCode);
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        var token = await GetAntiforgeryToken(client);
+        Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, token, "admin", "A-strong-password-123!")).StatusCode);
+        var updateToken = await GetAntiforgeryToken(client);
+        using var request = new HttpRequestMessage(HttpMethod.Put, "/api/settings/trading") { Content = JsonContent.Create(new { riskReward = 3m, fixedOrderSizeUsdt = 250m, waitForConfirmationCandle = false, useEma100Filter = true, trailingStopEnabled = false }) };
+        request.Headers.Add("X-CSRF-TOKEN", updateToken);
+        Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(request)).StatusCode);
+        var settings = await client.GetFromJsonAsync<TradingSettingsResponse>("/api/settings/trading");
+        Assert.Equal(3m, settings?.RiskReward);
+        Assert.True(settings?.UseEma100Filter);
+    }
+
+    [Fact]
+    public async Task Symbols_RejectUnsupportedAndDuplicateContracts()
+    {
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        var token = await GetAntiforgeryToken(client);
+        Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, token, "admin", "A-strong-password-123!")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await PostJson(client, "/api/symbols", "ETHUSDT")).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
+    }
+
     private static async Task<string> GetAntiforgeryToken(HttpClient client)
     {
         var response = await client.GetAsync("/api/auth/antiforgery");
@@ -78,6 +107,14 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         request.Headers.Add("X-CSRF-TOKEN", token);
         return await client.SendAsync(request);
     }
+
+    private static async Task<HttpResponseMessage> PostJson(HttpClient client, string path, string symbol)
+    {
+        var token = await GetAntiforgeryToken(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, path) { Content = JsonContent.Create(new { symbol }) };
+        request.Headers.Add("X-CSRF-TOKEN", token);
+        return await client.SendAsync(request);
+    }
 }
 
 public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
@@ -89,6 +126,8 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
+            services.RemoveAll<IBinanceFuturesMarketDataClient>();
+            services.AddSingleton<IBinanceFuturesMarketDataClient>(new TestBinanceClient());
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));
             services.RemoveAll(typeof(IDbContextOptionsConfiguration<EmaBotDbContext>));
             services.RemoveAll<IHostedService>();

@@ -25,6 +25,7 @@ public sealed class DatabaseInitializer(
             await using var scope = scopeFactory.CreateAsyncScope();
             var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
             await database.Database.MigrateAsync(cancellationToken);
+            await scope.ServiceProvider.GetRequiredService<TradingSettingsService>().GetAsync(cancellationToken);
 
             var userManager = scope.ServiceProvider.GetRequiredService<UserManager<EmaUser>>();
             var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
