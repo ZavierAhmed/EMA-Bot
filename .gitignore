@@ -1,0 +1,30 @@
+# .NET build output and local tooling
+[Bb]in/
+[Oo]bj/
+.vs/
+TestResults/
+.nuget/
+.tools/
+
+# Local secrets and configuration
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+*.pem
+*.key
+.env
+.env.*
+!.env.example
+
+# Node/Vite
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# IDE and OS files
+.idea/
+.vscode/
+*.user
+*.suo
+.DS_Store
+Thumbs.db
