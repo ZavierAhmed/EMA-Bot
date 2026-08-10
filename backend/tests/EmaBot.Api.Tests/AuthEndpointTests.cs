@@ -119,6 +119,9 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
 
 public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
 {
+    private readonly string _databaseName = $"EmaBotApiTests-{Guid.NewGuid()}";
+    public TestBinanceClient BinanceClient { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
@@ -127,11 +130,11 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
         {
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
             services.RemoveAll<IBinanceFuturesMarketDataClient>();
-            services.AddSingleton<IBinanceFuturesMarketDataClient>(new TestBinanceClient());
+            services.AddSingleton<IBinanceFuturesMarketDataClient>(BinanceClient);
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));
             services.RemoveAll(typeof(IDbContextOptionsConfiguration<EmaBotDbContext>));
             services.RemoveAll<IHostedService>();
-            services.AddDbContext<EmaBotDbContext>(options => options.UseInMemoryDatabase("EmaBotApiTests"));
+            services.AddDbContext<EmaBotDbContext>(options => options.UseInMemoryDatabase(_databaseName));
 
             using var provider = services.BuildServiceProvider();
             using var scope = provider.CreateScope();

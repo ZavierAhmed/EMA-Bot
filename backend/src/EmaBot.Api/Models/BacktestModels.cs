@@ -1,4 +1,5 @@
 using EmaBot.Api.Strategy;
+using System.Text.Json.Serialization;
 
 namespace EmaBot.Api.Models;
 
@@ -55,6 +56,7 @@ public sealed class BacktestTrade
 {
     public int Id { get; set; }
     public int BacktestRunId { get; set; }
+    [JsonIgnore]
     public BacktestRun? BacktestRun { get; set; }
     public SignalDirection Direction { get; set; }
     public DateTimeOffset CrossoverTimeUtc { get; set; }

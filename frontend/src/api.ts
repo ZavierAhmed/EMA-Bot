@@ -12,7 +12,8 @@ export type HealthStatus = {
 export type BinanceSymbol = { symbol: string; baseAsset: string; quoteAsset: string; status: string; contractType: string }
 export type MonitoredSymbol = { id: number; symbol: string; baseAsset: string; quoteAsset: string; isEnabled: boolean }
 export type TradingSettings = { riskReward: number; fixedOrderSizeUsdt: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; trailingStopEnabled: boolean; feePercentPerSide: number; updatedAtUtc: string }
-export type BacktestRun = { id: number; symbol: string; interval: string; requestedStartUtc: string; requestedEndUtc: string; candleCount: number; totalTrades: number; winningTrades: number; losingTrades: number; winRatePercent: number; grossPnlUsdt: number; netPnlUsdt: number; totalFeesUsdt: number; profitFactor: number | null; averageRMultiple: number; maxDrawdownUsdt: number; riskReward: number; fixedOrderSizeUsdt: number; feePercentPerSide: number; trades: BacktestTrade[] }
+export type BacktestRunSummary = { id: number; symbol: string; interval: string; requestedStartUtc: string; requestedEndUtc: string; actualStartUtc: string | null; actualEndUtc: string | null; createdAtUtc: string; completedAtUtc: string | null; candleCount: number; totalTrades: number; winningTrades: number; losingTrades: number; breakEvenTrades: number; longTrades: number; shortTrades: number; winRatePercent: number; grossPnlUsdt: number; netPnlUsdt: number; totalFeesUsdt: number; profitFactor: number | null; averageNetPnlUsdt: number; averageRMultiple: number; maxDrawdownUsdt: number; riskReward: number; fixedOrderSizeUsdt: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; trailingStopEnabled: boolean; feePercentPerSide: number; status: string; failureMessage: string | null }
+export type BacktestRun = BacktestRunSummary & { trades: BacktestTrade[] }
 export type BacktestTrade = { id: number; direction: string; entryTimeUtc: string; exitTimeUtc: string; entryPrice: number; exitPrice: number; initialStopLoss: number; finalStopLoss: number; originalTakeProfit: number; finalTakeProfit: number; exitReason: string; netPnlUsdt: number; netPnlPercent: number; grossRMultiple: number }
 
 type AntiforgeryResponse = { token: string }
@@ -75,7 +76,7 @@ export const setSymbolEnabled = (id: number, isEnabled: boolean) => protectedReq
 export const removeMonitoredSymbol = (id: number) => protectedRequest<void>(`/api/symbols/${id}`, 'DELETE')
 export const getTradingSettings = () => request<TradingSettings>('/api/settings/trading')
 export const updateTradingSettings = (settings: Omit<TradingSettings, 'updatedAtUtc'>) => protectedRequest<TradingSettings>('/api/settings/trading', 'PUT', settings)
-export const getBacktests = () => request<BacktestRun[]>('/api/backtests')
+export const getBacktests = () => request<BacktestRunSummary[]>('/api/backtests')
 export const getBacktest = (id: number) => request<BacktestRun>(`/api/backtests/${id}`)
 export const runBacktest = (requestBody: { symbol: string; interval: string; startUtc: string; endUtc: string }) => protectedRequest<BacktestRun>('/api/backtests', 'POST', requestBody)
 export const deleteBacktest = (id: number) => protectedRequest<void>(`/api/backtests/${id}`, 'DELETE')

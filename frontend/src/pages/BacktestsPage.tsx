@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import type { BacktestRun, MonitoredSymbol } from '../api'
+import type { BacktestRun, BacktestRunSummary, MonitoredSymbol } from '../api'
 import { getBacktest, getBacktests, getMonitoredSymbols, runBacktest } from '../api'
 
 const intervals = ['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']
 export function BacktestsPage() {
-  const [symbols, setSymbols] = useState<MonitoredSymbol[]>([]); const [runs, setRuns] = useState<BacktestRun[]>([]); const [selected, setSelected] = useState<BacktestRun | null>(null); const [symbol, setSymbol] = useState(''); const [interval, setInterval] = useState('30m'); const [start, setStart] = useState(''); const [end, setEnd] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null)
+  const [symbols, setSymbols] = useState<MonitoredSymbol[]>([]); const [runs, setRuns] = useState<BacktestRunSummary[]>([]); const [selected, setSelected] = useState<BacktestRun | null>(null); const [symbol, setSymbol] = useState(''); const [interval, setInterval] = useState('30m'); const [start, setStart] = useState(''); const [end, setEnd] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null)
   async function refresh() { const [saved, history] = await Promise.all([getMonitoredSymbols(), getBacktests()]); setSymbols(saved.filter(item => item.isEnabled)); setRuns(history) }
   useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Could not load backtests.')) }, [])
   async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!symbol || !start || !end) return; setBusy(true); setError(null); try { const run = await runBacktest({ symbol, interval, startUtc: `${start}T00:00:00.000Z`, endUtc: `${end}T23:59:59.999Z` }); setSelected(run); await refresh() } catch (e) { setError(e instanceof Error ? e.message : 'Backtest failed.') } finally { setBusy(false) } }

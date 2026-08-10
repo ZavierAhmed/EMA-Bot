@@ -14,7 +14,7 @@ public sealed class BinanceHistoricalCandleService(IBinanceFuturesMarketDataClie
             cancellationToken.ThrowIfCancellationRequested();
             var page = await client.GetKlinesAsync(symbol, interval, cursor, endUtc, 1500, cancellationToken);
             if (page.Count == 0) break;
-            foreach (var candle in page.Where(candle => candle.OpenTimeUtc >= startUtc && candle.OpenTimeUtc <= endUtc)) all[candle.OpenTimeUtc] = candle;
+            foreach (var candle in page.Where(candle => candle.OpenTimeUtc >= startUtc && candle.CloseTimeUtc <= endUtc && candle.IsClosed)) all[candle.OpenTimeUtc] = candle;
             if (all.Count > MaximumCandles) throw new ArgumentException($"Backtests cannot exceed {MaximumCandles:N0} candles.");
             var last = page.MaxBy(candle => candle.CloseTimeUtc)!;
             var next = last.CloseTimeUtc.AddMilliseconds(1);
