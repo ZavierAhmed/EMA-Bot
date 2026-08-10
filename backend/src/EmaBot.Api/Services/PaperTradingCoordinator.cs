@@ -235,7 +235,8 @@ public sealed class PaperTradingCoordinator(
         if ((direction == SignalDirection.Long && update.Close >= trade.CurrentTakeProfit) || (direction == SignalDirection.Short && update.Close <= trade.CurrentTakeProfit)) { await CloseTradeAsync(state, runtime, trade.CurrentTakeProfit, PaperExitReason.TakeProfit, update.EventTimeUtc, token); return; }
         if (!state.Session.TrailingStopEnabled) return;
         var lockPercent = TradeMath.LockPercent(progress); if (lockPercent == 0) return;
-        var next = TradeMath.TrailingStop(trade.EntryPrice, trade.OriginalTakeProfit, direction, lockPercent); var improved = direction == SignalDirection.Long ? next > trade.CurrentStopLoss : next < trade.CurrentStopLoss;
+        var calculated = TradeMath.TrailingStop(trade.EntryPrice, trade.OriginalTakeProfit, direction, lockPercent);
+        var next = TradeMath.FeeAwareTrailingStop(calculated, trade.EntryPrice, direction, state.Session.FeePercentPerSide); var improved = direction == SignalDirection.Long ? next > trade.CurrentStopLoss : next < trade.CurrentStopLoss;
         if (improved) { var old = trade.CurrentStopLoss; trade.CurrentStopLoss = next; await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = update.EventTimeUtc, Type = PaperTradeEventType.TrailingStopMoved, MarketPrice = update.Close, OldStop = old, NewStop = next, ProgressPercent = progress }, token); }
     }
 

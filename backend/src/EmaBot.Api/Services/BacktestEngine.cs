@@ -120,7 +120,8 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                 var lockPercent = TradeMath.LockPercent(progress);
                 if (lockPercent > 0)
                 {
-                    var nextStop = TradeMath.TrailingStop(entry, originalTp, direction, lockPercent);
+                    var calculatedStop = TradeMath.TrailingStop(entry, originalTp, direction, lockPercent);
+                    var nextStop = TradeMath.FeeAwareTrailingStop(calculatedStop, entry, direction, settings.FeePercentPerSide);
                     var improved = direction == SignalDirection.Long ? nextStop > currentStop : nextStop < currentStop;
                     if (improved) { var oldStop = currentStop; currentStop = nextStop; managementEvents.Add(new BacktestTradeEvent { TimeUtc = c.CloseTimeUtc, EffectiveTimeUtc = i + 1 < candles.Length ? candles[i + 1].OpenTimeUtc : null, Type = BacktestTradeEventType.TrailingStopMoved, MarketPrice = c.Close, OldStop = oldStop, NewStop = currentStop, ProgressPercent = progress }); }
                 }

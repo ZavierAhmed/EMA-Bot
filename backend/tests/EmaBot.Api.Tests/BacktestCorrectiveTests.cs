@@ -173,6 +173,27 @@ public sealed class BacktestEngineCorrectiveTests
         Assert.Equal(1m, trade.Quantity); Assert.Equal(100m, trade.EntryNotionalUsdt); Assert.Equal(20m, trade.GrossPnlUsdt); Assert.Equal(0.1m, trade.EntryFeeUsdt); Assert.Equal(0.12m, trade.ExitFeeUsdt); Assert.Equal(19.78m, trade.NetPnlUsdt);
     }
 
+    [Theory]
+    [InlineData(SignalDirection.Long)]
+    [InlineData(SignalDirection.Short)]
+    public void FeeAwareTrailingStop_ExitsWithNonNegativeNetPnl(SignalDirection direction)
+    {
+        var candles = Candles(8, 100m).Select(candle => candle with { High = 100.1m, Low = 99.9m }).ToArray();
+        candles[6] = direction == SignalDirection.Long
+            ? candles[6] with { Open = 100m, High = 100.1m, Low = 99.95m, Close = 100.05m }
+            : candles[6] with { Open = 100m, High = 100.05m, Low = 99.9m, Close = 99.95m };
+        var floor = TradeMath.FeeBreakevenPrice(100m, direction, .05m);
+        candles[7] = direction == SignalDirection.Long
+            ? candles[7] with { Open = 100.15m, High = 100.15m, Low = floor, Close = floor }
+            : candles[7] with { Open = 99.85m, High = floor, Low = 99.85m, Close = floor };
+
+        var signalStatus = direction == SignalDirection.Long ? SignalStatus.LongSignal : SignalStatus.ShortSignal;
+        var crossoverStatus = direction == SignalDirection.Long ? SignalStatus.BullishCrossover : SignalStatus.BearishCrossover;
+        var trade = Engine().RunWithEvents(candles, Settings(trailing: true, fee: .05m), [Event(candles, 5, direction, crossoverStatus), Event(candles, 5, direction, signalStatus)]).Trades.Single();
+        Assert.Equal(BacktestExitReason.TrailingStop, trade.ExitReason);
+        Assert.True(trade.GrossPnlUsdt > 0m); Assert.True(trade.NetPnlUsdt >= 0m); Assert.Equal(floor, trade.FinalStopLoss);
+    }
+
     [Fact]
     public void SignalWithoutFollowingClosedCandle_IsRecordedAsNoEntry()
     {
