@@ -134,10 +134,7 @@ namespace EmaBot.Api.Migrations
             modelBuilder.Entity("EmaBot.Api.Models.TradingSettings", b =>
                 {
                     b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
                     b.Property<decimal>("FixedOrderSizeUsdt")
                         .HasPrecision(18, 8)

@@ -37,8 +37,7 @@ namespace EmaBot.Api.Migrations
                 name: "TradingSettings",
                 columns: table => new
                 {
-                    Id = table.Column<int>(type: "int", nullable: false)
-                        .Annotation("MySql:ValueGenerationStrategy", MySqlValueGenerationStrategy.IdentityColumn),
+                    Id = table.Column<int>(type: "int", nullable: false),
                     RiskReward = table.Column<decimal>(type: "decimal(18,8)", precision: 18, scale: 8, nullable: false),
                     FixedOrderSizeUsdt = table.Column<decimal>(type: "decimal(18,8)", precision: 18, scale: 8, nullable: false),
                     WaitForConfirmationCandle = table.Column<bool>(type: "tinyint(1)", nullable: false),

@@ -33,6 +33,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
         {
             entity.HasKey(settings => settings.Id);
             entity.ToTable(table => table.HasCheckConstraint("CK_TradingSettings_Singleton", "`Id` = 1"));
+            entity.Property(settings => settings.Id).ValueGeneratedNever();
             entity.Property(settings => settings.RiskReward).HasPrecision(18, 8);
             entity.Property(settings => settings.FixedOrderSizeUsdt).HasPrecision(18, 8);
         });

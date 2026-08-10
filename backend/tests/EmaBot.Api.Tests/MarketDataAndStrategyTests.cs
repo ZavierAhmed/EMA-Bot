@@ -1,13 +1,26 @@
 using System.Net;
 using System.Text;
 using EmaBot.Api.Binance;
+using EmaBot.Api.Data;
 using EmaBot.Api.Models;
 using EmaBot.Api.Strategy;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EmaBot.Api.Tests;
 
 public sealed class MarketDataAndStrategyTests
 {
+    [Fact]
+    public void TradingSettingsId_IsExplicitlyApplicationGenerated()
+    {
+        using var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var settingsId = database.Model.FindEntityType(typeof(TradingSettings))!.FindProperty(nameof(TradingSettings.Id))!;
+        var monitoredSymbolId = database.Model.FindEntityType(typeof(MonitoredSymbol))!.FindProperty(nameof(MonitoredSymbol.Id))!;
+        Assert.Equal(ValueGenerated.Never, settingsId.ValueGenerated);
+        Assert.Equal(ValueGenerated.OnAdd, monitoredSymbolId.ValueGenerated);
+    }
+
     [Fact]
     public void Ema_UsesSmaSeedAndDoesNotEmitBeforeWarmup()
     {

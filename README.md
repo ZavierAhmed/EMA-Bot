@@ -12,10 +12,9 @@ No real trades are placed, no paper trades exist, and no historical candles are 
 
 ## Configure local secrets
 
-From `backend/src/EmaBot.Api`, initialize user-secrets and set a MySQL connection plus the one-time initial Admin credentials:
+`EmaBot.Api` already includes a committed `UserSecretsId`, so from `backend/src/EmaBot.Api` set a MySQL connection plus the one-time initial Admin credentials:
 
 ```powershell
-dotnet user-secrets init
 dotnet user-secrets set "ConnectionStrings:EmaBotDatabase" "Server=localhost;Port=3306;Database=emabot;User ID=YOUR_MYSQL_USER;Password=YOUR_MYSQL_PASSWORD;"
 dotnet user-secrets set "BootstrapAdmin:UserName" "admin"
 dotnet user-secrets set "BootstrapAdmin:Email" "admin@example.com"
