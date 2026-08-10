@@ -25,4 +25,12 @@ public sealed class PaperTradingUnitTests
         var original = TradeMath.InitialTarget(100m, 90m, SignalDirection.Long, 2m);
         Assert.Equal(120m, original); Assert.Equal(108m, TradeMath.TrailingStop(100m, original, SignalDirection.Long, 40m)); Assert.Equal(122m, TradeMath.ExtendedTarget(100m, original, SignalDirection.Long));
     }
+
+    [Fact]
+    public void StreamParser_AcceptsSubscriptionAcknowledgementWithoutTreatingItAsKline()
+    {
+        const string acknowledgement = """{"result":null,"id":"abc"}""";
+        Assert.True(BinanceKlineParser.IsSubscriptionAcknowledgement(acknowledgement));
+        Assert.False(BinanceKlineParser.TryParse(acknowledgement, out _));
+    }
 }

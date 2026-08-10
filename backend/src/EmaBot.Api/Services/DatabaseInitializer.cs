@@ -1,6 +1,7 @@
 using EmaBot.Api.Auth;
 using EmaBot.Api.Configuration;
 using EmaBot.Api.Data;
+using EmaBot.Api.Models;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -12,11 +13,7 @@ public sealed class DatabaseInitializer(
     IOptions<BootstrapAdminOptions> bootstrapOptions,
     ILogger<DatabaseInitializer> logger) : IHostedService
 {
-    public Task StartAsync(CancellationToken cancellationToken)
-    {
-        _ = InitializeAsync(cancellationToken);
-        return Task.CompletedTask;
-    }
+    public Task StartAsync(CancellationToken cancellationToken) => InitializeAsync(cancellationToken);
 
     private async Task InitializeAsync(CancellationToken cancellationToken)
     {
@@ -26,6 +23,15 @@ public sealed class DatabaseInitializer(
             var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
             await database.Database.MigrateAsync(cancellationToken);
             await scope.ServiceProvider.GetRequiredService<TradingSettingsService>().GetAsync(cancellationToken);
+            var interruptedAt = DateTimeOffset.UtcNow;
+            var runningSessions = await database.PaperSessions.Where(session => session.Status == PaperSessionStatus.Running).ToListAsync(cancellationToken);
+            foreach (var session in runningSessions)
+            {
+                session.Status = PaperSessionStatus.Interrupted;
+                session.InterruptedAtUtc = interruptedAt;
+                session.FailureMessage = "The application restarted; resume to reconnect public market data.";
+            }
+            if (runningSessions.Count > 0) await database.SaveChangesAsync(cancellationToken);
 
             var userManager = scope.ServiceProvider.GetRequiredService<UserManager<EmaUser>>();
             var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();

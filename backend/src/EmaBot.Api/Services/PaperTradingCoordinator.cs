@@ -19,19 +19,17 @@ public sealed class PaperTradingCoordinator(
     private readonly SemaphoreSlim gate = new(1, 1);
     private RuntimeSession? active;
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    // DatabaseInitializer runs first and handles Running -> Interrupted after migrations complete.
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
-        await using var scope = scopeFactory.CreateAsyncScope();
-        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-        var sessions = await database.PaperSessions.Where(session => session.Status == PaperSessionStatus.Running).ToListAsync(cancellationToken);
-        if (sessions.Count > 0)
-        {
-            var now = DateTimeOffset.UtcNow;
-            foreach (var session in sessions) { session.Status = PaperSessionStatus.Interrupted; session.InterruptedAtUtc = now; session.FailureMessage = "The application restarted; resume to reconnect public market data."; }
-            await database.SaveChangesAsync(cancellationToken);
-        }
+        RuntimeSession? state;
+        await gate.WaitAsync(cancellationToken);
+        try { state = active; active = null; state?.Cancellation.Cancel(); }
+        finally { gate.Release(); }
+        if (state?.Worker is not null) await ObserveWorkerAsync(state.Worker);
+        state?.Cancellation.Dispose();
     }
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     public async Task StartSessionAsync(int sessionId, bool resume, CancellationToken cancellationToken)
     {
@@ -43,13 +41,23 @@ public sealed class PaperTradingCoordinator(
             var session = await database.PaperSessions.Include(item => item.Symbols).Include(item => item.Trades).SingleOrDefaultAsync(item => item.Id == sessionId, cancellationToken) ?? throw new KeyNotFoundException("Paper session not found.");
             if (resume && session.Status != PaperSessionStatus.Interrupted) throw new InvalidOperationException("Only interrupted paper sessions can be resumed.");
             if (!resume && session.Status != PaperSessionStatus.Running) throw new InvalidOperationException("Only a newly running session can be started.");
+            var proposed = new RuntimeSession(session, CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
+            foreach (var symbol in session.Symbols) proposed.Symbols[symbol.Symbol] = new RuntimeSymbol(symbol, session.Trades.SingleOrDefault(trade => trade.PaperSessionSymbolId == symbol.Id && trade.Status == PaperTradeStatus.Open));
+            try { await WarmupAsync(proposed, cancellationToken); }
+            catch
+            {
+                proposed.Cancellation.Cancel(); proposed.Cancellation.Dispose();
+                session.Status = resume ? PaperSessionStatus.Interrupted : PaperSessionStatus.Faulted;
+                session.FailureMessage = resume ? "Warmup data is unavailable; resume can be retried." : "Public Binance warmup data is unavailable.";
+                if (resume) session.InterruptedAtUtc = DateTimeOffset.UtcNow;
+                await database.SaveChangesAsync(cancellationToken);
+                throw;
+            }
             session.Status = PaperSessionStatus.Running; session.InterruptedAtUtc = null; session.FailureMessage = null;
             if (resume) foreach (var symbol in session.Symbols) ClearPending(symbol);
             await database.SaveChangesAsync(cancellationToken);
-            active = new RuntimeSession(session, CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
-            foreach (var symbol in session.Symbols) active.Symbols[symbol.Symbol] = new RuntimeSymbol(symbol, session.Trades.SingleOrDefault(trade => trade.PaperSessionSymbolId == symbol.Id && trade.Status == PaperTradeStatus.Open));
-            await WarmupAsync(active, cancellationToken);
-            active.Worker = Task.Run(() => RunStreamAsync(active), CancellationToken.None);
+            active = proposed;
+            proposed.Worker = Task.Run(() => RunStreamAsync(proposed), CancellationToken.None);
             logger.LogInformation("Paper session {SessionId} started for {SymbolCount} symbols.", session.Id, session.Symbols.Count);
         }
         finally { gate.Release(); }
@@ -57,18 +65,17 @@ public sealed class PaperTradingCoordinator(
 
     public async Task StopSessionAsync(int sessionId, CancellationToken cancellationToken)
     {
+        RuntimeSession? state = null;
         await gate.WaitAsync(cancellationToken);
         try
         {
             if (active is null || active.Session.Id != sessionId) throw new InvalidOperationException("That paper session is not running in this application.");
             if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && !symbol.LatestPrice.HasValue)) throw new InvalidOperationException("An open paper position has no reliable latest market price and cannot be stopped safely.");
-            active.AcceptSignals = false; active.Cancellation.Cancel();
-            foreach (var symbol in active.Symbols.Values.Where(symbol => symbol.OpenTrade is not null)) await CloseTradeAsync(active, symbol, symbol.LatestPrice!.Value, PaperExitReason.SessionStopped, DateTimeOffset.UtcNow, cancellationToken);
-            await UpdateSessionAsync(active.Session.Id, session => { session.Status = PaperSessionStatus.Stopped; session.StoppedAtUtc = DateTimeOffset.UtcNow; });
-            active = null;
-            logger.LogInformation("Paper session {SessionId} stopped.", sessionId);
+            state = active; state.AcceptSignals = false; state.Cancellation.Cancel(); active = null;
         }
         finally { gate.Release(); }
+        if (state is not null) await StopAfterWorkerAsync(state, cancellationToken);
+        logger.LogInformation("Paper session {SessionId} stopped.", sessionId);
     }
 
     public PaperRuntimeSnapshot? GetRuntimeSnapshot()
@@ -86,6 +93,34 @@ public sealed class PaperTradingCoordinator(
         }
     }
 
+    private async Task ResyncCandlesAsync(RuntimeSession state, RuntimeSymbol runtime, BinanceKlineUpdate current, CancellationToken token)
+    {
+        var candles = await marketData.GetKlinesAsync(runtime.Symbol.Symbol, state.Session.Interval, null, null, 200, token);
+        runtime.Candles.Clear();
+        runtime.Candles.AddRange(candles.Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).TakeLast(200));
+        // The current close remains the only potentially actionable candle after the resync.
+        runtime.Candles.RemoveAll(candle => candle.OpenTimeUtc == current.OpenTimeUtc);
+        runtime.Candles.Add(new Candle(current.OpenTimeUtc, current.CloseTimeUtc, current.Open, current.High, current.Low, current.Close, current.Volume, true));
+        runtime.Candles.Sort((left, right) => left.OpenTimeUtc.CompareTo(right.OpenTimeUtc));
+        if (runtime.Candles.Count > 200) runtime.Candles.RemoveRange(0, runtime.Candles.Count - 200);
+        logger.LogInformation("Resynchronized closed candles for {Symbol} after a stream gap.", runtime.Symbol.Symbol);
+    }
+
+    private async Task StopAfterWorkerAsync(RuntimeSession state, CancellationToken token)
+    {
+        if (state.Worker is not null) await ObserveWorkerAsync(state.Worker);
+        foreach (var symbol in state.Symbols.Values.Where(symbol => symbol.OpenTrade is not null)) await CloseTradeAsync(state, symbol, symbol.LatestPrice!.Value, PaperExitReason.SessionStopped, DateTimeOffset.UtcNow, token);
+        await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Stopped; session.StoppedAtUtc = DateTimeOffset.UtcNow; });
+        state.Cancellation.Dispose();
+    }
+
+    private static async Task ObserveWorkerAsync(Task worker)
+    {
+        try { await worker; }
+        catch (OperationCanceledException) { }
+        catch { }
+    }
+
     private async Task RunStreamAsync(RuntimeSession state)
     {
         try
@@ -97,7 +132,17 @@ public sealed class PaperTradingCoordinator(
             logger.LogError(exception, "Paper session {SessionId} stream faulted.", state.Session.Id);
             await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Public Binance stream could not be maintained."; });
             state.ConnectionState = "Degraded";
+            await gate.WaitAsync();
+            try { if (ReferenceEquals(active, state)) active = null; }
+            finally { gate.Release(); }
+            state.Cancellation.Dispose();
         }
+    }
+
+    internal async Task ProcessUpdateForTestAsync(BinanceKlineUpdate update, CancellationToken token = default)
+    {
+        var state = active ?? throw new InvalidOperationException("No active paper session.");
+        await ProcessUpdateAsync(state, update, token);
     }
 
     private async Task ProcessUpdateAsync(RuntimeSession state, BinanceKlineUpdate update, CancellationToken token)
@@ -107,10 +152,15 @@ public sealed class PaperTradingCoordinator(
         try
         {
             runtime.LatestPrice = update.Close; runtime.LastMarketEventUtc = update.EventTimeUtc; state.LastUpdateUtc = update.EventTimeUtc;
-            if (runtime.Pending is not null && update.OpenTimeUtc > runtime.Pending.SignalTimeUtc && runtime.OpenTrade is null && state.AcceptSignals)
-                await EnterPendingAsync(state, runtime, update, token);
+            if (runtime.Pending is not null && runtime.OpenTrade is null && state.AcceptSignals)
+            {
+                var expectedOpen = runtime.Pending.SignalTimeUtc.AddMilliseconds(1);
+                if (update.OpenTimeUtc == expectedOpen) await EnterPendingAsync(state, runtime, update, token);
+                else if (update.OpenTimeUtc > expectedOpen) { runtime.Pending = null; await PersistRuntimeSymbolAsync(runtime, token); logger.LogInformation("Expired stale pending paper entry for {Symbol}.", runtime.Symbol.Symbol); }
+            }
             if (runtime.OpenTrade is not null) await ManageOpenTradeAsync(state, runtime, update, token);
             if (!update.IsClosed || runtime.LastClosedCandleUtc == update.CloseTimeUtc) return;
+            if (runtime.LastClosedCandleUtc is { } previousClose && update.OpenTimeUtc > previousClose.AddMilliseconds(1)) await ResyncCandlesAsync(state, runtime, update, token);
             runtime.LastClosedCandleUtc = update.CloseTimeUtc;
             runtime.Candles.RemoveAll(candle => candle.OpenTimeUtc == update.OpenTimeUtc);
             runtime.Candles.Add(new Candle(update.OpenTimeUtc, update.CloseTimeUtc, update.Open, update.High, update.Low, update.Close, update.Volume, true));
@@ -149,9 +199,10 @@ public sealed class PaperTradingCoordinator(
     private async Task ManageOpenTradeAsync(RuntimeSession state, RuntimeSymbol runtime, BinanceKlineUpdate update, CancellationToken token)
     {
         var trade = runtime.OpenTrade!; var direction = trade.Direction;
-        var best = direction == SignalDirection.Long ? Math.Max(trade.EntryPrice + trade.MfePrice, update.High) : Math.Min(trade.EntryPrice - trade.MfePrice, update.Low);
+        // Only live observed prices participate in management; kline highs/lows can predate a reconnect.
+        var best = direction == SignalDirection.Long ? Math.Max(trade.EntryPrice + trade.MfePrice, update.Close) : Math.Min(trade.EntryPrice - trade.MfePrice, update.Close);
         trade.MfePrice = direction == SignalDirection.Long ? Math.Max(0m, best - trade.EntryPrice) : Math.Max(0m, trade.EntryPrice - best); trade.MfePercent = trade.EntryPrice == 0 ? 0 : trade.MfePrice / trade.EntryPrice * 100m;
-        var adverse = direction == SignalDirection.Long ? Math.Min(trade.EntryPrice - trade.MaePrice, update.Low) : Math.Max(trade.EntryPrice + trade.MaePrice, update.High);
+        var adverse = direction == SignalDirection.Long ? Math.Min(trade.EntryPrice - trade.MaePrice, update.Close) : Math.Max(trade.EntryPrice + trade.MaePrice, update.Close);
         trade.MaePrice = direction == SignalDirection.Long ? Math.Max(0m, trade.EntryPrice - adverse) : Math.Max(0m, adverse - trade.EntryPrice); trade.MaePercent = trade.EntryPrice == 0 ? 0 : trade.MaePrice / trade.EntryPrice * 100m;
         if ((direction == SignalDirection.Long && update.Close <= trade.CurrentStopLoss) || (direction == SignalDirection.Short && update.Close >= trade.CurrentStopLoss)) { await CloseTradeAsync(state, runtime, trade.CurrentStopLoss, trade.CurrentStopLoss == trade.InitialStopLoss ? PaperExitReason.InitialStopLoss : PaperExitReason.TrailingStop, update.EventTimeUtc, token); return; }
         var progress = TradeMath.Progress(trade.EntryPrice, trade.OriginalTakeProfit, best, direction); trade.BestFavorableProgressPercent = Math.Max(trade.BestFavorableProgressPercent, progress);

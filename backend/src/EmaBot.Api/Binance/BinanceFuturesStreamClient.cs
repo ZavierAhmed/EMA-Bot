@@ -31,7 +31,7 @@ public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClien
                 await socket.ConnectAsync(Endpoint, cancellationToken);
                 var subscription = JsonSerializer.Serialize(new { method = "SUBSCRIBE", @params = streams, id = Guid.NewGuid().ToString("N") });
                 await socket.SendAsync(Encoding.UTF8.GetBytes(subscription), WebSocketMessageType.Text, true, cancellationToken);
-                onStateChange?.Invoke("Connected"); attempt = 0;
+                onStateChange?.Invoke("Connected");
                 var buffer = new byte[16 * 1024];
                 while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
                 {
@@ -39,7 +39,10 @@ public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClien
                     do { result = await socket.ReceiveAsync(buffer, cancellationToken); if (result.MessageType == WebSocketMessageType.Close) break; message.Write(buffer, 0, result.Count); } while (!result.EndOfMessage);
                     if (result.MessageType == WebSocketMessageType.Close) break;
                     if (result.MessageType != WebSocketMessageType.Text) continue;
-                    if (BinanceKlineParser.TryParse(Encoding.UTF8.GetString(message.ToArray()), out var update)) await onUpdate(update, cancellationToken);
+                    var payload = Encoding.UTF8.GetString(message.ToArray());
+                    if (BinanceKlineParser.TryParse(payload, out var update)) { attempt = 0; await onUpdate(update, cancellationToken); }
+                    else if (BinanceKlineParser.IsSubscriptionAcknowledgement(payload)) { }
+                    else if (BinanceKlineParser.TryGetSubscriptionError(payload, out var error)) { onStateChange?.Invoke("Degraded"); logger.LogWarning("Binance rejected the market-stream subscription: {Message}", error); }
                     else logger.LogWarning("Skipped malformed Binance kline stream message.");
                 }
             }
@@ -73,6 +76,23 @@ public static class BinanceKlineParser
             return true;
         }
         catch (Exception exception) when (exception is JsonException or FormatException or InvalidOperationException or KeyNotFoundException or ArgumentOutOfRangeException) { return false; }
+    }
+
+    public static bool IsSubscriptionAcknowledgement(string json)
+    {
+        try { using var document = JsonDocument.Parse(json); return document.RootElement.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Null && document.RootElement.TryGetProperty("id", out _); }
+        catch (JsonException) { return false; }
+    }
+
+    public static bool TryGetSubscriptionError(string json, out string message)
+    {
+        message = string.Empty;
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            return document.RootElement.TryGetProperty("code", out _) && document.RootElement.TryGetProperty("msg", out var value) && value.ValueKind == JsonValueKind.String && (message = value.GetString() ?? string.Empty).Length > 0;
+        }
+        catch (JsonException) { return false; }
     }
 
     private static string String(JsonElement element, string property) => element.GetProperty(property).GetString() is { Length: > 0 } value ? value : throw new FormatException();

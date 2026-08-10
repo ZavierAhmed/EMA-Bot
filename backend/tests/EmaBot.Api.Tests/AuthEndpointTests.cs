@@ -121,6 +121,7 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
 {
     private readonly string _databaseName = $"EmaBotApiTests-{Guid.NewGuid()}";
     public TestBinanceClient BinanceClient { get; } = new();
+    public TestBinanceStreamClient StreamClient { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -131,6 +132,8 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
             services.RemoveAll<IBinanceFuturesMarketDataClient>();
             services.AddSingleton<IBinanceFuturesMarketDataClient>(BinanceClient);
+            services.RemoveAll<IBinanceFuturesStreamClient>();
+            services.AddSingleton<IBinanceFuturesStreamClient>(StreamClient);
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));
             services.RemoveAll(typeof(IDbContextOptionsConfiguration<EmaBotDbContext>));
             services.RemoveAll<IHostedService>();

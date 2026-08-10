@@ -75,8 +75,6 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<TradingSettingsService>();
 builder.Services.AddSingleton<BacktestEngine>();
 builder.Services.AddScoped<BacktestService>();
-builder.Services.AddSingleton<PaperTradingCoordinator>();
-builder.Services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<PaperTradingCoordinator>());
 builder.Services.AddSingleton<EmaSignalEngine>();
 builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>
 {
@@ -90,6 +88,8 @@ builder.Services.AddControllersWithViews(options => options.Filters.Add(new Auto
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHostedService<DatabaseInitializer>();
+builder.Services.AddSingleton<PaperTradingCoordinator>();
+builder.Services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<PaperTradingCoordinator>());
 
 var app = builder.Build();
 
