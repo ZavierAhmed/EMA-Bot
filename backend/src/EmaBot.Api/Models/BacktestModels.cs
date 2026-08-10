@@ -6,6 +6,7 @@ namespace EmaBot.Api.Models;
 public enum BacktestRunStatus { Completed, Failed }
 public enum StopSourceType { Pivot, FallbackLookback }
 public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData, TrailingStop }
+public enum BacktestTradeEventType { Entry, TrailingStopMoved, TakeProfitExtended, Exit }
 
 public sealed class BacktestRun
 {
@@ -94,4 +95,21 @@ public sealed class BacktestTrade
     public decimal? SignalEma100 { get; set; }
     public decimal? SignalGapPercent { get; set; }
     public GapState SignalGapState { get; set; }
+    public List<BacktestTradeEvent> Events { get; set; } = [];
+}
+
+public sealed class BacktestTradeEvent
+{
+    public int Id { get; set; }
+    public int BacktestTradeId { get; set; }
+    [JsonIgnore] public BacktestTrade? BacktestTrade { get; set; }
+    public DateTimeOffset TimeUtc { get; set; }
+    public DateTimeOffset? EffectiveTimeUtc { get; set; }
+    public BacktestTradeEventType Type { get; set; }
+    public decimal MarketPrice { get; set; }
+    public decimal? OldStop { get; set; }
+    public decimal? NewStop { get; set; }
+    public decimal? OldTakeProfit { get; set; }
+    public decimal? NewTakeProfit { get; set; }
+    public decimal? ProgressPercent { get; set; }
 }

@@ -13,6 +13,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<TradingSettings> TradingSettings => Set<TradingSettings>();
     public DbSet<BacktestRun> BacktestRuns => Set<BacktestRun>();
     public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
+    public DbSet<BacktestTradeEvent> BacktestTradeEvents => Set<BacktestTradeEvent>();
     public DbSet<PaperSession> PaperSessions => Set<PaperSession>();
     public DbSet<PaperSessionSymbol> PaperSessionSymbols => Set<PaperSessionSymbol>();
     public DbSet<PaperTrade> PaperTrades => Set<PaperTrade>();
@@ -45,7 +46,8 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(settings => settings.FeePercentPerSide).HasPrecision(8, 4);
         });
         builder.Entity<BacktestRun>(entity => { entity.Property(run => run.Symbol).HasMaxLength(32); entity.Property(run => run.Interval).HasMaxLength(8); entity.HasMany(run => run.Trades).WithOne(trade => trade.BacktestRun!).HasForeignKey(trade => trade.BacktestRunId).OnDelete(DeleteBehavior.Cascade); });
-        builder.Entity<BacktestTrade>(entity => entity.HasIndex(trade => trade.BacktestRunId));
+        builder.Entity<BacktestTrade>(entity => { entity.HasIndex(trade => trade.BacktestRunId); entity.HasMany(trade => trade.Events).WithOne(item => item.BacktestTrade!).HasForeignKey(item => item.BacktestTradeId).OnDelete(DeleteBehavior.Cascade); });
+        builder.Entity<BacktestTradeEvent>(entity => entity.HasIndex(item => item.BacktestTradeId));
         builder.Entity<PaperSession>(entity =>
         {
             entity.Property(session => session.Interval).HasMaxLength(8);

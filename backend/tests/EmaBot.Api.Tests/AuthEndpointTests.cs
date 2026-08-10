@@ -36,6 +36,13 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
+    public async Task TradeExplorer_RejectsUnauthenticatedRequests()
+    {
+        using var client = _factory.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/trades")).StatusCode);
+    }
+
+    [Fact]
     public async Task Login_RejectsInvalidPassword()
     {
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });

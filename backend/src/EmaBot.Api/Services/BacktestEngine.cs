@@ -43,7 +43,7 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
 
     private static BacktestTrade Execute(Candle[] candles, int entryIndex, int crossoverIndex, StrategyEvent signal, SignalDirection direction, decimal entry, (decimal Price, StopSourceType Source, DateTimeOffset Time) stop, TradingSettings settings)
     {
-        var risk = decimal.Abs(entry - stop.Price); var originalTp = TradeMath.InitialTarget(entry, stop.Price, direction, settings.RiskReward);
+        var risk = decimal.Abs(entry - stop.Price); var originalTp = TradeMath.InitialTarget(entry, stop.Price, direction, settings.RiskReward); var managementEvents = new List<BacktestTradeEvent> { new() { TimeUtc = candles[entryIndex].OpenTimeUtc, EffectiveTimeUtc = candles[entryIndex].OpenTimeUtc, Type = BacktestTradeEventType.Entry, MarketPrice = entry } };
         var currentStop = stop.Price; var currentTp = originalTp; var extended = false; var max = entry; var min = entry; var exitIndex = candles.Length - 1; var exitPrice = candles[^1].Close; var reason = BacktestExitReason.EndOfData; var conflict = false;
         for (var i = entryIndex; i < candles.Length; i++)
         {
@@ -79,16 +79,18 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                 if (lockPercent > 0)
                 {
                     var nextStop = TradeMath.TrailingStop(entry, originalTp, direction, lockPercent);
-                    currentStop = direction == SignalDirection.Long ? Math.Max(currentStop, nextStop) : Math.Min(currentStop, nextStop);
+                    var improved = direction == SignalDirection.Long ? nextStop > currentStop : nextStop < currentStop;
+                    if (improved) { var oldStop = currentStop; currentStop = nextStop; managementEvents.Add(new BacktestTradeEvent { TimeUtc = c.CloseTimeUtc, EffectiveTimeUtc = i + 1 < candles.Length ? candles[i + 1].OpenTimeUtc : null, Type = BacktestTradeEventType.TrailingStopMoved, MarketPrice = c.Close, OldStop = oldStop, NewStop = currentStop, ProgressPercent = progress }); }
                 }
                 if (progress >= 70 && !extended)
                 {
-                    currentTp = TradeMath.ExtendedTarget(entry, originalTp, direction);
-                    extended = true;
+                    var oldTp = currentTp; currentTp = TradeMath.ExtendedTarget(entry, originalTp, direction);
+                    extended = true; managementEvents.Add(new BacktestTradeEvent { TimeUtc = c.CloseTimeUtc, EffectiveTimeUtc = i + 1 < candles.Length ? candles[i + 1].OpenTimeUtc : null, Type = BacktestTradeEventType.TakeProfitExtended, MarketPrice = c.Close, OldTakeProfit = oldTp, NewTakeProfit = currentTp, ProgressPercent = progress });
                 }
             }
         }
         var quantity = TradeMath.Quantity(settings.FixedOrderSizeUsdt, entry); var notional = entry * quantity; var entryFee = TradeMath.Fee(entry, quantity, settings.FeePercentPerSide); var exitFee = TradeMath.Fee(exitPrice, quantity, settings.FeePercentPerSide); var gross = TradeMath.GrossPnl(entry, exitPrice, quantity, direction); var net = gross - entryFee - exitFee; var snap = signal.Snapshot;
-        return new BacktestTrade { Direction = direction, CrossoverTimeUtc = candles[crossoverIndex].CloseTimeUtc, SignalTimeUtc = signal.Time, EntryTimeUtc = candles[entryIndex].OpenTimeUtc, ExitTimeUtc = candles[exitIndex].CloseTimeUtc, EntryPrice = entry, ExitPrice = exitPrice, Quantity = quantity, EntryNotionalUsdt = notional, InitialStopLoss = stop.Price, FinalStopLoss = currentStop, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, OriginalTakeProfit = originalTp, FinalTakeProfit = currentTp, TakeProfitExtended = extended, ExitReason = reason, SameCandleExitConflict = conflict, EntryFeeUsdt = entryFee, ExitFeeUsdt = exitFee, TotalFeesUsdt = entryFee + exitFee, GrossPnlUsdt = gross, NetPnlUsdt = net, NetPnlPercent = net / notional * 100m, GrossRMultiple = gross / (risk * quantity), NetRMultiple = net / (risk * quantity), MfePrice = direction == SignalDirection.Long ? max - entry : entry - min, MfePercent = (direction == SignalDirection.Long ? max - entry : entry - min) / entry * 100m, MaePrice = direction == SignalDirection.Long ? entry - min : max - entry, MaePercent = (direction == SignalDirection.Long ? entry - min : max - entry) / entry * 100m, SignalClose = snap.Close, SignalEma9 = snap.Ema9, SignalEma15 = snap.Ema15, SignalEma100 = snap.Ema100, SignalGapPercent = snap.GapPercent, SignalGapState = snap.GapState };
+        managementEvents.Add(new BacktestTradeEvent { TimeUtc = candles[exitIndex].CloseTimeUtc, EffectiveTimeUtc = candles[exitIndex].CloseTimeUtc, Type = BacktestTradeEventType.Exit, MarketPrice = exitPrice });
+        return new BacktestTrade { Direction = direction, CrossoverTimeUtc = candles[crossoverIndex].CloseTimeUtc, SignalTimeUtc = signal.Time, EntryTimeUtc = candles[entryIndex].OpenTimeUtc, ExitTimeUtc = candles[exitIndex].CloseTimeUtc, EntryPrice = entry, ExitPrice = exitPrice, Quantity = quantity, EntryNotionalUsdt = notional, InitialStopLoss = stop.Price, FinalStopLoss = currentStop, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, OriginalTakeProfit = originalTp, FinalTakeProfit = currentTp, TakeProfitExtended = extended, ExitReason = reason, SameCandleExitConflict = conflict, EntryFeeUsdt = entryFee, ExitFeeUsdt = exitFee, TotalFeesUsdt = entryFee + exitFee, GrossPnlUsdt = gross, NetPnlUsdt = net, NetPnlPercent = net / notional * 100m, GrossRMultiple = gross / (risk * quantity), NetRMultiple = net / (risk * quantity), MfePrice = direction == SignalDirection.Long ? max - entry : entry - min, MfePercent = (direction == SignalDirection.Long ? max - entry : entry - min) / entry * 100m, MaePrice = direction == SignalDirection.Long ? entry - min : max - entry, MaePercent = (direction == SignalDirection.Long ? entry - min : max - entry) / entry * 100m, SignalClose = snap.Close, SignalEma9 = snap.Ema9, SignalEma15 = snap.Ema15, SignalEma100 = snap.Ema100, SignalGapPercent = snap.GapPercent, SignalGapState = snap.GapState, Events = managementEvents };
     }
 }

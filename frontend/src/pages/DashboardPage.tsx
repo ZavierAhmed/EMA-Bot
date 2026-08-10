@@ -12,10 +12,10 @@ export function DashboardPage() {
     <div>
       <p className="text-sm font-medium text-slate-500">Dashboard</p>
       <h1 className="mt-2 text-3xl font-semibold tracking-tight">EMA Bot</h1>
-      <p className="mt-3 max-w-xl text-slate-600">A private foundation for future backtesting and paper-trading workflows.</p>
+      <p className="mt-3 max-w-xl text-slate-600">EMA 9/15 strategy backtesting, live paper simulation, and trade analysis using Binance USD-M Futures market data.</p>
       <dl className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatusCard label="Exchange" value="Binance Futures" />
-        <StatusCard label="Mode" value="Development" />
+        <StatusCard label="Mode" value="Simulation" />
         <StatusCard label="API status" value={health?.api ?? 'Checking…'} />
         <StatusCard label="Database status" value={health?.database ?? 'Checking…'} />
       </dl>

@@ -33,4 +33,16 @@ public sealed class PaperTradingUnitTests
         Assert.True(BinanceKlineParser.IsSubscriptionAcknowledgement(acknowledgement));
         Assert.False(BinanceKlineParser.TryParse(acknowledgement, out _));
     }
+
+    [Fact]
+    public void MarketDataLiveness_RequiresReconnectOnlyAfterSilenceTimeout()
+    {
+        var start = DateTimeOffset.UnixEpoch;
+        var liveness = new MarketDataLiveness(TimeSpan.FromSeconds(5), start);
+        Assert.False(liveness.ReconnectRequired(start.AddSeconds(4)));
+        Assert.True(liveness.ReconnectRequired(start.AddSeconds(5)));
+        liveness.Observe(start.AddSeconds(5));
+        Assert.False(liveness.ReconnectRequired(start.AddSeconds(9)));
+        Assert.True(liveness.ReconnectRequired(start.AddSeconds(10)));
+    }
 }

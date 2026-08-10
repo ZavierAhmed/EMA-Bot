@@ -16,7 +16,7 @@ public sealed class BacktestService(EmaBotDbContext database, IBinanceHistorical
         PopulateSummary(run, calculation.Diagnostics); database.BacktestRuns.Add(run); await database.SaveChangesAsync(token); return run;
     }
     public Task<List<BacktestRun>> ListAsync(CancellationToken token) => database.BacktestRuns.AsNoTracking().OrderByDescending(run => run.CreatedAtUtc).Take(30).ToListAsync(token);
-    public Task<BacktestRun?> GetAsync(int id, CancellationToken token) => database.BacktestRuns.AsNoTracking().Include(run => run.Trades).SingleOrDefaultAsync(run => run.Id == id, token);
+    public Task<BacktestRun?> GetAsync(int id, CancellationToken token) => database.BacktestRuns.AsNoTracking().Include(run => run.Trades).ThenInclude(trade => trade.Events).SingleOrDefaultAsync(run => run.Id == id, token);
     public async Task<bool> DeleteAsync(int id, CancellationToken token)
     {
         var run = await database.BacktestRuns.FindAsync([id], token);

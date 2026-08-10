@@ -16,6 +16,14 @@ Paper Trading runs one session at a time for one interval and multiple enabled s
 
 The public USDâ“ˆ-M stream uses `wss://fstream.binance.com/market/stream` and subscribes to lowercase `{symbol}@kline_{interval}` channels. Binance's `k.x` flag is authoritative for closed-candle EMA signals; open updates only manage the simulated position and UI price. Signals enter at the next candle open. Interrupted sessions can be resumed, but missed tick-level behavior is not reconstructed. No Binance orders are ever placed.
 
+The public paper stream detects approximately five seconds without a valid kline and reports reconnecting before retrying with capped backoff. Subscription acknowledgements do not mask missing market data; reconnects preserve the simulated session and do not replay missed historical signals.
+
+## Trade Explorer
+
+The Trade Explorer combines persisted Backtest and Paper trades without duplicating them into a new database entity. It shows the recorded reasoning, settings snapshot, PnL, and management-event timeline. New backtests persist entry, trailing-stop, take-profit extension, and exit events; older backtests remain available with their final levels but without invented historical management timestamps.
+
+Charts fetch public Binance USD-M Futures candles only when a trade is opened. Candles are not stored in the database. The UI uses TradingView Lightweight Charts for visualization, with EMA 9 in black, EMA 15 in blue, and EMA 100 in red, plus entry/exit and management markers. Charts are analytical only: both Backtesting and Paper Trading are simulations; no private Binance credentials or real orders are used. Funding, slippage, leverage, liquidation, and account balances are not modeled.
+
 ## Prerequisites
 
 - .NET SDK 10.0.x (the project targets .NET 10 LTS)

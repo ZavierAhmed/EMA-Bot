@@ -3,11 +3,11 @@ import { useAuth } from './auth'
 import { AppShell } from './components/AppShell'
 import { DashboardPage } from './pages/DashboardPage'
 import { LoginPage } from './pages/LoginPage'
-import { PlaceholderPage } from './pages/PlaceholderPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SymbolsPage } from './pages/SymbolsPage'
 import { BacktestsPage } from './pages/BacktestsPage'
 import { PaperTradingPage } from './pages/PaperTradingPage'
+import { TradesPage } from './pages/TradesPage'
 
 function ProtectedLayout() {
   const { user, isLoading } = useAuth()
@@ -33,7 +33,7 @@ export function App() {
         <Route index element={<DashboardPage />} />
         <Route path="backtests" element={<BacktestsPage />} />
         <Route path="paper-trading" element={<PaperTradingPage />} />
-        <Route path="trades" element={<PlaceholderPage title="Trades" />} />
+        <Route path="trades" element={<TradesPage />} />
         <Route path="symbols" element={<SymbolsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

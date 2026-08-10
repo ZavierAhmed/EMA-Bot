@@ -16,6 +16,7 @@ public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClien
 {
     private static readonly Uri Endpoint = new("wss://fstream.binance.com/market/stream");
     private static readonly TimeSpan[] ReconnectDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
+    internal static readonly TimeSpan MarketDataSilenceTimeout = TimeSpan.FromSeconds(5);
 
     public async Task StreamAsync(IReadOnlyCollection<string> symbols, string interval, Func<BinanceKlineUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
     {
@@ -31,17 +32,20 @@ public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClien
                 await socket.ConnectAsync(Endpoint, cancellationToken);
                 var subscription = JsonSerializer.Serialize(new { method = "SUBSCRIBE", @params = streams, id = Guid.NewGuid().ToString("N") });
                 await socket.SendAsync(Encoding.UTF8.GetBytes(subscription), WebSocketMessageType.Text, true, cancellationToken);
-                onStateChange?.Invoke("Connected");
+                var liveness = new MarketDataLiveness(MarketDataSilenceTimeout, DateTimeOffset.UtcNow);
                 var buffer = new byte[16 * 1024];
                 while (socket.State == WebSocketState.Open && !cancellationToken.IsCancellationRequested)
                 {
+                    if (liveness.ReconnectRequired(DateTimeOffset.UtcNow)) { onStateChange?.Invoke("Reconnecting"); logger.LogWarning("Binance stream has not received valid market data for {Timeout} seconds.", MarketDataSilenceTimeout.TotalSeconds); socket.Abort(); break; }
+                    using var receiveCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken); receiveCancellation.CancelAfter(liveness.Remaining(DateTimeOffset.UtcNow));
                     using var message = new MemoryStream(); WebSocketReceiveResult result;
-                    do { result = await socket.ReceiveAsync(buffer, cancellationToken); if (result.MessageType == WebSocketMessageType.Close) break; message.Write(buffer, 0, result.Count); } while (!result.EndOfMessage);
+                    try { do { result = await socket.ReceiveAsync(buffer, receiveCancellation.Token); if (result.MessageType == WebSocketMessageType.Close) break; message.Write(buffer, 0, result.Count); } while (!result.EndOfMessage); }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { onStateChange?.Invoke("Reconnecting"); logger.LogWarning("Binance stream market-data silence watchdog requested reconnect."); socket.Abort(); break; }
                     if (result.MessageType == WebSocketMessageType.Close) break;
                     if (result.MessageType != WebSocketMessageType.Text) continue;
                     var payload = Encoding.UTF8.GetString(message.ToArray());
-                    if (BinanceKlineParser.TryParse(payload, out var update)) { attempt = 0; await onUpdate(update, cancellationToken); }
-                    else if (BinanceKlineParser.IsSubscriptionAcknowledgement(payload)) { }
+                    if (BinanceKlineParser.TryParse(payload, out var update)) { liveness.Observe(DateTimeOffset.UtcNow); attempt = 0; onStateChange?.Invoke("Connected"); await onUpdate(update, cancellationToken); }
+                    else if (BinanceKlineParser.IsSubscriptionAcknowledgement(payload)) { onStateChange?.Invoke("Connected"); }
                     else if (BinanceKlineParser.TryGetSubscriptionError(payload, out var error)) { onStateChange?.Invoke("Degraded"); logger.LogWarning("Binance rejected the market-stream subscription: {Message}", error); }
                     else logger.LogWarning("Skipped malformed Binance kline stream message.");
                 }
@@ -58,6 +62,14 @@ public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClien
         }
         onStateChange?.Invoke("Disconnected");
     }
+}
+
+internal sealed class MarketDataLiveness(TimeSpan timeout, DateTimeOffset initial)
+{
+    private DateTimeOffset lastMarketDataUtc = initial;
+    public void Observe(DateTimeOffset now) => lastMarketDataUtc = now;
+    public bool ReconnectRequired(DateTimeOffset now) => now - lastMarketDataUtc >= timeout;
+    public TimeSpan Remaining(DateTimeOffset now) => ReconnectRequired(now) ? TimeSpan.Zero : timeout - (now - lastMarketDataUtc);
 }
 
 public static class BinanceKlineParser
