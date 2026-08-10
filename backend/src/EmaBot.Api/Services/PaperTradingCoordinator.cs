@@ -41,6 +41,13 @@ public sealed class PaperTradingCoordinator(
             var session = await database.PaperSessions.Include(item => item.Symbols).Include(item => item.Trades).SingleOrDefaultAsync(item => item.Id == sessionId, cancellationToken) ?? throw new KeyNotFoundException("Paper session not found.");
             if (resume && session.Status != PaperSessionStatus.Interrupted) throw new InvalidOperationException("Only interrupted paper sessions can be resumed.");
             if (!resume && session.Status != PaperSessionStatus.Running) throw new InvalidOperationException("Only a newly running session can be started.");
+            // Pending entries are tied to the process that observed their signal.  On resume they
+            // must never be recreated, while the persisted regime state remains intact.
+            if (resume)
+            {
+                foreach (var symbol in session.Symbols) ClearPending(symbol);
+                await database.SaveChangesAsync(cancellationToken);
+            }
             var proposed = new RuntimeSession(session, CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
             foreach (var symbol in session.Symbols) proposed.Symbols[symbol.Symbol] = new RuntimeSymbol(symbol, session.Trades.SingleOrDefault(trade => trade.PaperSessionSymbolId == symbol.Id && trade.Status == PaperTradeStatus.Open));
             try { await WarmupAsync(proposed, cancellationToken); }
@@ -54,7 +61,6 @@ public sealed class PaperTradingCoordinator(
                 throw;
             }
             session.Status = PaperSessionStatus.Running; session.InterruptedAtUtc = null; session.FailureMessage = null;
-            if (resume) foreach (var symbol in session.Symbols) ClearPending(symbol);
             await database.SaveChangesAsync(cancellationToken);
             active = proposed;
             proposed.Worker = Task.Run(() => RunStreamAsync(proposed), CancellationToken.None);
