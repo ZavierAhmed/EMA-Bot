@@ -4,6 +4,8 @@ using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
+using EmaBot.Api.Models;
+using EmaBot.Api.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
@@ -87,6 +89,30 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         Assert.Equal(HttpStatusCode.BadRequest, (await PostJson(client, "/api/symbols", "ETHUSDT")).StatusCode);
         Assert.Equal(HttpStatusCode.Created, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
+    }
+
+    [Fact]
+    public async Task PaperSessionStart_AcceptsTwoEnabledMonitoredSymbols()
+    {
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            if (!await database.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
+            if (!await database.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "ETHUSDT")) database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "ETHUSDT", BaseAsset = "ETH", QuoteAsset = "USDT", IsEnabled = true });
+            await database.SaveChangesAsync();
+        }
+        using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
+        var loginToken = await GetAntiforgeryToken(client);
+        Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, loginToken, "admin", "A-strong-password-123!")).StatusCode);
+        var token = await GetAntiforgeryToken(client);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/paper-sessions") { Content = JsonContent.Create(new { interval = "3m", symbols = new[] { "BTCUSDT", "ETHUSDT" } }) };
+        request.Headers.Add("X-CSRF-TOKEN", token);
+        var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        using var session = System.Text.Json.JsonDocument.Parse(body);
+        Assert.Equal(2, session.RootElement.GetProperty("symbols").GetArrayLength());
+        await _factory.Services.GetRequiredService<PaperTradingCoordinator>().StopSessionAsync(session.RootElement.GetProperty("id").GetInt32(), CancellationToken.None);
     }
 
     private static async Task<string> GetAntiforgeryToken(HttpClient client)

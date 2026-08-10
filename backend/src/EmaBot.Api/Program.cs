@@ -23,7 +23,11 @@ builder.Services.AddDbContext<EmaBotDbContext>(options =>
     options.UseMySql(
         connectionString,
         new MySqlServerVersion(new Version(8, 4, 0)),
-        mySqlOptions => mySqlOptions.EnableRetryOnFailure()));
+        mySqlOptions =>
+        {
+            mySqlOptions.EnableRetryOnFailure();
+            mySqlOptions.TranslateParameterizedCollectionsToConstants();
+        }));
 
 builder.Services
     .AddIdentity<EmaUser, IdentityRole>(options =>

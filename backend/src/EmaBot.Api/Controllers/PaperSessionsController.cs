@@ -39,7 +39,9 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
         if (!BinanceIntervals.IsSupported(request.Interval) || symbols.Length == 0) return BadRequest(new ApiMessage("Use a supported interval and select at least one symbol."));
         if (symbols.Distinct(StringComparer.Ordinal).Count() != symbols.Length) return BadRequest(new ApiMessage("Symbols must not contain duplicates."));
         if (await database.PaperSessions.AnyAsync(session => session.Status == PaperSessionStatus.Running || session.Status == PaperSessionStatus.Interrupted, token)) return Conflict(new ApiMessage("Stop or resume the existing paper session before starting another."));
-        var monitored = await database.MonitoredSymbols.Where(symbol => symbols.Contains(symbol.Symbol) && symbol.IsEnabled).ToListAsync(token);
+        var enabledMonitored = await database.MonitoredSymbols.Where(symbol => symbol.IsEnabled).ToListAsync(token);
+        var requestedSymbols = symbols.ToHashSet(StringComparer.Ordinal);
+        var monitored = enabledMonitored.Where(symbol => requestedSymbols.Contains(symbol.Symbol)).ToList();
         if (monitored.Count != symbols.Length) return BadRequest(new ApiMessage("Every selected symbol must be monitored and enabled."));
         var settings = await settingsService.GetAsync(token); var now = DateTimeOffset.UtcNow;
         var session = new PaperSession { Interval = request.Interval, Status = PaperSessionStatus.Running, CreatedAtUtc = now, StartedAtUtc = now, RiskReward = settings.RiskReward, FixedOrderSizeUsdt = settings.FixedOrderSizeUsdt, WaitForConfirmationCandle = settings.WaitForConfirmationCandle, UseEma100Filter = settings.UseEma100Filter, TrailingStopEnabled = settings.TrailingStopEnabled, FeePercentPerSide = settings.FeePercentPerSide, Symbols = monitored.Select(symbol => new PaperSessionSymbol { Symbol = symbol.Symbol }).ToList() };
