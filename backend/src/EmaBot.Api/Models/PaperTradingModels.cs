@@ -72,6 +72,12 @@ public sealed class PaperSessionSymbol
     public decimal? PendingSignalEma100 { get; set; }
     public decimal? PendingSignalGapPercent { get; set; }
     public GapState? PendingSignalGapState { get; set; }
+    public bool PendingIsReentry { get; set; }
+    public DateTimeOffset? PendingTrendRegimeCrossoverTimeUtc { get; set; }
+    public SignalDirection? TrendRegimeDirection { get; set; }
+    public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
+    public bool ReentryEligible { get; set; }
+    public bool ReentryConsumed { get; set; }
     public List<PaperTrade> Trades { get; set; } = [];
 }
 

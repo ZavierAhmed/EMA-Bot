@@ -189,6 +189,21 @@ public sealed class BacktestEngineCorrectiveTests
         Assert.Empty(calculation.Trades); Assert.Equal(1, calculation.Diagnostics.InvalidStopLoss);
     }
 
+    [Fact]
+    public void ReentryContinuation_RequiresBothFastEmasBeyondEma100()
+    {
+        var settings = Settings(); settings.UseEma100Filter = true;
+        var accepted = new IndicatorSnapshot(DateTimeOffset.UnixEpoch, 106m, 105m, 104m, 100m, 1m, GapState.Expanding, TrendDirection.Up, 105m);
+        var rejected = accepted with { Ema15 = 99m };
+
+        foreach (var type in new[] { typeof(BacktestEngine), typeof(PaperTradingCoordinator) })
+        {
+            var method = type.GetMethod("IsContinuation", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+            Assert.True((bool)method.Invoke(null, [accepted, SignalDirection.Long, settings])!);
+            Assert.False((bool)method.Invoke(null, [rejected, SignalDirection.Long, settings])!);
+        }
+    }
+
     private static BacktestCalculation RunOne(Candle[] candles, SignalDirection direction, TradingSettings? settings = null)
     {
         candles[0] = direction == SignalDirection.Long ? candles[0] with { Low = 90m } : candles[0] with { High = 110m };

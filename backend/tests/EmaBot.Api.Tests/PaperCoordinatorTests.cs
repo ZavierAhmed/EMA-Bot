@@ -75,6 +75,23 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
+    public async Task InitialStopExit_PersistsSingleReentryRegimeState()
+    {
+        var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
+        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(1), 90m));
+
+        using var scope = _factory.Services.CreateScope();
+        var symbol = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+        Assert.True(symbol.ReentryEligible);
+        Assert.False(symbol.ReentryConsumed);
+        Assert.Equal(SignalDirection.Long, symbol.TrendRegimeDirection);
+        Assert.Equal(DateTimeOffset.UnixEpoch, symbol.TrendRegimeCrossoverTimeUtc);
+        await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ClosedCandleGap_RefetchesHistoryWithoutSchedulingHistoricalSignals()
     {
         var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();

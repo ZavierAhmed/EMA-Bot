@@ -47,7 +47,7 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
             if (snapshots.Count > 0 && trade.ExitReason is BacktestExitReason.StopLoss or BacktestExitReason.TrailingStop && reenteredRegimes.Add(crossover!.Time))
             {
                 var opposite = direction == SignalDirection.Long ? TrendDirection.Down : TrendDirection.Up;
-                var reentry = snapshots.Where(snapshot => snapshot.Time > trade.ExitTimeUtc).TakeWhile(snapshot => snapshot.TrendDirection != opposite).FirstOrDefault(snapshot => IsContinuation(snapshot, direction, settings));
+                var reentry = snapshots.Where(snapshot => Array.FindIndex(candles, candle => candle.CloseTimeUtc == snapshot.Time) >= occupiedUntil).TakeWhile(snapshot => snapshot.TrendDirection != opposite).FirstOrDefault(snapshot => IsContinuation(snapshot, direction, settings));
                 if (reentry is not null)
                 {
                     var reentrySignalIndex = Array.FindIndex(candles, candle => candle.CloseTimeUtc == reentry.Time);
@@ -79,7 +79,7 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
             ? snapshot.Ema9 > snapshot.Ema15 && snapshot.Close > snapshot.Ema9 && snapshot.Close > snapshot.Ema15 && snapshot.Close > snapshot.Open
             : snapshot.Ema9 < snapshot.Ema15 && snapshot.Close < snapshot.Ema9 && snapshot.Close < snapshot.Ema15 && snapshot.Close < snapshot.Open;
         if (!directional) return false;
-        if (settings.UseEma100Filter && (!snapshot.Ema100.HasValue || (direction == SignalDirection.Long ? snapshot.Ema9 <= snapshot.Ema100 : snapshot.Ema9 >= snapshot.Ema100))) return false;
+        if (settings.UseEma100Filter && (!snapshot.Ema100.HasValue || (direction == SignalDirection.Long ? snapshot.Ema9 <= snapshot.Ema100 || snapshot.Ema15 <= snapshot.Ema100 : snapshot.Ema9 >= snapshot.Ema100 || snapshot.Ema15 >= snapshot.Ema100))) return false;
         return settings.MinEmaGapPercent == 0 || snapshot.GapPercent >= settings.MinEmaGapPercent;
     }
 
