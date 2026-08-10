@@ -45,4 +45,13 @@ public sealed class PaperTradingUnitTests
         Assert.False(liveness.ReconnectRequired(start.AddSeconds(9)));
         Assert.True(liveness.ReconnectRequired(start.AddSeconds(10)));
     }
+
+    [Fact]
+    public void SubscriptionAcknowledgement_DoesNotResetMarketDataLiveness()
+    {
+        var start = DateTimeOffset.UnixEpoch;
+        var liveness = new MarketDataLiveness(TimeSpan.FromSeconds(5), start);
+        Assert.True(BinanceKlineParser.IsSubscriptionAcknowledgement("""{"result":null,"id":"ack"}"""));
+        Assert.True(liveness.ReconnectRequired(start.AddSeconds(5)));
+    }
 }

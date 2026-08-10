@@ -25,6 +25,8 @@ public sealed class TradesController(EmaBotDbContext database, IBinanceHistorica
     {
         if (!TrySource(source, out var requestedSource)) return BadRequest(new ApiMessage("Source must be All, Backtest, or Paper."));
         if (!TryDirection(direction, out var requestedDirection)) return BadRequest(new ApiMessage("Direction must be Long or Short."));
+        if (!IsOneOf(status, "All", "Open", "Closed")) return BadRequest(new ApiMessage("Status must be All, Open, or Closed."));
+        if (!IsOneOf(outcome, "All", "Win", "Loss", "BreakEven", "Open")) return BadRequest(new ApiMessage("Outcome must be All, Win, Loss, BreakEven, or Open."));
         var take = Math.Clamp(limit ?? 100, 1, 250); var normalized = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim().ToUpperInvariant();
         var results = new List<TradeSummaryResponse>();
         if (requestedSource is null or TradeSource.Backtest)
@@ -33,7 +35,7 @@ public sealed class TradesController(EmaBotDbContext database, IBinanceHistorica
             if (normalized is not null) query = query.Where(trade => trade.BacktestRun!.Symbol == normalized);
             if (!string.IsNullOrWhiteSpace(interval)) query = query.Where(trade => trade.BacktestRun!.Interval == interval);
             if (requestedDirection is not null) query = query.Where(trade => trade.Direction == requestedDirection);
-            results.AddRange((await query.ToListAsync(token)).Select(BacktestSummary));
+            if (!string.Equals(status, "Open", StringComparison.OrdinalIgnoreCase)) results.AddRange((await query.ToListAsync(token)).Select(BacktestSummary));
         }
         if (requestedSource is null or TradeSource.Paper)
         {
@@ -82,14 +84,15 @@ public sealed class TradesController(EmaBotDbContext database, IBinanceHistorica
             var closes = candles.Select(candle => candle.Close).ToArray();
             var ema9 = EmaCalculator.Calculate(closes, 9); var ema15 = EmaCalculator.Calculate(closes, 15); var ema100 = EmaCalculator.Calculate(closes, 100);
             var indices = candles.Select((candle, index) => (candle, index)).Where(item => item.candle.OpenTimeUtc >= visibleStart).ToArray();
-            return Ok(new TradeChartResponse(identity.Symbol, identity.Interval, visible.Select(candle => new TradeChartCandleResponse(candle.OpenTimeUtc, candle.CloseTimeUtc, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume)).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.CloseTimeUtc, ema9[item.index])).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.CloseTimeUtc, ema15[item.index])).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.CloseTimeUtc, ema100[item.index])).ToArray()));
+            return Ok(new TradeChartResponse(identity.Symbol, identity.Interval, visible.Select(candle => new TradeChartCandleResponse(candle.OpenTimeUtc, candle.CloseTimeUtc, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume)).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.OpenTimeUtc, ema9[item.index])).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.OpenTimeUtc, ema15[item.index])).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.OpenTimeUtc, ema100[item.index])).ToArray()));
         }
         catch (BinanceApiException) { return StatusCode(502, new ApiMessage("Chart data is currently unavailable from Binance.")); }
     }
 
     private sealed record ChartIdentity(string Symbol, string Interval, DateTimeOffset CrossoverTimeUtc, DateTimeOffset? ExitTimeUtc);
-    private static bool TrySource(string? value, out TradeSource? source) { source = null; if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "All", StringComparison.OrdinalIgnoreCase)) return true; if (Enum.TryParse<TradeSource>(value, true, out var parsed)) { source = parsed; return true; } return false; }
-    private static bool TryDirection(string? value, out SignalDirection? direction) { direction = null; return string.IsNullOrWhiteSpace(value) || string.Equals(value, "All", StringComparison.OrdinalIgnoreCase) || (Enum.TryParse<SignalDirection>(value, true, out var parsed) && (direction = parsed) is not null); }
+    private static bool TrySource(string? value, out TradeSource? source) { source = null; if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "All", StringComparison.OrdinalIgnoreCase)) return true; if (string.Equals(value, "Backtest", StringComparison.OrdinalIgnoreCase)) { source = TradeSource.Backtest; return true; } if (string.Equals(value, "Paper", StringComparison.OrdinalIgnoreCase)) { source = TradeSource.Paper; return true; } return false; }
+    private static bool TryDirection(string? value, out SignalDirection? direction) { direction = null; if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "All", StringComparison.OrdinalIgnoreCase)) return true; if (string.Equals(value, "Long", StringComparison.OrdinalIgnoreCase)) { direction = SignalDirection.Long; return true; } if (string.Equals(value, "Short", StringComparison.OrdinalIgnoreCase)) { direction = SignalDirection.Short; return true; } return false; }
+    private static bool IsOneOf(string? value, params string[] allowed) => string.IsNullOrWhiteSpace(value) || allowed.Any(item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase));
     private static bool MatchesOutcome(TradeSummaryResponse item, string outcome) => outcome.ToLowerInvariant() switch { "open" => item.Status == "Open", "win" => item.NetPnlUsdt > 0, "loss" => item.NetPnlUsdt < 0, "breakeven" or "break-even" => item.Status == "Closed" && item.NetPnlUsdt == 0, _ => true };
     private static TradeSummaryResponse BacktestSummary(BacktestTrade trade) => new(TradeSource.Backtest, trade.Id, trade.BacktestRunId, trade.BacktestRun!.Symbol, trade.BacktestRun.Interval, "Closed", trade.Direction, trade.EntryTimeUtc, trade.ExitTimeUtc, trade.EntryPrice, trade.ExitPrice, trade.ExitReason.ToString(), trade.GrossPnlUsdt, trade.NetPnlUsdt, trade.NetPnlPercent, trade.TotalFeesUsdt, trade.GrossRMultiple, trade.NetRMultiple);
     private static TradeSummaryResponse PaperSummary(PaperTrade trade) { var risk = Math.Abs(trade.EntryPrice - trade.InitialStopLoss) * trade.Quantity; return new(TradeSource.Paper, trade.Id, trade.PaperSessionId, trade.Symbol, trade.Interval, trade.Status.ToString(), trade.Direction, trade.EntryTimeUtc, trade.ExitTimeUtc, trade.EntryPrice, trade.ExitPrice, trade.ExitReason?.ToString(), trade.GrossPnlUsdt, trade.NetPnlUsdt, trade.NetPnlPercent, trade.TotalFeesUsdt, risk == 0 ? null : trade.GrossPnlUsdt / risk, risk == 0 ? null : trade.NetPnlUsdt / risk); }
