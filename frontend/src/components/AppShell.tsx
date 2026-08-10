@@ -46,7 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <button onClick={() => void handleLogout()} className="mt-2 text-sm text-slate-500 hover:text-slate-950">Sign out</button>
         </div>
       </aside>
-      <main className="mx-auto w-full max-w-6xl px-6 py-10 lg:px-12">{children}</main>
+      <main className="min-w-0 flex-1 w-full px-5 py-8 lg:px-6 xl:px-8">{children}</main>
     </div>
   )
 }

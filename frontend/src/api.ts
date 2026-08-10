@@ -97,5 +97,5 @@ export const startPaperSession = (interval: string, symbols: string[]) => protec
 export const stopPaperSession = (id: number) => protectedRequest<void>(`/api/paper-sessions/${id}/stop`, 'POST')
 export const resumePaperSession = (id: number) => protectedRequest<PaperSession>(`/api/paper-sessions/${id}/resume`, 'POST')
 export const getTrades = (filters: Record<string, string>) => request<TradeSummary[]>(`/api/trades?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString()}`)
-export const getTrade = (source: string, id: number) => request<TradeDetail>(`/api/trades/${source.toLowerCase()}/${id}`)
-export const getTradeChart = (source: string, id: number) => request<TradeChartData>(`/api/trades/${source.toLowerCase()}/${id}/chart`)
+export const getTrade = (source: string, id: number, signal?: AbortSignal) => request<TradeDetail>(`/api/trades/${source.toLowerCase()}/${id}`, { signal })
+export const getTradeChart = (source: string, id: number, signal?: AbortSignal) => request<TradeChartData>(`/api/trades/${source.toLowerCase()}/${id}/chart`, { signal })

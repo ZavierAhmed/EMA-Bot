@@ -7,6 +7,7 @@ using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
 using EmaBot.Api.Models;
 using EmaBot.Api.Strategy;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,7 +38,9 @@ public sealed class TradeExplorerApiTests : IClassFixture<EmaBotApiFactory>
         var chart = await client.GetFromJsonAsync<JsonElement>($"/api/trades/backtest/{backtestId}/chart");
         var candleTimes = chart.GetProperty("candles").EnumerateArray().Select(item => item.GetProperty("openTimeUtc").GetDateTimeOffset()).ToHashSet();
         foreach (var name in new[] { "ema9", "ema15", "ema100" }) foreach (var point in chart.GetProperty(name).EnumerateArray()) Assert.Contains(point.GetProperty("timeUtc").GetDateTimeOffset(), candleTimes);
-        factory.BinanceClient.KlinesException = new BinanceApiException("down"); Assert.Equal(HttpStatusCode.BadGateway, (await client.GetAsync($"/api/trades/backtest/{backtestId}/chart")).StatusCode); factory.BinanceClient.KlinesException = null;
+        factory.BinanceClient.KlinesException = new BinanceApiException("down"); Assert.Equal(HttpStatusCode.BadGateway, (await client.GetAsync($"/api/trades/backtest/{backtestId}/chart")).StatusCode);
+        factory.BinanceClient.KlinesException = new BinanceApiException("timeout", StatusCodes.Status504GatewayTimeout); Assert.Equal(HttpStatusCode.GatewayTimeout, (await client.GetAsync($"/api/trades/backtest/{backtestId}/chart")).StatusCode);
+        factory.BinanceClient.KlinesException = null;
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/trades/backtest/999999")).StatusCode);
     }
 

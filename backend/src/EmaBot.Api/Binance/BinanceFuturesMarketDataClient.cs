@@ -64,16 +64,29 @@ public sealed class BinanceFuturesMarketDataClient(HttpClient httpClient, TimePr
 
     private async Task<JsonDocument> GetJsonAsync(string relativeUri, CancellationToken cancellationToken)
     {
-        using var response = await httpClient.GetAsync(relativeUri, cancellationToken);
-        var body = await response.Content.ReadAsStringAsync(cancellationToken);
-        if (!response.IsSuccessStatusCode)
+        try
         {
-            var message = "Binance market data is currently unavailable.";
-            try { using var error = JsonDocument.Parse(body); if (error.RootElement.TryGetProperty("msg", out var value) && value.ValueKind == JsonValueKind.String) message = value.GetString() ?? message; } catch (JsonException) { }
-            throw new BinanceApiException(message, (int)response.StatusCode);
+            using var response = await httpClient.GetAsync(relativeUri, cancellationToken);
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                var message = "Binance market data is currently unavailable.";
+                try { using var error = JsonDocument.Parse(body); if (error.RootElement.TryGetProperty("msg", out var value) && value.ValueKind == JsonValueKind.String) message = value.GetString() ?? message; } catch (JsonException) { }
+                throw new BinanceApiException(message, (int)response.StatusCode);
+            }
+
+            try { return JsonDocument.Parse(body); }
+            catch (JsonException) { throw new BinanceApiException("Binance returned malformed JSON."); }
         }
-        try { return JsonDocument.Parse(body); }
-        catch (JsonException) { throw new BinanceApiException("Binance returned malformed JSON."); }
+        catch (TaskCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new BinanceApiException("Binance market data request timed out.", StatusCodes.Status504GatewayTimeout);
+        }
+        catch (TimeoutException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new BinanceApiException("Binance market data request timed out.", StatusCodes.Status504GatewayTimeout);
+        }
     }
 
     private static bool TryString(JsonElement element, string property, out string value)

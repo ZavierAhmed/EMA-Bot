@@ -83,7 +83,7 @@ builder.Services.AddSingleton<EmaSignalEngine>();
 builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>
 {
     client.BaseAddress = new Uri("https://fapi.binance.com/");
-    client.Timeout = TimeSpan.FromSeconds(15);
+    client.Timeout = TimeSpan.FromSeconds(30);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
 });
 builder.Services.AddScoped<IBinanceHistoricalCandleService, BinanceHistoricalCandleService>();

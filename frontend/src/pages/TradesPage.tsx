@@ -7,17 +7,112 @@ const format = (value: number | null | undefined) => value === null || value ===
 const date = (value: string | null) => value ? new Date(value).toLocaleString() : '-'
 
 export function TradesPage() {
-  const [params] = useSearchParams(); const navigate = useNavigate(); const routeSource = params.get('source'); const normalizedSource = routeSource?.toLowerCase() === 'backtest' ? 'Backtest' : routeSource?.toLowerCase() === 'paper' ? 'Paper' : ''; const [filters, setFilters] = useState({ source: normalizedSource, symbol: '', interval: '', direction: '', outcome: '' }); const [trades, setTrades] = useState<TradeSummary[]>([]); const [detail, setDetail] = useState<TradeDetail | null>(null); const [chart, setChart] = useState<TradeChartData | null>(null); const [listLoading, setListLoading] = useState(true); const [listError, setListError] = useState<string | null>(null); const [detailError, setDetailError] = useState<string | null>(null); const [chartError, setChartError] = useState<string | null>(null); const [visibility, setVisibility] = useState({ ema9: true, ema15: true, ema100: true, levels: true, markers: true })
-  const selectedSource = params.get('source'); const selectedId = Number(params.get('id'))
-  useEffect(() => { setListLoading(true); setListError(null); void getTrades(filters).then(setTrades).catch(() => setListError('Trade list is currently unavailable.')).finally(() => setListLoading(false)) }, [filters])
-  useEffect(() => { if (!selectedSource || !selectedId) { setDetail(null); setChart(null); return } setDetailError(null); setChartError(null); setDetail(null); setChart(null); void getTrade(selectedSource, selectedId).then(setDetail).catch(() => setDetailError('Trade details are currently unavailable.')); void getTradeChart(selectedSource, selectedId).then(setChart).catch(() => setChartError('Chart data is currently unavailable from Binance.')) }, [selectedSource, selectedId])
+  const [params] = useSearchParams()
+  const navigate = useNavigate()
+  const routeSource = params.get('source')
+  const normalizedSource = routeSource?.toLowerCase() === 'backtest' ? 'Backtest' : routeSource?.toLowerCase() === 'paper' ? 'Paper' : ''
+  const [filters, setFilters] = useState({ source: normalizedSource, symbol: '', interval: '', direction: '', outcome: '' })
+  const [trades, setTrades] = useState<TradeSummary[]>([])
+  const [detail, setDetail] = useState<TradeDetail | null>(null)
+  const [chart, setChart] = useState<TradeChartData | null>(null)
+  const [listLoading, setListLoading] = useState(true)
+  const [listError, setListError] = useState<string | null>(null)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [chartError, setChartError] = useState<string | null>(null)
+  const [chartReload, setChartReload] = useState(0)
+  const [visibility, setVisibility] = useState({ ema9: true, ema15: true, ema100: true, levels: true, markers: true })
+  const selectedSource = params.get('source')
+  const selectedId = Number(params.get('id'))
+
+  useEffect(() => {
+    setListLoading(true)
+    setListError(null)
+    void getTrades(filters).then(setTrades).catch(() => setListError('Trade list is currently unavailable.')).finally(() => setListLoading(false))
+  }, [filters])
+
+  useEffect(() => {
+    if (!selectedSource || !selectedId) {
+      setDetail(null)
+      setChart(null)
+      return
+    }
+
+    const controller = new AbortController()
+    setDetailError(null)
+    setChartError(null)
+    setDetail(null)
+    setChart(null)
+    void getTrade(selectedSource, selectedId, controller.signal).then(setDetail).catch(error => {
+      if (error.name !== 'AbortError') setDetailError('Trade details are currently unavailable.')
+    })
+    void getTradeChart(selectedSource, selectedId, controller.signal).then(setChart).catch(error => {
+      if (error.name !== 'AbortError') setChartError('Chart data is currently unavailable from Binance.')
+    })
+    return () => controller.abort()
+  }, [chartReload, selectedSource, selectedId])
+
   const select = (trade: TradeSummary) => navigate(`/trades?source=${trade.source.toLowerCase()}&id=${trade.id}`)
   const setFilter = (key: keyof typeof filters, value: string) => setFilters(current => ({ ...current, [key]: value }))
-  if (listError) return <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{listError}</div>
-  return <div className="space-y-5"><div><p className="text-sm font-medium text-slate-500">Analysis</p><h1 className="mt-2 text-3xl font-semibold">Trade Explorer</h1><p className="mt-2 text-slate-600">Review simulated backtest and paper trades with on-demand Binance chart context.</p></div><div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]"><aside className="rounded-lg border border-slate-200 bg-white p-4"><div className="grid gap-2"><select value={filters.source} onChange={event => setFilter('source', event.target.value)}><option value="">All sources</option><option value="Backtest">Backtest</option><option value="Paper">Paper</option></select><input placeholder="Symbol" value={filters.symbol} onChange={event => setFilter('symbol', event.target.value.toUpperCase())}/><select value={filters.interval} onChange={event => setFilter('interval', event.target.value)}><option value="">All timeframes</option>{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select><select value={filters.direction} onChange={event => setFilter('direction', event.target.value)}><option value="">All directions</option><option>Long</option><option>Short</option></select><select value={filters.outcome} onChange={event => setFilter('outcome', event.target.value)}><option value="">All outcomes</option><option value="Win">Win</option><option value="Loss">Loss</option><option value="BreakEven">Break-even</option><option value="Open">Open</option></select></div><div className="mt-4 space-y-2">{listLoading ? <p className="text-sm text-slate-500">Loading trades...</p> : trades.length === 0 ? <p className="text-sm text-slate-500">No trades match these filters.</p> : trades.map(trade => <button key={`${trade.source}-${trade.id}`} onClick={() => select(trade)} className={`w-full rounded border p-3 text-left text-sm ${selectedSource?.toLowerCase() === trade.source.toLowerCase() && selectedId === trade.id ? 'border-slate-950 bg-slate-50' : 'border-slate-200'}`}><div className="flex justify-between"><span className="font-medium">{trade.symbol} {trade.interval}</span><span className="text-xs">{trade.source}</span></div><p>{trade.direction} · {trade.status} · {trade.exitReason ?? '-'}</p><p className={trade.netPnlUsdt >= 0 ? 'text-emerald-700' : 'text-red-700'}>Net {format(trade.netPnlUsdt)} · R {format(trade.netRMultiple)}</p><p className="text-xs text-slate-500">{date(trade.entryTimeUtc)}</p></button>)}</div></aside><section className="min-w-0 space-y-5">{!selectedSource || !selectedId ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-slate-500">Select a trade to inspect its reasoning and chart.</div> : detailError ? <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{detailError}</div> : !detail ? <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">Loading trade details...</div> : <><div className="rounded-lg border border-slate-200 bg-white p-4"><div className="flex flex-wrap gap-3 text-sm"><strong>{detail.summary.symbol} {detail.summary.interval} · {detail.summary.direction}</strong><span>Net {format(detail.summary.netPnlUsdt)} USDT</span><span>{detail.summary.status}</span></div><div className="mt-3 flex flex-wrap gap-3 text-xs">{(['ema9', 'ema15', 'ema100', 'levels', 'markers'] as const).map(key => <label key={key}><input type="checkbox" checked={visibility[key]} onChange={() => setVisibility(current => ({ ...current, [key]: !current[key] }))} /> {key === 'levels' ? 'SL/TP' : key.toUpperCase()}</label>)}</div></div>{chart ? <div className="rounded-lg border border-slate-200 bg-white p-3"><TradeChart data={chart} detail={detail} visibility={visibility}/></div> : <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">{chartError ?? 'Loading chart data...'} {chartError && <button className="ml-3 underline" onClick={() => { setChartError(null); void getTradeChart(selectedSource, selectedId).then(setChart).catch(() => setChartError('Chart data is currently unavailable from Binance.')) }}>Retry Chart</button>}</div>}<Details detail={detail}/></>}</section></div></div>
+
+  return <div className="space-y-5">
+    <div>
+      <p className="text-sm font-medium text-slate-500">Analysis</p>
+      <h1 className="mt-2 text-3xl font-semibold">Trade Explorer</h1>
+      <p className="mt-2 text-slate-600">Review simulated backtest and paper trades with on-demand Binance chart context.</p>
+    </div>
+    {listError && <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{listError}</div>}
+    <div className="grid min-w-0 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <aside className="min-w-0 rounded-lg border border-slate-200 bg-white p-4">
+        <div className="grid gap-2">
+          <select value={filters.source} onChange={event => setFilter('source', event.target.value)}><option value="">All sources</option><option value="Backtest">Backtest</option><option value="Paper">Paper</option></select>
+          <input placeholder="Symbol" value={filters.symbol} onChange={event => setFilter('symbol', event.target.value.toUpperCase())} />
+          <select value={filters.interval} onChange={event => setFilter('interval', event.target.value)}><option value="">All timeframes</option>{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select>
+          <select value={filters.direction} onChange={event => setFilter('direction', event.target.value)}><option value="">All directions</option><option>Long</option><option>Short</option></select>
+          <select value={filters.outcome} onChange={event => setFilter('outcome', event.target.value)}><option value="">All outcomes</option><option value="Win">Win</option><option value="Loss">Loss</option><option value="BreakEven">Break-even</option><option value="Open">Open</option></select>
+        </div>
+        <div className="mt-4 space-y-2">
+          {listLoading ? <p className="text-sm text-slate-500">Loading trades...</p> : trades.length === 0 ? <p className="text-sm text-slate-500">No trades match these filters.</p> : trades.map(trade => <button key={`${trade.source}-${trade.id}`} onClick={() => select(trade)} className={`w-full rounded border p-3 text-left text-sm ${selectedSource?.toLowerCase() === trade.source.toLowerCase() && selectedId === trade.id ? 'border-slate-950 bg-slate-50' : 'border-slate-200'}`}>
+            <div className="flex justify-between gap-2"><span className="font-medium">{trade.symbol} {trade.interval}</span><span className="text-xs">{trade.source}</span></div>
+            <p>{trade.direction} · {trade.status} · {trade.exitReason ?? '-'}</p>
+            <p className={trade.netPnlUsdt >= 0 ? 'text-emerald-700' : 'text-red-700'}>Net {format(trade.netPnlUsdt)} · R {format(trade.netRMultiple)}</p>
+            <p className="text-xs text-slate-500">{date(trade.entryTimeUtc)}</p>
+          </button>)}
+        </div>
+      </aside>
+      <section className="min-w-0 space-y-5">
+        {!selectedSource || !selectedId ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-slate-500">Select a trade to inspect its reasoning and chart.</div> : detailError ? <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{detailError}</div> : !detail ? <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">Loading trade details...</div> : <>
+          <div className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex flex-wrap gap-3 text-sm"><strong>{detail.summary.symbol} {detail.summary.interval} · {detail.summary.direction}</strong><span>Net {format(detail.summary.netPnlUsdt)} USDT</span><span>{detail.summary.status}</span></div>
+            <div className="mt-3 flex flex-wrap gap-3 text-xs">{(['ema9', 'ema15', 'ema100', 'levels', 'markers'] as const).map(key => <label key={key}><input type="checkbox" checked={visibility[key]} onChange={() => setVisibility(current => ({ ...current, [key]: !current[key] }))} /> {key === 'levels' ? 'SL/TP' : key.toUpperCase()}</label>)}</div>
+          </div>
+          {chart ? <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"><TradeChart data={chart} detail={detail} visibility={visibility} /></div> : <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">{chartError ?? 'Loading chart data...'} {chartError && <button className="ml-3 underline" onClick={() => setChartReload(value => value + 1)}>Retry Chart</button>}</div>}
+          <Details detail={detail} />
+        </>}
+      </section>
+    </div>
+  </div>
 }
 
 function Details({ detail }: { detail: TradeDetail }) {
-  const explanation = detail.summary.direction === 'Long' ? `EMA 9 crossed above EMA 15. ${detail.waitForConfirmationCandle ? 'The next closed candle confirmed the setup.' : 'The crossover generated the signal because confirmation was disabled.'} ${detail.useEma100Filter ? 'The EMA 100 direction filter was applied.' : 'EMA 100 filtering was disabled for this trade.'} Entry occurred at the following candle open.` : `EMA 9 crossed below EMA 15. ${detail.waitForConfirmationCandle ? 'The next closed candle confirmed the setup.' : 'The crossover generated the signal because confirmation was disabled.'} ${detail.useEma100Filter ? 'The EMA 100 direction filter was applied.' : 'EMA 100 filtering was disabled for this trade.'} Entry occurred at the following candle open.`
-  return <div className="grid gap-4 md:grid-cols-2"><section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Trade details</h2><p className="mt-2">Entry {date(detail.summary.entryTimeUtc)} at {format(detail.summary.entryPrice)} · Qty {format(detail.quantity)}</p><p>Signal: close {format(detail.signalClose)}, EMA9 {format(detail.signalEma9)}, EMA15 {format(detail.signalEma15)}, EMA100 {format(detail.signalEma100)}</p><p>Initial SL {format(detail.initialStopLoss)} ({detail.stopSourceType}); final SL {format(detail.finalStopLoss)}</p><p>Original TP {format(detail.originalTakeProfit)}; final TP {format(detail.finalTakeProfit)}</p><p>Exit {date(detail.summary.exitTimeUtc)} at {format(detail.summary.exitPrice)} · {detail.summary.exitReason ?? 'Open'}</p><p>Gross {format(detail.summary.grossPnlUsdt)} · fees {format(detail.summary.totalFeesUsdt)} · net {format(detail.summary.netPnlUsdt)}</p><p className="mt-3 text-slate-600">{explanation}</p></section><section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Management timeline</h2>{!detail.hasDetailedManagementHistory && <p className="mt-2 text-slate-500">Detailed management-event history is unavailable for this older backtest.</p>}<div className="mt-2 space-y-2">{detail.events.map((event, index) => <p key={`${event.type}-${index}`}><strong>{event.type}</strong> · {date(event.timeUtc)} · price {format(event.marketPrice)}{event.newStop !== null ? ` · SL ${format(event.newStop)}` : ''}{event.newTakeProfit !== null ? ` · TP ${format(event.newTakeProfit)}` : ''}</p>)}</div><p className="mt-3 text-slate-500">Source: {detail.summary.source} #{detail.summary.parentId}</p></section></div>
+  const explanation = detail.summary.direction === 'Long'
+    ? `EMA 9 crossed above EMA 15. ${detail.waitForConfirmationCandle ? 'The next closed candle confirmed the setup.' : 'The crossover generated the signal because confirmation was disabled.'} ${detail.useEma100Filter ? 'The EMA 100 direction filter was applied.' : 'EMA 100 filtering was disabled for this trade.'} Entry occurred at the following candle open.`
+    : `EMA 9 crossed below EMA 15. ${detail.waitForConfirmationCandle ? 'The next closed candle confirmed the setup.' : 'The crossover generated the signal because confirmation was disabled.'} ${detail.useEma100Filter ? 'The EMA 100 direction filter was applied.' : 'EMA 100 filtering was disabled for this trade.'} Entry occurred at the following candle open.`
+  return <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+    <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 text-sm">
+      <h2 className="font-semibold">Trade details</h2>
+      <dl className="mt-3 grid gap-2 text-slate-700">
+        <div><dt className="font-medium text-slate-950">Entry</dt><dd>{date(detail.summary.entryTimeUtc)} at {format(detail.summary.entryPrice)} · Qty {format(detail.quantity)}</dd></div>
+        <div><dt className="font-medium text-slate-950">Signal</dt><dd>Close {format(detail.signalClose)}, EMA9 {format(detail.signalEma9)}, EMA15 {format(detail.signalEma15)}, EMA100 {format(detail.signalEma100)}</dd></div>
+        <div><dt className="font-medium text-slate-950">Risk levels</dt><dd>Initial SL {format(detail.initialStopLoss)} ({detail.stopSourceType}); final SL {format(detail.finalStopLoss)}. Original TP {format(detail.originalTakeProfit)}; final TP {format(detail.finalTakeProfit)}</dd></div>
+        <div><dt className="font-medium text-slate-950">Exit and P&amp;L</dt><dd>Exit {date(detail.summary.exitTimeUtc)} at {format(detail.summary.exitPrice)} · {detail.summary.exitReason ?? 'Open'}. Gross {format(detail.summary.grossPnlUsdt)} · fees {format(detail.summary.totalFeesUsdt)} · net {format(detail.summary.netPnlUsdt)}</dd></div>
+      </dl>
+      <p className="mt-3 text-slate-600">{explanation}</p>
+    </section>
+    <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 text-sm">
+      <h2 className="font-semibold">Management timeline</h2>
+      {!detail.hasDetailedManagementHistory && <p className="mt-2 text-slate-500">Detailed management-event history is unavailable for this older backtest.</p>}
+      <div className="mt-3 space-y-2">{detail.events.map((event, index) => <p key={`${event.type}-${index}`}><strong>{event.type}</strong> · {date(event.timeUtc)} · price {format(event.marketPrice)}{event.newStop !== null ? ` · SL ${format(event.newStop)}` : ''}{event.newTakeProfit !== null ? ` · TP ${format(event.newTakeProfit)}` : ''}</p>)}</div>
+      <p className="mt-3 text-slate-500">Source: {detail.summary.source} #{detail.summary.parentId}</p>
+    </section>
+  </div>
 }

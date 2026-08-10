@@ -86,6 +86,7 @@ public sealed class TradesController(EmaBotDbContext database, IBinanceHistorica
             var indices = candles.Select((candle, index) => (candle, index)).Where(item => item.candle.OpenTimeUtc >= visibleStart).ToArray();
             return Ok(new TradeChartResponse(identity.Symbol, identity.Interval, visible.Select(candle => new TradeChartCandleResponse(candle.OpenTimeUtc, candle.CloseTimeUtc, candle.Open, candle.High, candle.Low, candle.Close, candle.Volume)).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.OpenTimeUtc, ema9[item.index])).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.OpenTimeUtc, ema15[item.index])).ToArray(), indices.Select(item => new TradeChartPointResponse(item.candle.OpenTimeUtc, ema100[item.index])).ToArray()));
         }
+        catch (BinanceApiException exception) when (exception.StatusCode == StatusCodes.Status504GatewayTimeout) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Binance chart request timed out. Retry the chart.")); }
         catch (BinanceApiException) { return StatusCode(502, new ApiMessage("Chart data is currently unavailable from Binance.")); }
     }
 
