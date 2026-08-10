@@ -7,6 +7,7 @@ import { PlaceholderPage } from './pages/PlaceholderPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SymbolsPage } from './pages/SymbolsPage'
 import { BacktestsPage } from './pages/BacktestsPage'
+import { PaperTradingPage } from './pages/PaperTradingPage'
 
 function ProtectedLayout() {
   const { user, isLoading } = useAuth()
@@ -31,7 +32,7 @@ export function App() {
       <Route element={<ProtectedLayout />}>
         <Route index element={<DashboardPage />} />
         <Route path="backtests" element={<BacktestsPage />} />
-        <Route path="paper-trading" element={<PlaceholderPage title="Paper Trading" />} />
+        <Route path="paper-trading" element={<PaperTradingPage />} />
         <Route path="trades" element={<PlaceholderPage title="Trades" />} />
         <Route path="symbols" element={<SymbolsPage />} />
         <Route path="settings" element={<SettingsPage />} />

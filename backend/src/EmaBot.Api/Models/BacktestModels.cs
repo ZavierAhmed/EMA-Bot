@@ -5,7 +5,7 @@ namespace EmaBot.Api.Models;
 
 public enum BacktestRunStatus { Completed, Failed }
 public enum StopSourceType { Pivot, FallbackLookback }
-public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData }
+public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData, TrailingStop }
 
 public sealed class BacktestRun
 {

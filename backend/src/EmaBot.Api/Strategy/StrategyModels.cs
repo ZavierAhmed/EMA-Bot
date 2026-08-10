@@ -13,6 +13,5 @@ public sealed record StrategyEvaluation(IReadOnlyList<IndicatorSnapshot> Snapsho
 
 public static class TrailingStopDocumentation
 {
-    // Future only: at 50/60/70/80/90/100% favorable progress, move SL to +20/+30/+40/+50/+60/+70%; extend original TP once by 10% at 70%.
-    public const string FutureRule = "Documented only; trade management is intentionally not implemented.";
+    public const string Rule = "At 50/60/70/80/90/100% favorable progress, lock +20/+30/+40/+50/+60/+70% of original target distance and extend TP once to 110% at 70%.";
 }

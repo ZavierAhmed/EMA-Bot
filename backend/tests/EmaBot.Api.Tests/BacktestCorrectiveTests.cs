@@ -154,7 +154,7 @@ public sealed class BacktestEngineCorrectiveTests
     {
         var candles = Candles(9, 100m); candles[6] = candles[6] with { High = 110m, Low = 99m }; candles[7] = candles[7] with { High = 114m, Low = 105m }; candles[8] = candles[8] with { High = 109m, Low = 108m };
         var trade = RunOne(candles, SignalDirection.Long, Settings(trailing: true)).Trades.Single();
-        Assert.Equal(108m, trade.FinalStopLoss); Assert.Equal(122m, trade.FinalTakeProfit); Assert.True(trade.TakeProfitExtended); Assert.Equal(120m, trade.OriginalTakeProfit); Assert.Equal(BacktestExitReason.StopLoss, trade.ExitReason);
+        Assert.Equal(108m, trade.FinalStopLoss); Assert.Equal(122m, trade.FinalTakeProfit); Assert.True(trade.TakeProfitExtended); Assert.Equal(120m, trade.OriginalTakeProfit); Assert.Equal(BacktestExitReason.TrailingStop, trade.ExitReason);
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public sealed class BacktestEngineCorrectiveTests
     {
         var candles = Candles(9, 100m); candles[6] = candles[6] with { High = 101m, Low = 90m }; candles[7] = candles[7] with { High = 95m, Low = 86m }; candles[8] = candles[8] with { High = 92m, Low = 91m };
         var trade = RunOne(candles, SignalDirection.Short, Settings(trailing: true)).Trades.Single();
-        Assert.Equal(92m, trade.FinalStopLoss); Assert.Equal(78m, trade.FinalTakeProfit); Assert.True(trade.TakeProfitExtended); Assert.Equal(80m, trade.OriginalTakeProfit); Assert.Equal(BacktestExitReason.StopLoss, trade.ExitReason);
+        Assert.Equal(92m, trade.FinalStopLoss); Assert.Equal(78m, trade.FinalTakeProfit); Assert.True(trade.TakeProfitExtended); Assert.Equal(80m, trade.OriginalTakeProfit); Assert.Equal(BacktestExitReason.TrailingStop, trade.ExitReason);
     }
 
     [Fact]

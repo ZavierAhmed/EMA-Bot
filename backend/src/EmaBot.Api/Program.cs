@@ -75,6 +75,8 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<TradingSettingsService>();
 builder.Services.AddSingleton<BacktestEngine>();
 builder.Services.AddScoped<BacktestService>();
+builder.Services.AddSingleton<PaperTradingCoordinator>();
+builder.Services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<PaperTradingCoordinator>());
 builder.Services.AddSingleton<EmaSignalEngine>();
 builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>
 {
@@ -83,6 +85,7 @@ builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMa
     client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
 });
 builder.Services.AddScoped<IBinanceHistoricalCandleService, BinanceHistoricalCandleService>();
+builder.Services.AddSingleton<IBinanceFuturesStreamClient, BinanceFuturesStreamClient>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

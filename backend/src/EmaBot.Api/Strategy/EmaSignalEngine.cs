@@ -43,8 +43,8 @@ public sealed class EmaSignalEngine
             if (pending != SignalDirection.None)
             {
                 var confirms = pending == SignalDirection.Long
-                    ? current.Close > current.Ema9 && current.Close > current.Ema15
-                    : current.Close < current.Ema9 && current.Close < current.Ema15;
+                    ? current.Ema9 > current.Ema15 && current.Close > current.Ema9 && current.Close > current.Ema15
+                    : current.Ema9 < current.Ema15 && current.Close < current.Ema9 && current.Close < current.Ema15;
                 if (confirms) events.Add(CreateCandidate(current, pending, settings));
                 else events.Add(new StrategyEvent(current.Time, pending, SignalStatus.ConfirmationFailed, current));
                 pending = SignalDirection.None;

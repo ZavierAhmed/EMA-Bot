@@ -74,6 +74,18 @@ public sealed class MarketDataAndStrategyTests
     }
 
     [Fact]
+    public void Engine_RecrossCannotConfirmOldDirectionButStartsOppositePendingSetup()
+    {
+        var engine = new EmaSignalEngine();
+        var settings = new TradingSettings { WaitForConfirmationCandle = true };
+        var events = engine.EvaluateSnapshots(new[] { Snapshot(1, 1, 2, 1, 2), Snapshot(2, 3, 2, 1, 4), Snapshot(3, 1, 2, 1, 3) }, settings);
+        Assert.Contains(events, item => item.Direction == SignalDirection.Long && item.Status == SignalStatus.ConfirmationFailed);
+        Assert.Contains(events, item => item.Direction == SignalDirection.Short && item.Status == SignalStatus.BearishCrossover);
+        Assert.Contains(events, item => item.Direction == SignalDirection.Short && item.Status == SignalStatus.AwaitingConfirmation);
+        Assert.DoesNotContain(events, item => item.Direction == SignalDirection.Long && item.Status == SignalStatus.LongSignal);
+    }
+
+    [Fact]
     public void Engine_ExcludesOpenCandlesAndCalculatesGapState()
     {
         var engine = new EmaSignalEngine();
