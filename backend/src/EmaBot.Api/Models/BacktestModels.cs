@@ -22,6 +22,13 @@ public sealed class BacktestRun
     public int CandleCount { get; set; }
     public decimal RiskReward { get; set; }
     public decimal FixedOrderSizeUsdt { get; set; }
+    public decimal MinEmaGapPercent { get; set; }
+    public decimal MaxStopDistancePercent { get; set; }
+    public PositionSizingMode PositionSizingMode { get; set; }
+    public decimal StartingBalanceUsdt { get; set; }
+    public decimal EndingBalanceUsdt { get; set; }
+    public decimal MarginPerTradePercent { get; set; }
+    public decimal Leverage { get; set; }
     public bool WaitForConfirmationCandle { get; set; }
     public bool UseEma100Filter { get; set; }
     public bool TrailingStopEnabled { get; set; }
@@ -44,6 +51,9 @@ public sealed class BacktestRun
     public int LongSignals { get; set; }
     public int ShortSignals { get; set; }
     public int RejectedByEma100 { get; set; }
+    public int RejectedByEmaGap { get; set; }
+    public int RejectedByStopDistance { get; set; }
+    public int RejectedByFees { get; set; }
     public int ConfirmationFailed { get; set; }
     public int InvalidStopLoss { get; set; }
     public int SkippedWhilePositionOpen { get; set; }
@@ -68,6 +78,10 @@ public sealed class BacktestTrade
     public decimal ExitPrice { get; set; }
     public decimal Quantity { get; set; }
     public decimal EntryNotionalUsdt { get; set; }
+    public PositionSizingMode PositionSizingMode { get; set; }
+    public decimal? AccountEquityAtEntryUsdt { get; set; }
+    public decimal? MarginUsedUsdt { get; set; }
+    public decimal? Leverage { get; set; }
     public decimal InitialStopLoss { get; set; }
     public decimal FinalStopLoss { get; set; }
     public StopSourceType StopSourceType { get; set; }
@@ -90,11 +104,14 @@ public sealed class BacktestTrade
     public decimal MaePrice { get; set; }
     public decimal MaePercent { get; set; }
     public decimal SignalClose { get; set; }
+    public decimal? SignalOpen { get; set; }
     public decimal? SignalEma9 { get; set; }
     public decimal? SignalEma15 { get; set; }
     public decimal? SignalEma100 { get; set; }
     public decimal? SignalGapPercent { get; set; }
     public GapState SignalGapState { get; set; }
+    public bool IsReentry { get; set; }
+    public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
     public List<BacktestTradeEvent> Events { get; set; } = [];
 }
 

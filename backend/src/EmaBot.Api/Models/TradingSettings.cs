@@ -1,3 +1,5 @@
+using EmaBot.Api.Strategy;
+
 namespace EmaBot.Api.Models;
 
 public sealed class TradingSettings
@@ -6,6 +8,12 @@ public sealed class TradingSettings
     public int Id { get; set; } = GlobalId;
     public decimal RiskReward { get; set; } = 2m;
     public decimal FixedOrderSizeUsdt { get; set; } = 100m;
+    public decimal MinEmaGapPercent { get; set; } = .01m;
+    public decimal MaxStopDistancePercent { get; set; }
+    public PositionSizingMode PositionSizingMode { get; set; } = PositionSizingMode.FixedNotional;
+    public decimal SimulatedAccountBalanceUsdt { get; set; } = 1000m;
+    public decimal MarginPerTradePercent { get; set; } = 10m;
+    public decimal Leverage { get; set; } = 5m;
     public bool WaitForConfirmationCandle { get; set; } = true;
     public bool UseEma100Filter { get; set; }
     public bool TrailingStopEnabled { get; set; }

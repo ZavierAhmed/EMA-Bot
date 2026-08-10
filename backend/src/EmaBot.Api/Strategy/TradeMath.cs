@@ -4,6 +4,8 @@ namespace EmaBot.Api.Strategy;
 
 public static class TradeMath
 {
+    public sealed record PositionSize(decimal AccountEquityAtEntryUsdt, decimal MarginUsedUsdt, decimal Leverage, decimal NotionalUsdt, decimal Quantity);
+
     public static decimal InitialTarget(decimal entry, decimal stop, SignalDirection direction, decimal riskReward)
     {
         var risk = decimal.Abs(entry - stop);
@@ -11,6 +13,17 @@ public static class TradeMath
     }
 
     public static decimal Quantity(decimal fixedOrderSizeUsdt, decimal entryPrice) => fixedOrderSizeUsdt / entryPrice;
+    public static PositionSize CalculatePositionSize(TradingSettings settings, decimal accountEquity, decimal entryPrice)
+    {
+        var margin = settings.PositionSizingMode == PositionSizingMode.MarginPercent
+            ? accountEquity * settings.MarginPerTradePercent / 100m
+            : settings.FixedOrderSizeUsdt;
+        var leverage = settings.PositionSizingMode == PositionSizingMode.MarginPercent ? settings.Leverage : 1m;
+        var notional = settings.PositionSizingMode == PositionSizingMode.MarginPercent ? margin * leverage : settings.FixedOrderSizeUsdt;
+        return new PositionSize(accountEquity, settings.PositionSizingMode == PositionSizingMode.MarginPercent ? margin : 0m, leverage, notional, notional / entryPrice);
+    }
+    public static decimal StopDistancePercent(decimal entry, decimal stop) => entry == 0 ? 0 : decimal.Abs(entry - stop) / entry * 100m;
+    public static decimal ExpectedNetAtTarget(decimal entry, decimal target, decimal quantity, SignalDirection direction, decimal feePercentPerSide) => GrossPnl(entry, target, quantity, direction) - Fee(entry, quantity, feePercentPerSide) - Fee(target, quantity, feePercentPerSide);
     public static decimal Fee(decimal price, decimal quantity, decimal feePercentPerSide) => price * quantity * feePercentPerSide / 100m;
     public static decimal GrossPnl(decimal entry, decimal exit, decimal quantity, SignalDirection direction) => (direction == SignalDirection.Long ? exit - entry : entry - exit) * quantity;
     public static decimal Progress(decimal entry, decimal originalTarget, decimal bestPrice, SignalDirection direction) => direction == SignalDirection.Long ? (bestPrice - entry) / decimal.Abs(originalTarget - entry) * 100m : (entry - bestPrice) / decimal.Abs(originalTarget - entry) * 100m;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getTrade, getTradeChart, getTrades, type TradeChartData, type TradeDetail, type TradeSummary } from '../api'
+import { downloadTradeExcel, downloadTradePdf, getMonitoredSymbols, getTrade, getTradeChart, getTrades, type TradeChartData, type TradeDetail, type TradeSummary } from '../api'
 import { TradeChart } from '../components/TradeChart'
 
 const format = (value: number | null | undefined) => value === null || value === undefined ? '-' : value.toLocaleString(undefined, { maximumFractionDigits: 8 })
@@ -13,6 +13,7 @@ export function TradesPage() {
   const normalizedSource = routeSource?.toLowerCase() === 'backtest' ? 'Backtest' : routeSource?.toLowerCase() === 'paper' ? 'Paper' : ''
   const [filters, setFilters] = useState({ source: normalizedSource, symbol: '', interval: '', direction: '', outcome: '' })
   const [trades, setTrades] = useState<TradeSummary[]>([])
+  const [symbols, setSymbols] = useState<string[]>([])
   const [detail, setDetail] = useState<TradeDetail | null>(null)
   const [chart, setChart] = useState<TradeChartData | null>(null)
   const [listLoading, setListLoading] = useState(true)
@@ -29,6 +30,8 @@ export function TradesPage() {
     setListError(null)
     void getTrades(filters).then(setTrades).catch(() => setListError('Trade list is currently unavailable.')).finally(() => setListLoading(false))
   }, [filters])
+
+  useEffect(() => { void getMonitoredSymbols().then(items => setSymbols(items.filter(item => item.isEnabled).map(item => item.symbol))).catch(() => setSymbols([])) }, [])
 
   useEffect(() => {
     if (!selectedSource || !selectedId) {
@@ -61,16 +64,18 @@ export function TradesPage() {
       <p className="mt-2 text-slate-600">Review simulated backtest and paper trades with on-demand Binance chart context.</p>
     </div>
     {listError && <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{listError}</div>}
+    <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-7">
+      <select value={filters.source} onChange={event => setFilter('source', event.target.value)}><option value="">All sources</option><option value="Backtest">Backtest</option><option value="Paper">Paper</option></select>
+      <select value={filters.symbol} onChange={event => setFilter('symbol', event.target.value)}><option value="">All symbols</option>{symbols.map(symbol => <option key={symbol}>{symbol}</option>)}</select>
+      <select value={filters.interval} onChange={event => setFilter('interval', event.target.value)}><option value="">All timeframes</option>{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select>
+      <select value={filters.direction} onChange={event => setFilter('direction', event.target.value)}><option value="">All directions</option><option>Long</option><option>Short</option></select>
+      <select value={filters.outcome} onChange={event => setFilter('outcome', event.target.value)}><option value="">All outcomes</option><option value="Win">Win</option><option value="Loss">Loss</option><option value="BreakEven">Break-even</option><option value="Open">Open</option></select>
+      <button className="rounded border border-slate-300 px-3 py-2 text-sm" onClick={() => void downloadTradeExcel(filters)}>Export Excel</button>
+      <button disabled={!selectedSource || !selectedId} className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-50" onClick={() => selectedSource && selectedId && void downloadTradePdf(selectedSource, selectedId)}>Export PDF</button>
+    </div>
     <div className="grid min-w-0 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
       <aside className="min-w-0 rounded-lg border border-slate-200 bg-white p-4">
-        <div className="grid gap-2">
-          <select value={filters.source} onChange={event => setFilter('source', event.target.value)}><option value="">All sources</option><option value="Backtest">Backtest</option><option value="Paper">Paper</option></select>
-          <input placeholder="Symbol" value={filters.symbol} onChange={event => setFilter('symbol', event.target.value.toUpperCase())} />
-          <select value={filters.interval} onChange={event => setFilter('interval', event.target.value)}><option value="">All timeframes</option>{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select>
-          <select value={filters.direction} onChange={event => setFilter('direction', event.target.value)}><option value="">All directions</option><option>Long</option><option>Short</option></select>
-          <select value={filters.outcome} onChange={event => setFilter('outcome', event.target.value)}><option value="">All outcomes</option><option value="Win">Win</option><option value="Loss">Loss</option><option value="BreakEven">Break-even</option><option value="Open">Open</option></select>
-        </div>
-        <div className="mt-4 space-y-2">
+        <div className="space-y-2">
           {listLoading ? <p className="text-sm text-slate-500">Loading trades...</p> : trades.length === 0 ? <p className="text-sm text-slate-500">No trades match these filters.</p> : trades.map(trade => <button key={`${trade.source}-${trade.id}`} onClick={() => select(trade)} className={`w-full rounded border p-3 text-left text-sm ${selectedSource?.toLowerCase() === trade.source.toLowerCase() && selectedId === trade.id ? 'border-slate-950 bg-slate-50' : 'border-slate-200'}`}>
             <div className="flex justify-between gap-2"><span className="font-medium">{trade.symbol} {trade.interval}</span><span className="text-xs">{trade.source}</span></div>
             <p>{trade.direction} · {trade.status} · {trade.exitReason ?? '-'}</p>
@@ -102,7 +107,8 @@ function Details({ detail }: { detail: TradeDetail }) {
       <h2 className="font-semibold">Trade details</h2>
       <dl className="mt-3 grid gap-2 text-slate-700">
         <div><dt className="font-medium text-slate-950">Entry</dt><dd>{date(detail.summary.entryTimeUtc)} at {format(detail.summary.entryPrice)} · Qty {format(detail.quantity)}</dd></div>
-        <div><dt className="font-medium text-slate-950">Signal</dt><dd>Close {format(detail.signalClose)}, EMA9 {format(detail.signalEma9)}, EMA15 {format(detail.signalEma15)}, EMA100 {format(detail.signalEma100)}</dd></div>
+        <div><dt className="font-medium text-slate-950">Signal</dt><dd>Open {format(detail.signalOpen)}, close {format(detail.signalClose)} ({detail.signalOpen === null ? 'legacy record' : detail.signalClose > detail.signalOpen ? 'Bullish' : detail.signalClose < detail.signalOpen ? 'Bearish' : 'Doji'}), EMA9 {format(detail.signalEma9)}, EMA15 {format(detail.signalEma15)}, EMA100 {format(detail.signalEma100)}. Gap {format(detail.signalGapPercent)}% / minimum {format(detail.minEmaGapPercent)}%</dd></div>
+        <div><dt className="font-medium text-slate-950">Sizing</dt><dd>{detail.positionSizingMode}. Margin {format(detail.marginUsedUsdt)} USDT, leverage {format(detail.leverage)}x, notional {format(detail.entryNotionalUsdt)}, quantity {format(detail.quantity)}, margin return {detail.marginUsedUsdt ? `${format(detail.summary.netPnlUsdt / detail.marginUsedUsdt * 100)}%` : '-'}</dd></div>
         <div><dt className="font-medium text-slate-950">Risk levels</dt><dd>Initial SL {format(detail.initialStopLoss)} ({detail.stopSourceType}); final SL {format(detail.finalStopLoss)}. Original TP {format(detail.originalTakeProfit)}; final TP {format(detail.finalTakeProfit)}</dd></div>
         <div><dt className="font-medium text-slate-950">Exit and P&amp;L</dt><dd>Exit {date(detail.summary.exitTimeUtc)} at {format(detail.summary.exitPrice)} · {detail.summary.exitReason ?? 'Open'}. Gross {format(detail.summary.grossPnlUsdt)} · fees {format(detail.summary.totalFeesUsdt)} · net {format(detail.summary.netPnlUsdt)}</dd></div>
       </dl>

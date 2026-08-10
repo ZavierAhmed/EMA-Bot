@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using EmaBot.Api.Auth;
 using EmaBot.Api.Models;
 using EmaBot.Api.Services;
+using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -17,10 +18,16 @@ public sealed class TradingSettingsController(TradingSettingsService settingsSer
     [HttpPut]
     public async Task<ActionResult<TradingSettingsResponse>> Put(UpdateTradingSettingsRequest request, CancellationToken cancellationToken)
     {
-        if (request.RiskReward <= 0 || request.RiskReward > 1000 || request.FixedOrderSizeUsdt <= 0 || request.FixedOrderSizeUsdt > 10_000_000 || request.FeePercentPerSide is < 0 or > 5) return BadRequest(new ApiMessage("Trading settings are outside supported limits."));
+        if (request.RiskReward <= 0 || request.RiskReward > 1000 || request.FixedOrderSizeUsdt <= 0 || request.FixedOrderSizeUsdt > 10_000_000 || request.FeePercentPerSide is < 0 or > 5 || request.MinEmaGapPercent is < 0 or > 10 || request.MaxStopDistancePercent is < 0 or > 25 || request.SimulatedAccountBalanceUsdt <= 0 || request.MarginPerTradePercent is <= 0 or > 100 || request.Leverage is < 1 or > 125) return BadRequest(new ApiMessage("Trading settings are outside supported limits."));
         var settings = await settingsService.GetAsync(cancellationToken);
         settings.RiskReward = request.RiskReward;
         settings.FixedOrderSizeUsdt = request.FixedOrderSizeUsdt;
+        settings.MinEmaGapPercent = request.MinEmaGapPercent;
+        settings.MaxStopDistancePercent = request.MaxStopDistancePercent;
+        settings.PositionSizingMode = request.PositionSizingMode;
+        settings.SimulatedAccountBalanceUsdt = request.SimulatedAccountBalanceUsdt;
+        settings.MarginPerTradePercent = request.MarginPerTradePercent;
+        settings.Leverage = request.Leverage;
         settings.WaitForConfirmationCandle = request.WaitForConfirmationCandle;
         settings.UseEma100Filter = request.UseEma100Filter;
         settings.TrailingStopEnabled = request.TrailingStopEnabled;
@@ -30,8 +37,8 @@ public sealed class TradingSettingsController(TradingSettingsService settingsSer
         return Ok(ToResponse(settings));
     }
 
-    internal static TradingSettingsResponse ToResponse(TradingSettings settings) => new(settings.RiskReward, settings.FixedOrderSizeUsdt, settings.WaitForConfirmationCandle, settings.UseEma100Filter, settings.TrailingStopEnabled, settings.FeePercentPerSide, settings.UpdatedAtUtc);
+    internal static TradingSettingsResponse ToResponse(TradingSettings settings) => new(settings.RiskReward, settings.FixedOrderSizeUsdt, settings.MinEmaGapPercent, settings.MaxStopDistancePercent, settings.PositionSizingMode.ToString(), settings.SimulatedAccountBalanceUsdt, settings.MarginPerTradePercent, settings.Leverage, settings.WaitForConfirmationCandle, settings.UseEma100Filter, settings.TrailingStopEnabled, settings.FeePercentPerSide, settings.UpdatedAtUtc);
 }
 
-public sealed record UpdateTradingSettingsRequest(decimal RiskReward, decimal FixedOrderSizeUsdt, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled, decimal FeePercentPerSide = 0.05m);
-public sealed record TradingSettingsResponse(decimal RiskReward, decimal FixedOrderSizeUsdt, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled, decimal FeePercentPerSide, DateTimeOffset UpdatedAtUtc);
+public sealed record UpdateTradingSettingsRequest(decimal RiskReward, decimal FixedOrderSizeUsdt, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled, decimal FeePercentPerSide = 0.05m, decimal MinEmaGapPercent = 0.01m, decimal MaxStopDistancePercent = 0m, PositionSizingMode PositionSizingMode = PositionSizingMode.FixedNotional, decimal SimulatedAccountBalanceUsdt = 1000m, decimal MarginPerTradePercent = 10m, decimal Leverage = 5m);
+public sealed record TradingSettingsResponse(decimal RiskReward, decimal FixedOrderSizeUsdt, decimal MinEmaGapPercent, decimal MaxStopDistancePercent, string PositionSizingMode, decimal SimulatedAccountBalanceUsdt, decimal MarginPerTradePercent, decimal Leverage, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled, decimal FeePercentPerSide, DateTimeOffset UpdatedAtUtc);

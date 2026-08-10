@@ -25,7 +25,7 @@ public sealed class EmaSignalEngine
                 previousGap = gap;
             }
             var trend = !ema9[index].HasValue || !ema15[index].HasValue ? TrendDirection.Neutral : ema9[index] > ema15[index] ? TrendDirection.Up : ema9[index] < ema15[index] ? TrendDirection.Down : TrendDirection.Neutral;
-            snapshots.Add(new IndicatorSnapshot(closed[index].CloseTimeUtc, closes[index], ema9[index], ema15[index], ema100[index], gap, gapState, trend));
+            snapshots.Add(new IndicatorSnapshot(closed[index].CloseTimeUtc, closes[index], ema9[index], ema15[index], ema100[index], gap, gapState, trend, closed[index].Open));
         }
         return new StrategyEvaluation(snapshots, EvaluateSnapshots(snapshots, settings));
     }
@@ -43,8 +43,8 @@ public sealed class EmaSignalEngine
             if (pending != SignalDirection.None)
             {
                 var confirms = pending == SignalDirection.Long
-                    ? current.Ema9 > current.Ema15 && current.Close > current.Ema9 && current.Close > current.Ema15
-                    : current.Ema9 < current.Ema15 && current.Close < current.Ema9 && current.Close < current.Ema15;
+                    ? current.Ema9 > current.Ema15 && current.Close > current.Ema9 && current.Close > current.Ema15 && current.Close > current.Open
+                    : current.Ema9 < current.Ema15 && current.Close < current.Ema9 && current.Close < current.Ema15 && current.Close < current.Open;
                 if (confirms) events.Add(CreateCandidate(current, pending, settings));
                 else events.Add(new StrategyEvent(current.Time, pending, SignalStatus.ConfirmationFailed, current));
                 pending = SignalDirection.None;
@@ -69,7 +69,9 @@ public sealed class EmaSignalEngine
         var allowed = !settings.UseEma100Filter || (snapshot.Ema100.HasValue && (direction == SignalDirection.Long
             ? snapshot.Ema9 > snapshot.Ema100 && snapshot.Ema15 > snapshot.Ema100
             : snapshot.Ema9 < snapshot.Ema100 && snapshot.Ema15 < snapshot.Ema100));
-        return new StrategyEvent(snapshot.Time, direction, allowed ? direction == SignalDirection.Long ? SignalStatus.LongSignal : SignalStatus.ShortSignal : SignalStatus.RejectedByEma100Filter, snapshot);
+        if (!allowed) return new StrategyEvent(snapshot.Time, direction, SignalStatus.RejectedByEma100Filter, snapshot);
+        if (settings.MinEmaGapPercent > 0 && (!snapshot.GapPercent.HasValue || snapshot.GapPercent.Value < settings.MinEmaGapPercent)) return new StrategyEvent(snapshot.Time, direction, SignalStatus.RejectedByEmaGap, snapshot);
+        return new StrategyEvent(snapshot.Time, direction, direction == SignalDirection.Long ? SignalStatus.LongSignal : SignalStatus.ShortSignal, snapshot);
     }
     private static bool HasEma9And15(IndicatorSnapshot snapshot) => snapshot.Ema9.HasValue && snapshot.Ema15.HasValue;
 }

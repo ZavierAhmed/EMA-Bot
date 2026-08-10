@@ -98,7 +98,36 @@ public sealed class MarketDataAndStrategyTests
         Assert.Equal(decimal.Abs(last.Ema9!.Value - last.Ema15!.Value) / last.Close * 100m, last.GapPercent);
     }
 
-    private static IndicatorSnapshot Snapshot(int minute, decimal ema9, decimal ema15, decimal ema100, decimal close) => new(DateTimeOffset.UnixEpoch.AddMinutes(minute), close, ema9, ema15, ema100, decimal.Abs(ema9 - ema15) / close * 100m, GapState.Unchanged, ema9 > ema15 ? TrendDirection.Up : ema9 < ema15 ? TrendDirection.Down : TrendDirection.Neutral);
+    [Theory]
+    [InlineData(4, SignalStatus.LongSignal)]
+    [InlineData(6, SignalStatus.ConfirmationFailed)]
+    [InlineData(5, SignalStatus.ConfirmationFailed)]
+    public void Engine_LongConfirmation_RequiresGreenCandle(decimal confirmationOpen, SignalStatus expected)
+    {
+        var events = new EmaSignalEngine().EvaluateSnapshots([Snapshot(1, 1, 2, 1, 2, 2), Snapshot(2, 2, 1, 1, 4, 3), Snapshot(3, 3, 1, 1, 5, confirmationOpen)], new TradingSettings { WaitForConfirmationCandle = true, MinEmaGapPercent = 0 });
+        Assert.Contains(events, item => item.Status == expected);
+    }
+
+    [Theory]
+    [InlineData(2, SignalStatus.ShortSignal)]
+    [InlineData(0.5, SignalStatus.ConfirmationFailed)]
+    [InlineData(1, SignalStatus.ConfirmationFailed)]
+    public void Engine_ShortConfirmation_RequiresRedCandle(decimal confirmationOpen, SignalStatus expected)
+    {
+        var events = new EmaSignalEngine().EvaluateSnapshots([Snapshot(1, 2, 1, 2, 2, 2), Snapshot(2, 1, 2, 2, 1, 2), Snapshot(3, 1.5m, 3, 2, 1, confirmationOpen)], new TradingSettings { WaitForConfirmationCandle = true, MinEmaGapPercent = 0 });
+        Assert.Contains(events, item => item.Status == expected);
+    }
+
+    [Fact]
+    public void Engine_EmaGapFilter_AllowsExactThresholdAndRejectsLowerGap()
+    {
+        var snapshots = new[] { Snapshot(1, 1, 2, 1, 4, 4), Snapshot(2, 2, 1, 1, 4, 3) };
+        var engine = new EmaSignalEngine();
+        Assert.Contains(engine.EvaluateSnapshots(snapshots, new TradingSettings { WaitForConfirmationCandle = false, MinEmaGapPercent = 25m }), item => item.Status == SignalStatus.LongSignal);
+        Assert.Contains(engine.EvaluateSnapshots(snapshots, new TradingSettings { WaitForConfirmationCandle = false, MinEmaGapPercent = 25.01m }), item => item.Status == SignalStatus.RejectedByEmaGap);
+    }
+
+    private static IndicatorSnapshot Snapshot(int minute, decimal ema9, decimal ema15, decimal ema100, decimal close, decimal? open = null) => new(DateTimeOffset.UnixEpoch.AddMinutes(minute), close, ema9, ema15, ema100, decimal.Abs(ema9 - ema15) / close * 100m, GapState.Unchanged, ema9 > ema15 ? TrendDirection.Up : ema9 < ema15 ? TrendDirection.Down : TrendDirection.Neutral, open ?? (ema9 >= ema15 ? close - 1 : close + 1));
 }
 
 public sealed class FakeHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler

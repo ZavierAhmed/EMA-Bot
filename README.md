@@ -6,9 +6,9 @@ EMA Bot is a small private administration application for an EMA trading bot. Mi
 
 ## Backtesting
 
-Backtests fetch Binance USDⓈ-M candles on demand with paginated requests; there is no candle warehouse. Signals enter at the next candle open. Stops use the latest confirmed 2-left/2-right swing before the crossover, falling back to the previous ten completed candles. Position size is fixed USDT notional, targets use the saved R:R, and a configurable per-side simulation fee is applied at entry and exit.
+Backtests fetch Binance USDⓈ-M candles on demand with paginated requests; there is no candle warehouse. Signals enter at the next candle open. Stops use the latest confirmed 2-left/2-right swing before the crossover, falling back to the previous ten completed candles. A signal requires the configured minimum EMA 9/15 separation, and an optional maximum stop-distance filter rejects unsuitable setups without moving the swing stop. A candidate whose original R:R target cannot produce positive net PnL after both simulated fees is rejected.
 
-The same-bar SL/TP ambiguity is conservative: stop loss wins. Trailing mode advances stop levels from 50% through 100% target progress and extends TP once to 110% at 70%; changes earned during a candle become active on the next candle. Funding, slippage, leverage, liquidation, and exchange execution are not modeled.
+The same-bar SL/TP ambiguity is conservative: stop loss wins. Trailing mode advances stop levels from 50% through 100% target progress and extends TP once to 110% at 70%; changes earned during a candle become active on the next candle. Simulation supports either fixed notional or margin-percent sizing with configurable leverage. Leverage does not fix an economically negative trade because both PnL and percentage-based fees scale with position notional. Liquidation and maintenance-margin tiers are not modeled.
 
 ## Paper trading
 
@@ -67,7 +67,7 @@ Open the Vite address shown in the terminal, normally `http://localhost:5173`.
 
 The API uses `https://fapi.binance.com/fapi/v1/exchangeInfo` and `/fapi/v1/klines` for active USDT-margined perpetual contracts only. Supported strategy intervals are `3m`, `5m`, `15m`, `30m`, `1h`, `2h`, `4h`, `6h`, `8h`, `12h`, `1d`, `3d`, `1w`, and `1M` (one month).
 
-EMA values use an SMA seed for their first full period, then the standard `2 / (N + 1)` multiplier. Only completed candles participate in crossover and confirmation evaluation. With confirmation enabled, the immediately following candle must retain EMA9 > EMA15 for a long (or EMA9 < EMA15 for a short) and close beyond both averages; a recross fails the old setup and may begin the opposite setup. The optional EMA 100 filter applies on the actual signal candle. Preview output also provides the normalized EMA 9/15 gap and its expanding/contracting state.
+EMA values use an SMA seed for their first full period, then the standard `2 / (N + 1)` multiplier. Only completed candles participate in crossover and confirmation evaluation. With confirmation enabled, the immediately following candle must retain EMA9 > EMA15 for a long (or EMA9 < EMA15 for a short), close beyond both averages, and be directional: a long confirmation is green and a short confirmation is red. Dojis fail confirmation. A recross fails the old setup and may begin the opposite setup. The optional EMA 100 filter and minimum EMA-gap filter apply on the actual signal candle. Preview output also provides the normalized EMA 9/15 gap and its expanding/contracting state.
 
 The Symbols page lets an Admin choose individual eligible contracts. The Settings page persists one global risk/reward, fixed USDT order size, confirmation, EMA 100, trailing mode, and simulation fee. Trailing behavior is implemented in both backtesting and paper trading: 50/60/70/80/90/100% progress locks +20/+30/+40/+50/+60/+70% of original target distance, with a one-time 110% target extension at 70%.
 
