@@ -11,6 +11,8 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
 {
     public DbSet<MonitoredSymbol> MonitoredSymbols => Set<MonitoredSymbol>();
     public DbSet<TradingSettings> TradingSettings => Set<TradingSettings>();
+    public DbSet<BacktestRun> BacktestRuns => Set<BacktestRun>();
+    public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -36,6 +38,9 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(settings => settings.Id).ValueGeneratedNever();
             entity.Property(settings => settings.RiskReward).HasPrecision(18, 8);
             entity.Property(settings => settings.FixedOrderSizeUsdt).HasPrecision(18, 8);
+            entity.Property(settings => settings.FeePercentPerSide).HasPrecision(8, 4);
         });
+        builder.Entity<BacktestRun>(entity => { entity.Property(run => run.Symbol).HasMaxLength(32); entity.Property(run => run.Interval).HasMaxLength(8); entity.HasMany(run => run.Trades).WithOne(trade => trade.BacktestRun!).HasForeignKey(trade => trade.BacktestRunId).OnDelete(DeleteBehavior.Cascade); });
+        builder.Entity<BacktestTrade>(entity => entity.HasIndex(trade => trade.BacktestRunId));
     }
 }

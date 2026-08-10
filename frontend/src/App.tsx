@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SymbolsPage } from './pages/SymbolsPage'
+import { BacktestsPage } from './pages/BacktestsPage'
 
 function ProtectedLayout() {
   const { user, isLoading } = useAuth()
@@ -29,7 +30,7 @@ export function App() {
       <Route path="/login" element={<LoginRoute />} />
       <Route element={<ProtectedLayout />}>
         <Route index element={<DashboardPage />} />
-        <Route path="backtests" element={<PlaceholderPage title="Backtests" />} />
+        <Route path="backtests" element={<BacktestsPage />} />
         <Route path="paper-trading" element={<PlaceholderPage title="Paper Trading" />} />
         <Route path="trades" element={<PlaceholderPage title="Trades" />} />
         <Route path="symbols" element={<SymbolsPage />} />

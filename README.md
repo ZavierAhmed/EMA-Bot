@@ -4,6 +4,12 @@ EMA Bot is a small private administration application for an EMA trading bot. Mi
 
 No real trades are placed, no paper trades exist, and no historical candles are permanently stored. Binance API keys are not required: this milestone uses only public market-data endpoints.
 
+## Backtesting
+
+Backtests fetch Binance USDⓈ-M candles on demand with paginated requests; there is no candle warehouse. Signals enter at the next candle open. Stops use the latest confirmed 2-left/2-right swing before the crossover, falling back to the previous ten completed candles. Position size is fixed USDT notional, targets use the saved R:R, and a configurable per-side simulation fee is applied at entry and exit.
+
+The same-bar SL/TP ambiguity is conservative: stop loss wins. Trailing mode advances stop levels from 50% through 100% target progress and extends TP once to 110% at 70%; changes earned during a candle become active on the next candle. Funding, slippage, leverage, liquidation, and exchange execution are not modeled.
+
 ## Prerequisites
 
 - .NET SDK 10.0.x (the project targets .NET 10 LTS)

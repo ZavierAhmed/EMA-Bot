@@ -7,6 +7,7 @@ using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json.Serialization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -72,6 +73,8 @@ builder.Services.AddAntiforgery(options =>
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<TradingSettingsService>();
+builder.Services.AddSingleton<BacktestEngine>();
+builder.Services.AddScoped<BacktestService>();
 builder.Services.AddSingleton<EmaSignalEngine>();
 builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>
 {
@@ -79,7 +82,8 @@ builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMa
     client.Timeout = TimeSpan.FromSeconds(15);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
 });
-builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute()));
+builder.Services.AddScoped<IBinanceHistoricalCandleService, BinanceHistoricalCandleService>();
+builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHostedService<DatabaseInitializer>();

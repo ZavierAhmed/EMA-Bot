@@ -9,5 +9,6 @@ public sealed class TradingSettings
     public bool WaitForConfirmationCandle { get; set; } = true;
     public bool UseEma100Filter { get; set; }
     public bool TrailingStopEnabled { get; set; }
+    public decimal FeePercentPerSide { get; set; } = 0.05m;
     public DateTimeOffset UpdatedAtUtc { get; set; }
 }

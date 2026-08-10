@@ -19,6 +19,7 @@ public sealed class TradingSettingsService(EmaBotDbContext database, IOptions<Tr
             WaitForConfirmationCandle = defaults.Value.WaitForConfirmationCandle,
             UseEma100Filter = defaults.Value.UseEma100Filter,
             TrailingStopEnabled = defaults.Value.TrailingStopEnabled,
+            FeePercentPerSide = defaults.Value.FeePercentPerSide,
             UpdatedAtUtc = DateTimeOffset.UtcNow
         };
         database.TradingSettings.Add(settings);

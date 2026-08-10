@@ -8,4 +8,5 @@ public sealed class TradingDefaultsOptions
     public bool WaitForConfirmationCandle { get; init; } = true;
     public bool UseEma100Filter { get; init; }
     public bool TrailingStopEnabled { get; init; }
+    public decimal FeePercentPerSide { get; init; } = 0.05m;
 }
