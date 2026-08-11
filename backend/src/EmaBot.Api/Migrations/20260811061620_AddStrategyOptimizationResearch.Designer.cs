@@ -4,6 +4,7 @@ using EmaBot.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace EmaBot.Api.Migrations
 {
     [DbContext(typeof(EmaBotDbContext))]
-    partial class EmaBotDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260811061620_AddStrategyOptimizationResearch")]
+    partial class AddStrategyOptimizationResearch
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -258,7 +261,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("BacktestRuns", (string)null);
+                    b.ToTable("BacktestRuns");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.BacktestTrade", b =>
@@ -409,7 +412,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("BacktestRunId");
 
-                    b.ToTable("BacktestTrades", (string)null);
+                    b.ToTable("BacktestTrades");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.BacktestTradeEvent", b =>
@@ -454,7 +457,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("BacktestTradeId");
 
-                    b.ToTable("BacktestTradeEvents", (string)null);
+                    b.ToTable("BacktestTradeEvents");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.MonitoredSymbol", b =>
@@ -491,7 +494,7 @@ namespace EmaBot.Api.Migrations
                     b.HasIndex("Symbol")
                         .IsUnique();
 
-                    b.ToTable("MonitoredSymbols", (string)null);
+                    b.ToTable("MonitoredSymbols");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperSession", b =>
@@ -621,7 +624,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("Status");
 
-                    b.ToTable("PaperSessions", (string)null);
+                    b.ToTable("PaperSessions");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperSessionSymbol", b =>
@@ -711,7 +714,7 @@ namespace EmaBot.Api.Migrations
                     b.HasIndex("PaperSessionId", "Symbol")
                         .IsUnique();
 
-                    b.ToTable("PaperSessionSymbols", (string)null);
+                    b.ToTable("PaperSessionSymbols");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperTrade", b =>
@@ -880,7 +883,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("PaperSessionSymbolId", "Status");
 
-                    b.ToTable("PaperTrades", (string)null);
+                    b.ToTable("PaperTrades");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperTradeEvent", b =>
@@ -922,7 +925,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("PaperTradeId");
 
-                    b.ToTable("PaperTradeEvents", (string)null);
+                    b.ToTable("PaperTradeEvents");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.StrategyOptimizationCandidate", b =>
@@ -982,7 +985,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("StrategyOptimizationRunId", "RobustRank");
 
-                    b.ToTable("StrategyOptimizationCandidates", (string)null);
+                    b.ToTable("StrategyOptimizationCandidates");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.StrategyOptimizationMarketResult", b =>
@@ -1023,7 +1026,7 @@ namespace EmaBot.Api.Migrations
                     b.HasIndex("StrategyOptimizationCandidateId", "Symbol", "Timeframe")
                         .IsUnique();
 
-                    b.ToTable("StrategyOptimizationMarketResults", (string)null);
+                    b.ToTable("StrategyOptimizationMarketResults");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.StrategyOptimizationRun", b =>
@@ -1108,7 +1111,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("Status");
 
-                    b.ToTable("StrategyOptimizationRuns", (string)null);
+                    b.ToTable("StrategyOptimizationRuns");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.StrategyOptimizationTrade", b =>
@@ -1199,7 +1202,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasIndex("StrategyOptimizationRunId", "StrategyOptimizationCandidateId");
 
-                    b.ToTable("StrategyOptimizationTrades", (string)null);
+                    b.ToTable("StrategyOptimizationTrades");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.TradingSettings", b =>
@@ -1256,7 +1259,7 @@ namespace EmaBot.Api.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("TradingSettings", null, t =>
+                    b.ToTable("TradingSettings", t =>
                         {
                             t.HasCheckConstraint("CK_TradingSettings_Singleton", "`Id` = 1");
                         });
