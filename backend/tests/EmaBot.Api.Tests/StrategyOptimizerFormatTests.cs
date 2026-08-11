@@ -18,4 +18,18 @@ public sealed class StrategyOptimizerFormatTests
         foreach (var sheet in new[] { "Overview", "Ranked Candidates", "Market Results", "Best By Market", "Diagnostics", "Top Candidate Trades", "Run Configuration" }) Assert.Contains(sheet, xml);
         Assert.Equal(7, archive.Entries.Count(entry => entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal)));
     }
+
+    [Theory]
+    [InlineData("sheet2.xml", "Validation Net PF")]
+    [InlineData("sheet2.xml", "Validation Gross PF")]
+    [InlineData("sheet3.xml", "Development Net")]
+    [InlineData("sheet5.xml", "ConfirmationFailed")]
+    [InlineData("sheet6.xml", "Signal EMA9")]
+    public void Workbook_ContainsRequiredResearchReportingHeaders(string sheet, string header)
+    {
+        var run = new StrategyOptimizationRun { Id = 1, Status = StrategyOptimizationStatus.Completed, RequestedStartUtc = DateTimeOffset.UnixEpoch, RequestedEndUtc = DateTimeOffset.UnixEpoch.AddDays(30), SymbolsJson = "[]", TimeframesJson = "[]", GridJson = "{}", Candidates = [new StrategyOptimizationCandidate { Id = 1 }] };
+        using var archive = new ZipArchive(new MemoryStream(StrategyOptimizerWorkbook.Create(run)), ZipArchiveMode.Read);
+        using var reader = new StreamReader(archive.GetEntry($"xl/worksheets/{sheet}")!.Open(), Encoding.UTF8);
+        Assert.Contains(header, reader.ReadToEnd());
+    }
 }

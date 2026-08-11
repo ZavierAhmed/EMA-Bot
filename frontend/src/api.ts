@@ -30,7 +30,7 @@ export type TradeChartData = { symbol: string; interval: string; candles: TradeC
 export type OptimizerGrid = { riskRewards: number[]; minEmaGapPercents: number[]; maxStopDistancePercents: number[]; waitForConfirmationCandles: boolean[]; useEma100Filters: boolean[]; trailingStopEnableds: boolean[] }
 export type OptimizerOptions = { enabledSymbols: string[]; supportedTimeframes: string[]; assumptions: TradingSettings; defaultGrid: OptimizerGrid }
 export type OptimizerRun = { id: number; status: string; createdAtUtc: string; startedAtUtc: string | null; completedAtUtc: string | null; failureMessage: string | null; requestedStartUtc: string; requestedEndUtc: string; candidateCount: number; marketCount: number; totalWork: number; completedWork: number; progress: number; recommendedCandidateId: number | null; robustCandidateCount: number; assumptions: { simulatedAccountBalanceUsdt: number; fixedOrderSizeUsdt: number; marginPerTradePercent: number; leverage: number; feePercentPerSide: number; positionSizingMode: string } }
-export type OptimizerCandidate = { id: number; riskReward: number; minEmaGapPercent: number; maxStopDistancePercent: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; trailingStopEnabled: boolean; isBaseline: boolean; robustCandidate: boolean; robustRank: number | null; profitableMarketRatio: number; validation: { totalTrades: number; winRatePercent: number; netProfitFactor: number | null; netReturnPercent: number; maxDrawdownPercent: number; medianExpectedNetTargetR: number } }
+export type OptimizerCandidate = { id: number; riskReward: number; minEmaGapPercent: number; maxStopDistancePercent: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; trailingStopEnabled: boolean; isBaseline: boolean; robustCandidate: boolean; robustRank: number | null; profitableMarketRatio: number; validation: { totalTrades: number; winRatePercent: number; netPnlUsdt: number; netProfitFactor: number | null; netReturnPercent: number; maxDrawdownPercent: number; medianExpectedNetTargetR: number } }
 
 type AntiforgeryResponse = { token: string }
 type ApiMessage = { message?: string }
@@ -99,7 +99,8 @@ export const deleteBacktest = (id: number) => protectedRequest<void>(`/api/backt
 export const getOptimizerOptions = () => request<OptimizerOptions>('/api/strategy-optimizer/options')
 export const getOptimizerRuns = () => request<OptimizerRun[]>('/api/strategy-optimizer/runs')
 export const getOptimizerRun = (id: number) => request<OptimizerRun>(`/api/strategy-optimizer/runs/${id}`)
-export const getOptimizerCandidates = (id: number) => request<{ total: number; items: OptimizerCandidate[] }>(`/api/strategy-optimizer/runs/${id}/candidates`)
+export const getOptimizerCandidates = (id: number, page = 1, pageSize = 50) => request<{ total: number; items: OptimizerCandidate[] }>(`/api/strategy-optimizer/runs/${id}/candidates?page=${page}&pageSize=${pageSize}`)
+export const getOptimizerCandidate = (runId: number, candidateId: number) => request<{ candidate: OptimizerCandidate; markets: Array<{ symbol: string; timeframe: string; validation: OptimizerCandidate['validation'] }> }>(`/api/strategy-optimizer/runs/${runId}/candidates/${candidateId}`)
 export const startOptimizer = (body: { symbols: string[]; timeframes: string[]; startUtc: string; endUtc: string; grid: OptimizerGrid }) => protectedRequest<OptimizerRun>('/api/strategy-optimizer/runs', 'POST', body)
 export const cancelOptimizer = (id: number) => protectedRequest<void>(`/api/strategy-optimizer/runs/${id}/cancel`, 'POST')
 export async function downloadOptimizerExcel(id: number) { await download(`/api/strategy-optimizer/runs/${id}/excel`, `ema-bot-optimizer-${id}.xlsx`) }
