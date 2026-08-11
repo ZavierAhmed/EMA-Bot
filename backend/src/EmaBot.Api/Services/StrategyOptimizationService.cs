@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
+using System.Diagnostics;
 using System.Text.Json;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
@@ -10,29 +12,30 @@ namespace EmaBot.Api.Services;
 
 public sealed record StrategyOptimizerGrid(IReadOnlyList<decimal> RiskRewards, IReadOnlyList<decimal> MinEmaGapPercents, IReadOnlyList<decimal> MaxStopDistancePercents, IReadOnlyList<bool> WaitForConfirmationCandles, IReadOnlyList<bool> UseEma100Filters, IReadOnlyList<bool> TrailingStopEnableds);
 public readonly record struct StrategyOptimizerCandidateKey(decimal RiskReward, decimal MinEmaGapPercent, decimal MaxStopDistancePercent, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled);
-public sealed record StrategyOptimizerStartRequest(IReadOnlyList<string> Symbols, IReadOnlyList<string> Timeframes, DateTimeOffset StartUtc, DateTimeOffset EndUtc, StrategyOptimizerGrid Grid);
-public sealed record StrategyOptimizerOptions(IReadOnlyList<string> EnabledSymbols, IReadOnlyList<string> SupportedTimeframes, TradingSettings Assumptions, StrategyOptimizerGrid DefaultGrid);
+public sealed record StrategyOptimizerStartRequest(IReadOnlyList<string> Symbols, IReadOnlyList<string> Timeframes, DateTimeOffset StartUtc, DateTimeOffset EndUtc, StrategyOptimizerGrid Grid, int? WorkerCount = null);
+public sealed record StrategyOptimizerOptions(IReadOnlyList<string> EnabledSymbols, IReadOnlyList<string> SupportedTimeframes, TradingSettings Assumptions, StrategyOptimizerGrid DefaultGrid, int DetectedProcessors, int EffectiveWorkers);
 
 public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactory, BacktestEngine engine, TimeProvider clock, ILogger<StrategyOptimizationService> logger)
 {
     public static readonly StrategyOptimizerGrid DefaultGrid = new([.90m, 1m, 1.10m, 1.25m, 1.50m], [0m, .005m, .01m, .02m], [0m, .30m, .50m, .70m], [true, false], [true, false], [true, false]);
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly ConcurrentDictionary<int, CancellationTokenSource> cancellations = new();
+    private readonly ConcurrentDictionary<int, int> workerCounts = new();
     // Reporting-only tolerance: fee-aware exits can leave decimal dust around zero.
     private const decimal BreakEvenToleranceUsdt = 0.000000000001m;
-    public static int EffectiveWorkerCount(int? processors = null) => Math.Clamp((processors ?? Environment.ProcessorCount) - 2, 1, 8);
+    public static int EffectiveWorkerCount(int? processors = null, int? requestedWorkers = null) { if (requestedWorkers is < 1 or > 16) throw new ArgumentOutOfRangeException(nameof(requestedWorkers), "CPU workers must be from 1 through 16."); return requestedWorkers ?? Math.Clamp(((processors ?? Environment.ProcessorCount) * 2) / 3, 1, 16); }
 
     public async Task<StrategyOptimizerOptions> GetOptionsAsync(CancellationToken token)
     {
         await using var scope = scopeFactory.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var symbols = await db.MonitoredSymbols.Where(symbol => symbol.IsEnabled).OrderBy(symbol => symbol.Symbol).Select(symbol => symbol.Symbol).ToListAsync(token);
         var settings = await db.TradingSettings.AsNoTracking().SingleAsync(settings => settings.Id == 1, token);
-        return new(symbols, BinanceIntervals.Supported.OrderBy(value => value).ToArray(), settings, DefaultGrid);
+        return new(symbols, BinanceIntervals.Supported.OrderBy(value => value).ToArray(), settings, DefaultGrid, Environment.ProcessorCount, EffectiveWorkerCount());
     }
 
     public async Task<StrategyOptimizationRun> StartAsync(StrategyOptimizerStartRequest request, CancellationToken token)
     {
-        var normalized = ValidateAndNormalize(request);
+        var normalized = ValidateAndNormalize(request); var requestedWorkers = EffectiveWorkerCount(requestedWorkers: request.WorkerCount);
         await gate.WaitAsync(token);
         try
         {
@@ -47,6 +50,7 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
             var run = new StrategyOptimizationRun { Status = StrategyOptimizationStatus.Queued, CreatedAtUtc = clock.GetUtcNow(), RequestedStartUtc = normalized.StartUtc, RequestedEndUtc = normalized.EndUtc, SymbolsJson = JsonSerializer.Serialize(normalized.Symbols), TimeframesJson = JsonSerializer.Serialize(normalized.Timeframes), GridJson = JsonSerializer.Serialize(normalized.Grid), BaselineSettingsJson = JsonSerializer.Serialize(settings), CandidateCount = combinations.Length, MarketCount = markets, TotalWork = combinations.Length * markets, SimulatedAccountBalanceUsdt = settings.SimulatedAccountBalanceUsdt, FixedOrderSizeUsdt = settings.FixedOrderSizeUsdt, MarginPerTradePercent = settings.MarginPerTradePercent, Leverage = settings.Leverage, FeePercentPerSide = settings.FeePercentPerSide, PositionSizingMode = settings.PositionSizingMode };
             db.StrategyOptimizationRuns.Add(run); await db.SaveChangesAsync(token);
             var cancellation = new CancellationTokenSource(); cancellations[run.Id] = cancellation;
+            workerCounts[run.Id] = requestedWorkers;
             _ = Task.Run(() => ExecuteAsync(run.Id, cancellation.Token));
             return run;
         }
@@ -83,14 +87,11 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
                 token.ThrowIfCancellationRequested(); var warmupStart = run.RequestedStartUtc - WarmupDuration(frame);
                 cache[(symbol, frame)] = (await historical.GetRangeAsync(symbol, frame, warmupStart, run.RequestedEndUtc, token)).Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).ToArray();
             }
-            var computed = new ConcurrentBag<StrategyOptimizationCandidate>(); var workers = EffectiveWorkerCount();
+            var workers = workerCounts.TryGetValue(id, out var configuredWorkers) ? configuredWorkers : EffectiveWorkerCount(); var parallelTimer = Stopwatch.StartNew(); var channel = Channel.CreateBounded<StrategyOptimizationCandidate>(workers * 2);
             logger.LogInformation("Optimizer {RunId}: {Workers} workers for {Candidates} candidates, {Markets} markets, {Work} logical / {Segments} segment executions.", id, workers, candidates.Length, run.MarketCount, run.TotalWork, run.TotalWork * 3);
-            await Parallel.ForEachAsync(candidates, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = token }, (parameters, cancellation) =>
-            {
-                computed.Add(ComputeCandidate(id, parameters, fixedSettings, symbols, frames, cache, run));
-                return ValueTask.CompletedTask;
-            });
-            foreach (var candidate in computed.OrderBy(candidate => Key(candidate))) { db.StrategyOptimizationCandidates.Add(candidate); run.CompletedWork = Math.Min(run.TotalWork, run.CompletedWork + run.MarketCount); await db.SaveChangesAsync(token); }
+            var producer = Task.Run(async () => { Exception? error = null; try { await Parallel.ForEachAsync(candidates, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = token }, async (parameters, cancellation) => { var candidate = ComputeCandidate(id, parameters, fixedSettings, symbols, frames, cache, run, cancellation); await channel.Writer.WriteAsync(candidate, cancellation); }); } catch (Exception exception) { error = exception; } finally { channel.Writer.TryComplete(error); } });
+            await foreach (var candidate in channel.Reader.ReadAllAsync()) { db.StrategyOptimizationCandidates.Add(candidate); run.CompletedWork = Math.Min(run.TotalWork, run.CompletedWork + run.MarketCount); await db.SaveChangesAsync(CancellationToken.None); }
+            await producer; token.ThrowIfCancellationRequested(); logger.LogInformation("Optimizer {RunId}: candidate computation and streaming persistence completed in {Elapsed}.", id, parallelTimer.Elapsed);
             var saved = await db.StrategyOptimizationCandidates.Include(candidate => candidate.MarketResults).Where(candidate => candidate.StrategyOptimizationRunId == id).ToListAsync(token);
             var ranked = saved.Where(candidate => candidate.RobustCandidate).OrderByDescending(candidate => candidate.Validation.NetProfitFactor).ThenByDescending(candidate => candidate.Validation.NetReturnPercent).ThenByDescending(candidate => candidate.ProfitableMarketRatio).ThenBy(candidate => candidate.Validation.MaxDrawdownPercent).ThenByDescending(candidate => candidate.Validation.TotalTrades).ThenBy(candidate => candidate.RiskReward).ThenBy(candidate => candidate.MinEmaGapPercent).ThenBy(candidate => candidate.MaxStopDistancePercent).ThenBy(candidate => candidate.WaitForConfirmationCandle).ThenBy(candidate => candidate.UseEma100Filter).ThenBy(candidate => candidate.TrailingStopEnabled).ToArray();
             for (var index = 0; index < ranked.Length; index++) ranked[index].RobustRank = index + 1;
@@ -109,15 +110,15 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
         {
             logger.LogError(exception, "Strategy optimization run {RunId} failed.", id); await SetTerminalAsync(id, StrategyOptimizationStatus.Failed, exception.Message);
         }
-        finally { if (cancellations.TryRemove(id, out var cancellation)) cancellation.Dispose(); }
+        finally { workerCounts.TryRemove(id, out _); if (cancellations.TryRemove(id, out var cancellation)) cancellation.Dispose(); }
     }
 
-    private static StrategyOptimizationCandidate ComputeCandidate(int id, TradingSettings parameters, TradingSettings baseline, IReadOnlyList<string> symbols, IReadOnlyList<string> frames, IReadOnlyDictionary<(string Symbol, string Frame), Candle[]> cache, StrategyOptimizationRun run)
+    private static StrategyOptimizationCandidate ComputeCandidate(int id, TradingSettings parameters, TradingSettings baseline, IReadOnlyList<string> symbols, IReadOnlyList<string> frames, IReadOnlyDictionary<(string Symbol, string Frame), Candle[]> cache, StrategyOptimizationRun run, CancellationToken cancellation)
     {
         var workerEngine = new BacktestEngine(new EmaSignalEngine()); var candidate = new StrategyOptimizationCandidate { StrategyOptimizationRunId = id, RiskReward = parameters.RiskReward, MinEmaGapPercent = parameters.MinEmaGapPercent, MaxStopDistancePercent = parameters.MaxStopDistancePercent, WaitForConfirmationCandle = parameters.WaitForConfirmationCandle, UseEma100Filter = parameters.UseEma100Filter, TrailingStopEnabled = parameters.TrailingStopEnabled, IsBaseline = IsSame(parameters, baseline) };
         var full = new List<(BacktestCalculation, OptimizationMetrics)>(); var development = new List<(BacktestCalculation, OptimizationMetrics)>(); var validation = new List<(BacktestCalculation, OptimizationMetrics)>(); var split = run.RequestedStartUtc + TimeSpan.FromTicks((run.RequestedEndUtc - run.RequestedStartUtc).Ticks * 7 / 10);
-        foreach (var symbol in symbols) foreach (var frame in frames) { var candles = cache[(symbol, frame)]; var all = workerEngine.RunResearch(candles, parameters, run.RequestedStartUtc, run.RequestedEndUtc); var dev = workerEngine.RunResearch(candles, parameters, run.RequestedStartUtc, split); var val = workerEngine.RunResearch(candles, parameters, split, run.RequestedEndUtc); var market = new StrategyOptimizationMarketResult { Symbol = symbol, Timeframe = frame, Full = Metrics(all.Trades, all.Diagnostics, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide), Development = Metrics(dev.Trades, dev.Diagnostics, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide), Validation = Metrics(val.Trades, val.Diagnostics, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide) }; candidate.MarketResults.Add(market); full.Add((all, market.Full)); development.Add((dev, market.Development)); validation.Add((val, market.Validation)); }
-        candidate.Full = Aggregate(full, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide); candidate.Development = Aggregate(development, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide); candidate.Validation = Aggregate(validation, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide); var active = candidate.MarketResults.Where(result => result.Validation.TotalTrades > 0).ToArray(); candidate.ProfitableMarketRatio = active.Length == 0 ? 0m : (decimal)active.Count(result => result.Validation.NetPnlUsdt > 0m) / active.Length; candidate.RobustCandidate = candidate.Validation.NetPnlUsdt > 0m && (candidate.Validation.NetProfitFactor ?? 0m) >= 1.05m && candidate.Validation.TotalTrades >= 30 && candidate.ProfitableMarketRatio >= .5m && candidate.Validation.MaxDrawdownPercent <= 5m; return candidate;
+        foreach (var symbol in symbols) foreach (var frame in frames) { cancellation.ThrowIfCancellationRequested(); var candles = cache[(symbol, frame)]; var all = workerEngine.RunResearch(candles, parameters, run.RequestedStartUtc, run.RequestedEndUtc); cancellation.ThrowIfCancellationRequested(); var dev = workerEngine.RunResearch(candles, parameters, run.RequestedStartUtc, split); cancellation.ThrowIfCancellationRequested(); var val = workerEngine.RunResearch(candles, parameters, split, run.RequestedEndUtc); cancellation.ThrowIfCancellationRequested(); var market = new StrategyOptimizationMarketResult { Symbol = symbol, Timeframe = frame, Full = Metrics(all.Trades, all.Diagnostics, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide), Development = Metrics(dev.Trades, dev.Diagnostics, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide), Validation = Metrics(val.Trades, val.Diagnostics, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide) }; candidate.MarketResults.Add(market); full.Add((all, market.Full)); development.Add((dev, market.Development)); validation.Add((val, market.Validation)); }
+        cancellation.ThrowIfCancellationRequested(); candidate.Full = Aggregate(full, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide); candidate.Development = Aggregate(development, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide); candidate.Validation = Aggregate(validation, run.SimulatedAccountBalanceUsdt, run.FeePercentPerSide); var active = candidate.MarketResults.Where(result => result.Validation.TotalTrades > 0).ToArray(); candidate.ProfitableMarketRatio = active.Length == 0 ? 0m : (decimal)active.Count(result => result.Validation.NetPnlUsdt > 0m) / active.Length; candidate.RobustCandidate = candidate.Validation.NetPnlUsdt > 0m && (candidate.Validation.NetProfitFactor ?? 0m) >= 1.05m && candidate.Validation.TotalTrades >= 30 && candidate.ProfitableMarketRatio >= .5m && candidate.Validation.MaxDrawdownPercent <= 5m; return candidate;
     }
     private async Task SetTerminalAsync(int id, StrategyOptimizationStatus status, string? failure) { await using var scope = scopeFactory.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var run = await db.StrategyOptimizationRuns.FindAsync(id); if (run is not null) { run.Status = status; run.FailureMessage = failure; run.CompletedAtUtc = clock.GetUtcNow(); await db.SaveChangesAsync(); } }
     private static OptimizationMetrics Aggregate(IReadOnlyCollection<(BacktestCalculation Calculation, OptimizationMetrics Metrics)> markets, decimal balance, decimal fee)
