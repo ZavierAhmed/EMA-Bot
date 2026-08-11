@@ -236,6 +236,39 @@ public sealed class BacktestEngineCorrectiveTests
     private static Candle[] Candles(int count, decimal price) => Enumerable.Range(0, count).Select(index => new Candle(DateTimeOffset.UnixEpoch.AddMinutes(index), DateTimeOffset.UnixEpoch.AddMinutes(index + 1).AddMilliseconds(-1), price, 101m, 99m, price, 1m, true)).ToArray();
 }
 
+public sealed class ResearchSegmentBoundaryTests
+{
+    [Fact]
+    public void Development_ClosesAtSegmentEnd_WithoutUsingFutureTakeProfit()
+    {
+        var candles = Candles(8); candles[0] = candles[0] with { Low = 90m }; candles[6] = candles[6] with { High = 120m, Close = 120m };
+        var events = new[] { Event(candles, 4, SignalDirection.Long, SignalStatus.BullishCrossover), Event(candles, 4, SignalDirection.Long, SignalStatus.LongSignal) };
+        var development = new BacktestEngine(new EmaSignalEngine()).RunResearchWithEvents(candles, Settings(), events, candles[0].OpenTimeUtc, candles[5].CloseTimeUtc);
+
+        var trade = Assert.Single(development.Trades);
+        Assert.Equal(BacktestExitReason.EndOfData, trade.ExitReason);
+        Assert.Equal(candles[5].CloseTimeUtc, trade.ExitTimeUtc);
+        Assert.Equal(candles[5].Close, trade.ExitPrice);
+    }
+
+    [Fact]
+    public void ResearchDiagnostics_ExcludeWarmupAndOtherSegmentEvents()
+    {
+        var candles = Candles(8);
+        var events = new[] { Event(candles, 1, SignalDirection.Long, SignalStatus.BullishCrossover), Event(candles, 4, SignalDirection.Long, SignalStatus.LongSignal), Event(candles, 6, SignalDirection.Short, SignalStatus.ShortSignal), Event(candles, 6, SignalDirection.Short, SignalStatus.RejectedByEmaGap) };
+        var engine = new BacktestEngine(new EmaSignalEngine());
+        var development = engine.RunResearchWithEvents(candles, Settings(), events, candles[3].OpenTimeUtc, candles[5].CloseTimeUtc);
+        var validation = engine.RunResearchWithEvents(candles, Settings(), events, candles[6].OpenTimeUtc, candles[7].CloseTimeUtc);
+
+        Assert.Equal(1, development.Diagnostics.LongSignals); Assert.Equal(0, development.Diagnostics.TotalCrossovers); Assert.Equal(0, development.Diagnostics.ShortSignals);
+        Assert.Equal(1, validation.Diagnostics.ShortSignals); Assert.Equal(1, validation.Diagnostics.RejectedByEmaGap); Assert.Equal(0, validation.Diagnostics.TotalCrossovers);
+    }
+
+    private static TradingSettings Settings() => new() { RiskReward = 2m, FixedOrderSizeUsdt = 100m };
+    private static StrategyEvent Event(Candle[] candles, int index, SignalDirection direction, SignalStatus status) => new(candles[index].CloseTimeUtc, direction, status, new IndicatorSnapshot(candles[index].CloseTimeUtc, candles[index].Close, 1m, 1m, null, null, GapState.Unchanged, TrendDirection.Neutral));
+    private static Candle[] Candles(int count) => Enumerable.Range(0, count).Select(index => { var time = DateTimeOffset.UnixEpoch.AddMinutes(index); return new Candle(time, time.AddMinutes(1).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true); }).ToArray();
+}
+
 public sealed class BacktestServiceCorrectiveTests
 {
     [Fact]
