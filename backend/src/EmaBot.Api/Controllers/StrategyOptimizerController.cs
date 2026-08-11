@@ -1,0 +1,64 @@
+using System.IO.Compression;
+using System.Security;
+using System.Text;
+using EmaBot.Api.Auth;
+using EmaBot.Api.Data;
+using EmaBot.Api.Models;
+using EmaBot.Api.Services;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace EmaBot.Api.Controllers;
+
+[ApiController, Authorize(Roles = AppRoles.Admin), Route("api/strategy-optimizer")]
+public sealed class StrategyOptimizerController(EmaBotDbContext database, StrategyOptimizationService service) : ControllerBase
+{
+    [HttpGet("options")] public async Task<IActionResult> Options(CancellationToken token) => Ok(await service.GetOptionsAsync(token));
+    [HttpPost("runs")] public async Task<IActionResult> Start(StrategyOptimizerStartRequest request, CancellationToken token) { try { var run = await service.StartAsync(request, token); return Accepted($"api/strategy-optimizer/runs/{run.Id}", Summary(run)); } catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); } catch (InvalidOperationException exception) { return Conflict(new ApiMessage(exception.Message)); } }
+    [HttpGet("runs")] public async Task<IActionResult> Runs(CancellationToken token) => Ok((await database.StrategyOptimizationRuns.AsNoTracking().OrderByDescending(run => run.CreatedAtUtc).Take(30).ToListAsync(token)).Select(Summary));
+    [HttpGet("runs/{id:int}")] public async Task<IActionResult> Run(int id, CancellationToken token) { var run = await database.StrategyOptimizationRuns.AsNoTracking().Include(value => value.Candidates).SingleOrDefaultAsync(value => value.Id == id, token); return run is null ? NotFound(new ApiMessage("Optimization run not found.")) : Ok(Summary(run)); }
+    [HttpGet("runs/{id:int}/candidates")] public async Task<IActionResult> Candidates(int id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken token = default) { page=Math.Max(page,1); pageSize=Math.Clamp(pageSize,1,100); var all=(await database.StrategyOptimizationCandidates.AsNoTracking().Where(candidate=>candidate.StrategyOptimizationRunId==id).ToListAsync(token)).OrderBy(candidate=>candidate.RobustRank??int.MaxValue).ThenByDescending(candidate=>candidate.Validation.NetProfitFactor).ThenBy(candidate=>candidate.Id).ToArray(); return Ok(new { total=all.Length, items=all.Skip((page-1)*pageSize).Take(pageSize).Select(Candidate) }); }
+    [HttpGet("runs/{id:int}/candidates/{candidateId:int}")] public async Task<IActionResult> CandidateDetail(int id, int candidateId, CancellationToken token) { var candidate=await database.StrategyOptimizationCandidates.AsNoTracking().Include(value=>value.MarketResults).SingleOrDefaultAsync(value=>value.Id==candidateId&&value.StrategyOptimizationRunId==id,token); return candidate is null ? NotFound(new ApiMessage("Candidate not found.")) : Ok(new { candidate=Candidate(candidate), markets=candidate.MarketResults.Select(Market) }); }
+    [HttpPost("runs/{id:int}/cancel")] public async Task<IActionResult> Cancel(int id, CancellationToken token) => await service.CancelAsync(id, token) ? Accepted() : NotFound(new ApiMessage("No active optimization run found."));
+    [HttpGet("runs/{id:int}/excel")] public async Task<IActionResult> Excel(int id, CancellationToken token) { var run=await database.StrategyOptimizationRuns.AsNoTracking().Include(value=>value.Candidates).ThenInclude(candidate=>candidate.MarketResults).Include(value=>value.Trades).SingleOrDefaultAsync(value=>value.Id==id,token); return run is null ? NotFound(new ApiMessage("Optimization run not found.")) : File(StrategyOptimizerWorkbook.Create(run), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-optimizer-{id}.xlsx"); }
+
+    private static object Summary(StrategyOptimizationRun run) => new { run.Id, status=run.Status.ToString(), run.CreatedAtUtc, run.StartedAtUtc, run.CompletedAtUtc, run.FailureMessage, run.RequestedStartUtc, run.RequestedEndUtc, run.CandidateCount, run.MarketCount, run.TotalWork, run.CompletedWork, progress=run.TotalWork==0?0m:(decimal)run.CompletedWork/run.TotalWork*100m, run.RecommendedCandidateId, assumptions=new { run.SimulatedAccountBalanceUsdt, run.FixedOrderSizeUsdt, run.MarginPerTradePercent, run.Leverage, run.FeePercentPerSide, positionSizingMode=run.PositionSizingMode.ToString() }, robustCandidateCount=run.Candidates.Count(candidate=>candidate.RobustCandidate) };
+    private static object Candidate(StrategyOptimizationCandidate value) => new { value.Id,value.RiskReward,value.MinEmaGapPercent,value.MaxStopDistancePercent,value.WaitForConfirmationCandle,value.UseEma100Filter,value.TrailingStopEnabled,value.IsBaseline,value.RobustCandidate,value.RobustRank,value.ProfitableMarketRatio,full=value.Full,development=value.Development,validation=value.Validation };
+    private static object Market(StrategyOptimizationMarketResult value) => new { value.Id,value.Symbol,value.Timeframe,full=value.Full,development=value.Development,validation=value.Validation };
+}
+
+public static class StrategyOptimizerWorkbook
+{
+    public static byte[] Create(StrategyOptimizationRun run)
+    {
+        var sheets = new List<(string Name, IEnumerable<IEnumerable<string?>> Rows)>
+        {
+            ("Overview", [["Run ID",run.Id.ToString()],["Status",run.Status.ToString()],["Period",$"{run.RequestedStartUtc:O} to {run.RequestedEndUtc:O}"],["Candidates",run.CandidateCount.ToString()],["Markets",run.MarketCount.ToString()],["Recommended candidate",run.RecommendedCandidateId?.ToString() ?? "No robust candidate found"]]),
+            ("Ranked Candidates", new[] { new[] { "Robust Rank","Baseline","R:R","EMA Gap","Max Stop","Confirmation","EMA100","Trailing","Validation Net PF","Validation Net %","Validation Max DD %","Validation Trades","Profitable Markets" } }.Concat(run.Candidates.OrderBy(candidate=>candidate.RobustRank??int.MaxValue).Select(candidate => new[] { candidate.RobustRank?.ToString(),candidate.IsBaseline.ToString(),candidate.RiskReward.ToString(),candidate.MinEmaGapPercent.ToString(),candidate.MaxStopDistancePercent.ToString(),candidate.WaitForConfirmationCandle.ToString(),candidate.UseEma100Filter.ToString(),candidate.TrailingStopEnabled.ToString(),candidate.Validation.NetProfitFactor?.ToString(),candidate.Validation.NetReturnPercent.ToString(),candidate.Validation.MaxDrawdownPercent.ToString(),candidate.Validation.TotalTrades.ToString(),candidate.ProfitableMarketRatio.ToString() }))),
+            ("Market Results", new[] { new[] { "Candidate","Symbol","Timeframe","Full Net","Validation Net","Validation PF","Validation Trades" } }.Concat(run.Candidates.SelectMany(candidate=>candidate.MarketResults.Select(market=>new[] { candidate.Id.ToString(),market.Symbol,market.Timeframe,market.Full.NetPnlUsdt.ToString(),market.Validation.NetPnlUsdt.ToString(),market.Validation.NetProfitFactor?.ToString(),market.Validation.TotalTrades.ToString() })))),
+            ("Best By Market", BestRows(run)),
+            ("Diagnostics", new[] { new[] { "Candidate","Crossovers","Long Signals","Short Signals","EMA100 Rejected","Gap Rejected","Fees Rejected" } }.Concat(run.Candidates.Select(candidate=>new[] { candidate.Id.ToString(),candidate.Full.TotalCrossovers.ToString(),candidate.Full.LongSignals.ToString(),candidate.Full.ShortSignals.ToString(),candidate.Full.RejectedByEma100.ToString(),candidate.Full.RejectedByEmaGap.ToString(),candidate.Full.RejectedByFees.ToString() }))),
+            ("Top Candidate Trades", new[] { new[] { "Candidate","Symbol","Timeframe","Direction","Re-entry","Entry","Exit","Initial SL","Final SL","Original TP","Final TP","Gross","Fees","Net","Net R","Exit Reason","Expected Net Target R" } }.Concat(run.Trades.Select(trade=>new[] { trade.StrategyOptimizationCandidateId.ToString(),trade.Symbol,trade.Timeframe,trade.Direction.ToString(),trade.IsReentry.ToString(),trade.EntryPrice.ToString(),trade.ExitPrice.ToString(),trade.InitialStopLoss.ToString(),trade.FinalStopLoss.ToString(),trade.OriginalTakeProfit.ToString(),trade.FinalTakeProfit.ToString(),trade.GrossPnlUsdt.ToString(),trade.TotalFeesUsdt.ToString(),trade.NetPnlUsdt.ToString(),trade.NetRMultiple.ToString(),trade.ExitReason.ToString(),trade.ExpectedNetTargetR.ToString() }))),
+            ("Run Configuration", [["Symbols",run.SymbolsJson],["Timeframes",run.TimeframesJson],["Parameter grid",run.GridJson],["Balance",run.SimulatedAccountBalanceUsdt.ToString()],["Fixed order size",run.FixedOrderSizeUsdt.ToString()],["Fee per side",run.FeePercentPerSide.ToString()]])
+        };
+        using var stream=new MemoryStream(); using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true)){ Write(zip,"[Content_Types].xml","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"+string.Concat(Enumerable.Range(1,sheets.Count).Select(i=>$"<Override PartName=\"/xl/worksheets/sheet{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"))+"</Types>"); Write(zip,"_rels/.rels","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>"); Write(zip,"xl/workbook.xml","<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"+string.Concat(sheets.Select((sheet,index)=>$"<sheet name=\"{sheet.Name}\" sheetId=\"{index+1}\" r:id=\"rId{index+1}\"/>"))+"</sheets></workbook>"); Write(zip,"xl/_rels/workbook.xml.rels","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"+string.Concat(Enumerable.Range(1,sheets.Count).Select(i=>$"<Relationship Id=\"rId{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i}.xml\"/>"))+"</Relationships>"); foreach(var (sheet,index) in sheets.Select((sheet,index)=>(sheet,index+1))){var xml=new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");foreach(var row in sheet.Rows){xml.Append("<row>");foreach(var value in row)xml.Append("<c t=\"inlineStr\"><is><t>").Append(SecurityElement.Escape(value??string.Empty)).Append("</t></is></c>");xml.Append("</row>");}xml.Append("</sheetData></worksheet>");Write(zip,$"xl/worksheets/sheet{index}.xml",xml.ToString());} } return stream.ToArray();
+    }
+    private static IEnumerable<IEnumerable<string?>> BestRows(StrategyOptimizationRun run)
+    {
+        var rows = new List<IEnumerable<string?>> { new[] { "Scope", "Market", "Candidate", "Validation Net PF" } };
+        var results = run.Candidates.SelectMany(candidate => candidate.MarketResults.Select(market => new { Candidate = candidate, Market = market }));
+        Add("Global", "All selected markets", run.Candidates.Select(candidate => (candidate, candidate.Validation)));
+        foreach (var group in results.GroupBy(value => value.Market.Symbol)) Add("Symbol", group.Key, group.Select(value => (value.Candidate, value.Market.Validation)));
+        foreach (var group in results.GroupBy(value => value.Market.Timeframe)) Add("Timeframe", group.Key, group.Select(value => (value.Candidate, value.Market.Validation)));
+        foreach (var group in results.GroupBy(value => $"{value.Market.Symbol} {value.Market.Timeframe}")) Add("Symbol + timeframe", group.Key, group.Select(value => (value.Candidate, value.Market.Validation)));
+        return rows;
+
+        void Add(string scope, string market, IEnumerable<(StrategyOptimizationCandidate Candidate, OptimizationMetrics Metrics)> candidates)
+        {
+            var best = candidates.OrderByDescending(value => value.Metrics.NetProfitFactor).ThenByDescending(value => value.Metrics.NetReturnPercent).ThenBy(value => value.Candidate.Id).FirstOrDefault();
+            rows.Add(new[] { scope, market, best.Candidate?.Id.ToString(), best.Metrics?.NetProfitFactor?.ToString() });
+        }
+    }
+    private static void Write(ZipArchive archive,string name,string text){using var writer=new StreamWriter(archive.CreateEntry(name).Open(),Encoding.UTF8);writer.Write(text);}
+}

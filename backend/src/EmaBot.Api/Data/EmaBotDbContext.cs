@@ -3,6 +3,7 @@ using EmaBot.Api.Models;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 
 namespace EmaBot.Api.Data;
 
@@ -18,6 +19,10 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<PaperSessionSymbol> PaperSessionSymbols => Set<PaperSessionSymbol>();
     public DbSet<PaperTrade> PaperTrades => Set<PaperTrade>();
     public DbSet<PaperTradeEvent> PaperTradeEvents => Set<PaperTradeEvent>();
+    public DbSet<StrategyOptimizationRun> StrategyOptimizationRuns => Set<StrategyOptimizationRun>();
+    public DbSet<StrategyOptimizationCandidate> StrategyOptimizationCandidates => Set<StrategyOptimizationCandidate>();
+    public DbSet<StrategyOptimizationMarketResult> StrategyOptimizationMarketResults => Set<StrategyOptimizationMarketResult>();
+    public DbSet<StrategyOptimizationTrade> StrategyOptimizationTrades => Set<StrategyOptimizationTrade>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -85,5 +90,28 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(trade => new { trade.PaperSessionSymbolId, trade.Status });
             entity.HasMany(trade => trade.Events).WithOne(item => item.PaperTrade!).HasForeignKey(item => item.PaperTradeId).OnDelete(DeleteBehavior.Cascade);
         });
+        builder.Entity<StrategyOptimizationRun>(entity =>
+        {
+            entity.Property(run => run.SymbolsJson).HasColumnType("longtext"); entity.Property(run => run.TimeframesJson).HasColumnType("longtext"); entity.Property(run => run.GridJson).HasColumnType("longtext"); entity.Property(run => run.BaselineSettingsJson).HasColumnType("longtext");
+            entity.HasIndex(run => run.Status); entity.HasMany(run => run.Candidates).WithOne(candidate => candidate.StrategyOptimizationRun!).HasForeignKey(candidate => candidate.StrategyOptimizationRunId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(run => run.Trades).WithOne().HasForeignKey(trade => trade.StrategyOptimizationRunId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<StrategyOptimizationCandidate>(entity =>
+        {
+            entity.HasIndex(candidate => new { candidate.StrategyOptimizationRunId, candidate.RobustRank });
+            entity.Property(candidate => candidate.Full).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
+            entity.Property(candidate => candidate.Development).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
+            entity.Property(candidate => candidate.Validation).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
+            entity.HasMany(candidate => candidate.MarketResults).WithOne(result => result.StrategyOptimizationCandidate!).HasForeignKey(result => result.StrategyOptimizationCandidateId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<StrategyOptimizationMarketResult>(entity =>
+        {
+            entity.HasIndex(result => new { result.StrategyOptimizationCandidateId, result.Symbol, result.Timeframe }).IsUnique();
+            entity.Property(result => result.Symbol).HasMaxLength(32); entity.Property(result => result.Timeframe).HasMaxLength(8);
+            entity.Property(result => result.Full).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
+            entity.Property(result => result.Development).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
+            entity.Property(result => result.Validation).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
+        });
+        builder.Entity<StrategyOptimizationTrade>(entity => { entity.Property(trade => trade.Symbol).HasMaxLength(32); entity.Property(trade => trade.Timeframe).HasMaxLength(8); entity.HasIndex(trade => new { trade.StrategyOptimizationRunId, trade.StrategyOptimizationCandidateId }); });
     }
 }

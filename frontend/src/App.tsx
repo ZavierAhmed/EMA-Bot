@@ -8,6 +8,7 @@ import { SymbolsPage } from './pages/SymbolsPage'
 import { BacktestsPage } from './pages/BacktestsPage'
 import { PaperTradingPage } from './pages/PaperTradingPage'
 import { TradesPage } from './pages/TradesPage'
+import { OptimizerPage } from './pages/OptimizerPage'
 
 function ProtectedLayout() {
   const { user, isLoading } = useAuth()
@@ -36,6 +37,7 @@ export function App() {
         <Route path="trades" element={<TradesPage />} />
         <Route path="symbols" element={<SymbolsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="optimizer" element={<OptimizerPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

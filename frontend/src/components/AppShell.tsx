@@ -5,6 +5,7 @@ import { useAuth } from '../auth'
 const navigation = [
   ['Dashboard', '/'],
   ['Backtests', '/backtests'],
+  ['Strategy Optimizer', '/optimizer'],
   ['Paper Trading', '/paper-trading'],
   ['Trades', '/trades'],
   ['Symbols', '/symbols'],

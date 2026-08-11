@@ -32,6 +32,7 @@ public sealed class DatabaseInitializer(
                 session.FailureMessage = "The application restarted; resume to reconnect public market data.";
             }
             if (runningSessions.Count > 0) await database.SaveChangesAsync(cancellationToken);
+            await scope.ServiceProvider.GetRequiredService<StrategyOptimizationService>().MarkRunningAsInterruptedAsync(cancellationToken);
 
             var userManager = scope.ServiceProvider.GetRequiredService<UserManager<EmaUser>>();
             var roleManager = scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
