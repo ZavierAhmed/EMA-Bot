@@ -8,6 +8,12 @@ This is an architecture and dependency inventory only.  It was prepared on
 logic, database schema, migration, configuration value, or frontend behavior
 is changed by E0.
 
+The strategy provenance and locked decision kernel are documented separately
+in [strategy-origin.md](strategy-origin.md). Broker migration must not
+accidentally change the EMA9/15 crossover inequalities, closed-candle rule,
+next-bar entry semantics, optional filters, or existing position-management
+semantics.
+
 `main` remains the preserved Binance USD-M Futures research implementation.
 The target branch must make changes in the staged order below; it must not
 attempt an MT5 or Exness connection until the broker-neutral contracts and

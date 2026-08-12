@@ -1,4 +1,23 @@
-# EMA Bot
+# EMA-Bot
+
+EMA-Bot is an EMA crossover research and trading system.
+
+## Exness-shift architecture status
+
+The intended architecture is:
+
+```text
+EMA-Bot .NET <-> local Named Pipe <-> thin MT5 Bridge EA <-> MetaTrader 5 <-> Exness
+```
+
+This is a migration target only: it is **not implemented**, Binance components
+remain the current legacy market-data/research infrastructure, and live Exness
+orders are not available. Strategy logic remains in .NET.
+
+See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
+[the strategy origin and kernel lock](docs/strategy-origin.md).
+
+## Legacy Binance research implementation
 
 EMA Bot is a small private administration application for an EMA trading bot. Milestone 1 adds public Binance USDⓈ-M Futures market data, Admin-managed monitored symbols, persisted global trading settings, and a diagnostic EMA 9/15/100 signal preview.
 
