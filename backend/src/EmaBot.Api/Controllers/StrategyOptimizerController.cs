@@ -56,7 +56,15 @@ public sealed class StrategyOptimizerController(EmaBotDbContext database, Strate
     [HttpGet("runs/{runId:int}/candidates/{candidateId:int}/regime-excel")]
     public async Task<IActionResult> RegimeExcel(int runId, int candidateId, CancellationToken token)
     {
-        try { var data = await regimeDiagnostics.CreateAsync(runId, candidateId, token); return data is null ? NotFound(new ApiMessage("Completed optimizer run or candidate not found.")) : File(StrategyRegimeWorkbook.Create(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-regime-{runId}-{candidateId}.xlsx"); }
+        var total = Stopwatch.StartNew();
+        try
+        {
+            var data = await regimeDiagnostics.CreateAsync(runId, candidateId, token);
+            if (data is null) return NotFound(new ApiMessage("Completed optimizer run or candidate not found."));
+            var workbook = Stopwatch.StartNew(); var bytes = StrategyRegimeWorkbook.Create(data); workbook.Stop();
+            logger.LogInformation("Regime diagnostics export run {RunId}, candidate {CandidateId}: {Trades} trades, workbook {WorkbookDuration}, {WorkbookBytes} bytes, total {TotalDuration}.", runId, candidateId, data.Trades.Count, workbook.Elapsed, bytes.Length, total.Elapsed);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-regime-{runId}-{candidateId}.xlsx");
+        }
         catch (Exception exception) { logger.LogError(exception, "Regime diagnostic export for run {RunId}, candidate {CandidateId} failed.", runId, candidateId); return StatusCode(StatusCodes.Status500InternalServerError, new ApiMessage("The regime diagnostic export could not be generated. Check the API log for details.")); }
     }
 
