@@ -25,6 +25,22 @@ but the current application continues to use legacy percentage-fee/notional sizi
 
 MT5 catalog, quote, and provider-capability contracts are defined, but no MT5 provider is connected.
 
+## MT5 Bridge (E6)
+
+The local, read-only MT5 Named Pipe server exists but is disabled by default;
+there is no MQL5 client or terminal connection yet. Do not enable it for normal
+use before E7. For future local development only, configure user-secrets rather
+than committed configuration:
+
+```powershell
+dotnet user-secrets set "Mt5Bridge:Enabled" "true" --project backend/src/EmaBot.Api
+dotnet user-secrets set "Mt5Bridge:HandshakeSecret" "<strong-secret>" --project backend/src/EmaBot.Api
+```
+
+The secret must be at least 32 characters and is never committed. See the
+[MT5 Bridge protocol v1](docs/mt5-bridge-protocol-v1.md) for the local-only
+server/client contract.
+
 See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
 [the strategy origin and kernel lock](docs/strategy-origin.md).
 

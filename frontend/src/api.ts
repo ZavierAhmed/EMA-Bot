@@ -10,6 +10,7 @@ export type HealthStatus = {
 }
 
 export type MarketProviderCapabilities = { historicalProvider: string; historicalResearchConfigured: boolean; targetTerminal: string; targetBroker: string; instrumentCatalogConfigured: boolean; quoteProviderConfigured: boolean; liveBarProviderConfigured: boolean; executionProviderConfigured: boolean; nativeTargetTimeframes: string[] }
+export type Mt5BridgeStatus = { enabled: boolean; protocolVersion: number; pipeName: string; connectionState: 'Disabled' | 'WaitingForClient' | 'Handshaking' | 'Connected' | 'Stale' | 'Faulted'; sessionId: string | null; connectedAtUtc: string | null; lastMessageAtUtc: string | null; lastHeartbeatAtUtc: string | null; lastDisconnectAtUtc: string | null; lastDisconnectReason: string | null; clientVersion: string | null; terminalName: string | null; terminalCompany: string | null; terminalBuild: number | null; accountServer: string | null; accountCurrency: string | null; accountMode: string | null; lastRoundTripMs: number | null }
 
 export type MonitoredSymbol = { id: number; symbol: string; baseAsset: string; quoteAsset: string; isEnabled: boolean }
 export type PositionSizingMode = 'FixedNotional' | 'MarginPercent'
@@ -82,6 +83,7 @@ export async function getHealth(): Promise<HealthStatus> {
 }
 
 export const getMarketProviderCapabilities = () => request<MarketProviderCapabilities>('/api/market/provider-capabilities')
+export const getMt5BridgeStatus = () => request<Mt5BridgeStatus>('/api/mt5/bridge/status')
 
 async function protectedRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
   const token = await antiforgeryToken()

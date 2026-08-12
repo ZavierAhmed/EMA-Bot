@@ -31,6 +31,16 @@ natively support it; no three-day aggregation is implemented. Named Pipe,
 MQL5 bridge, actual MT5 catalog/quotes, execution, commission discovery, swap,
 and account data remain deferred.
 
+## Phase E6 completed
+
+EMA-Bot now contains a disabled-by-default, Windows current-user-only Named
+Pipe server and a versioned, read-only protocol contract. It accepts only a
+future MT5 Bridge EA client after authenticated Hello, tracks heartbeat and
+connection status, and supports correlated Ping, account, catalog, instrument,
+and quote requests. No MQL5 client, terminal connection, provider wiring,
+market data, execution operation, database change, or trading behavior has
+been added.
+
 ## Scope and branch safety
 
 This is an architecture and dependency inventory only.  It was prepared on
