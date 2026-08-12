@@ -1,5 +1,6 @@
 using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
+using EmaBot.Api.Market;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Authorization;
@@ -13,7 +14,7 @@ public sealed class StrategyController(IBinanceFuturesMarketDataClient binance, 
     [HttpGet("preview")]
     public async Task<ActionResult<StrategyPreviewResponse>> Preview([FromQuery] string symbol, [FromQuery] string interval, [FromQuery] int? limit, CancellationToken cancellationToken)
     {
-        if (!BinanceIntervals.IsSupported(interval)) return BadRequest(new ApiMessage("Unsupported Binance interval."));
+        if (!StrategyTimeframes.IsSupported(interval)) return BadRequest(new ApiMessage("Unsupported Binance interval."));
         if (limit is < 100 or > 1500) return BadRequest(new ApiMessage("Limit must be between 100 and 1500 for an EMA 100 preview."));
         var normalized = (symbol ?? string.Empty).Trim().ToUpperInvariant();
         if (string.IsNullOrWhiteSpace(normalized)) return BadRequest(new ApiMessage("A Binance symbol is required."));

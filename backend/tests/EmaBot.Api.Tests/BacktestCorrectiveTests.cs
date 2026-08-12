@@ -285,7 +285,7 @@ public sealed class BacktestServiceCorrectiveTests
         Assert.Equal(1, run.CandleCount); Assert.Equal(used.OpenTimeUtc, run.ActualStartUtc); Assert.Equal(used.CloseTimeUtc, run.ActualEndUtc); Assert.Equal(3m, saved!.RiskReward);
     }
 
-    private sealed class StaticHistorical(IReadOnlyList<Candle> candles) : IBinanceHistoricalCandleService
+    private sealed class StaticHistorical(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider
     { public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset start, DateTimeOffset end, CancellationToken token) => Task.FromResult(candles); }
 }
 

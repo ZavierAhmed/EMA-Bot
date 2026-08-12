@@ -3,8 +3,8 @@ using System.IO.Compression;
 using System.Security;
 using System.Text;
 using System.Diagnostics;
-using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Strategy;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +14,7 @@ namespace EmaBot.Api.Services;
 public sealed record RegimeTradeDiagnostic(string Symbol, string Timeframe, BacktestTrade Trade, decimal? Ema9Slope5Percent, decimal? Ema15Slope5Percent, decimal? Ema100Slope5Percent, decimal? Ema100Slope20Percent, decimal? DistanceFromEma100Percent, decimal? PriceReturn20Percent, decimal? Atr14Percent, decimal? TrendEfficiency20, bool? Ema100Slope5Aligned, bool? Ema100Slope20Aligned, bool? PriceVsEma100Aligned, HigherTimeframeDiagnostic HigherTimeframe);
 public sealed record RegimeExportData(StrategyOptimizationRun Run, StrategyOptimizationCandidate Candidate, IReadOnlyList<RegimeTradeDiagnostic> Trades);
 
-public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, IBinanceHistoricalCandleService historical, BacktestEngine engine, ILogger<StrategyRegimeDiagnosticsService>? logger = null)
+public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, IHistoricalMarketDataProvider historical, BacktestEngine engine, ILogger<StrategyRegimeDiagnosticsService>? logger = null)
 {
     public async Task<RegimeExportData?> CreateAsync(int runId, int candidateId, CancellationToken token)
     {

@@ -1,6 +1,7 @@
 using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
@@ -36,7 +37,7 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
     public async Task<ActionResult<PaperSessionDetailResponse>> Start(StartPaperSessionRequest request, CancellationToken token)
     {
         var symbols = request.Symbols?.Select(symbol => symbol.Trim().ToUpperInvariant()).Where(symbol => symbol.Length > 0).ToArray() ?? [];
-        if (!BinanceIntervals.IsSupported(request.Interval) || symbols.Length == 0) return BadRequest(new ApiMessage("Use a supported interval and select at least one symbol."));
+        if (!StrategyTimeframes.IsSupported(request.Interval) || symbols.Length == 0) return BadRequest(new ApiMessage("Use a supported interval and select at least one symbol."));
         if (symbols.Distinct(StringComparer.Ordinal).Count() != symbols.Length) return BadRequest(new ApiMessage("Symbols must not contain duplicates."));
         if (await database.PaperSessions.AnyAsync(session => session.Status == PaperSessionStatus.Running || session.Status == PaperSessionStatus.Interrupted, token)) return Conflict(new ApiMessage("Stop or resume the existing paper session before starting another."));
         var enabledMonitored = await database.MonitoredSymbols.Where(symbol => symbol.IsEnabled).ToListAsync(token);

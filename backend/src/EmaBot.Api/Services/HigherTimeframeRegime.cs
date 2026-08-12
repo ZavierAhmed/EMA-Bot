@@ -1,4 +1,4 @@
-using EmaBot.Api.Binance;
+using EmaBot.Api.Market;
 using EmaBot.Api.Strategy;
 
 namespace EmaBot.Api.Services;

@@ -1,6 +1,7 @@
 using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Authorization;
@@ -18,7 +19,7 @@ public sealed record TradeChartPointResponse(DateTimeOffset TimeUtc, decimal? Va
 public sealed record TradeChartResponse(string Symbol, string Interval, IReadOnlyList<TradeChartCandleResponse> Candles, IReadOnlyList<TradeChartPointResponse> Ema9, IReadOnlyList<TradeChartPointResponse> Ema15, IReadOnlyList<TradeChartPointResponse> Ema100);
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/trades")]
-public sealed class TradesController(EmaBotDbContext database, IBinanceHistoricalCandleService historical) : ControllerBase
+public sealed class TradesController(EmaBotDbContext database, IHistoricalMarketDataProvider historical) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<TradeSummaryResponse>>> List([FromQuery] string? source, [FromQuery] string? symbol, [FromQuery] string? interval, [FromQuery] string? direction, [FromQuery] string? status, [FromQuery] string? outcome, [FromQuery] int? limit, CancellationToken token)
@@ -72,9 +73,9 @@ public sealed class TradesController(EmaBotDbContext database, IBinanceHistorica
             ? await database.BacktestTrades.AsNoTracking().Include(item => item.BacktestRun).Where(item => item.Id == id).Select(item => new ChartIdentity(item.BacktestRun!.Symbol, item.BacktestRun.Interval, item.CrossoverTimeUtc, item.ExitTimeUtc)).SingleOrDefaultAsync(token)
             : await database.PaperTrades.AsNoTracking().Include(item => item.PaperSession).Where(item => item.Id == id).Select(item => new ChartIdentity(item.Symbol, item.Interval, item.CrossoverTimeUtc, item.ExitTimeUtc)).SingleOrDefaultAsync(token);
         if (identity is null) return NotFound(new ApiMessage("Trade not found."));
-        var visibleStart = BinanceIntervalMath.Shift(identity.CrossoverTimeUtc, identity.Interval, -120);
-        var warmupStart = BinanceIntervalMath.Shift(visibleStart, identity.Interval, -120);
-        var visibleEnd = identity.ExitTimeUtc is { } exit ? BinanceIntervalMath.Shift(exit, identity.Interval, 30) : DateTimeOffset.UtcNow;
+        var visibleStart = StrategyTimeframes.Shift(identity.CrossoverTimeUtc, identity.Interval, -120);
+        var warmupStart = StrategyTimeframes.Shift(visibleStart, identity.Interval, -120);
+        var visibleEnd = identity.ExitTimeUtc is { } exit ? StrategyTimeframes.Shift(exit, identity.Interval, 30) : DateTimeOffset.UtcNow;
         if (visibleEnd <= warmupStart) return BadRequest(new ApiMessage("Trade chart window is invalid."));
         try
         {
@@ -99,14 +100,4 @@ public sealed class TradesController(EmaBotDbContext database, IBinanceHistorica
     private static TradeSummaryResponse PaperSummary(PaperTrade trade) { var risk = Math.Abs(trade.EntryPrice - trade.InitialStopLoss) * trade.Quantity; return new(TradeSource.Paper, trade.Id, trade.PaperSessionId, trade.Symbol, trade.Interval, trade.Status.ToString(), trade.Direction, trade.EntryTimeUtc, trade.ExitTimeUtc, trade.EntryPrice, trade.ExitPrice, trade.ExitReason?.ToString(), trade.GrossPnlUsdt, trade.NetPnlUsdt, trade.NetPnlPercent, trade.TotalFeesUsdt, risk == 0 ? null : trade.GrossPnlUsdt / risk, risk == 0 ? null : trade.NetPnlUsdt / risk); }
     private static TradeDetailResponse BacktestDetail(BacktestTrade trade) { var run = trade.BacktestRun!; var events = trade.Events.OrderBy(item => item.TimeUtc).Select(item => new TradeEventResponse(item.TimeUtc, item.EffectiveTimeUtc, item.Type.ToString(), item.MarketPrice, item.OldStop, item.NewStop, item.OldTakeProfit, item.NewTakeProfit, item.ProgressPercent)).ToArray(); return new(BacktestSummary(trade), trade.CrossoverTimeUtc, trade.SignalTimeUtc, trade.Quantity, trade.EntryNotionalUsdt, trade.InitialStopLoss, trade.FinalStopLoss, trade.StopSourceType, trade.StopSourceTimeUtc, trade.OriginalTakeProfit, trade.FinalTakeProfit, trade.TakeProfitExtended, trade.EntryFeeUsdt, trade.ExitFeeUsdt, trade.MfePrice, trade.MfePercent, trade.MaePrice, trade.MaePercent, trade.SignalClose, trade.SignalEma9, trade.SignalEma15, trade.SignalEma100, trade.SignalGapPercent, trade.SignalGapState, run.RiskReward, run.FixedOrderSizeUsdt, run.WaitForConfirmationCandle, run.UseEma100Filter, run.TrailingStopEnabled, run.FeePercentPerSide, events, events.Length > 0, trade.SignalOpen, trade.PositionSizingMode.ToString(), trade.AccountEquityAtEntryUsdt, trade.MarginUsedUsdt, trade.Leverage, trade.IsReentry, trade.TrendRegimeCrossoverTimeUtc, run.MinEmaGapPercent); }
     private static TradeDetailResponse PaperDetail(PaperTrade trade) { var session = trade.PaperSession!; var events = trade.Events.OrderBy(item => item.TimeUtc).Select(item => new TradeEventResponse(item.TimeUtc, item.TimeUtc, item.Type.ToString(), item.MarketPrice, item.OldStop, item.NewStop, item.OldTakeProfit, item.NewTakeProfit, item.ProgressPercent)).ToArray(); return new(PaperSummary(trade), trade.CrossoverTimeUtc, trade.SignalTimeUtc, trade.Quantity, trade.EntryNotionalUsdt, trade.InitialStopLoss, trade.FinalStopLoss ?? trade.CurrentStopLoss, trade.StopSourceType, trade.StopSourceTimeUtc, trade.OriginalTakeProfit, trade.FinalTakeProfit ?? trade.CurrentTakeProfit, trade.TakeProfitExtended, trade.EntryFeeUsdt, trade.ExitFeeUsdt, trade.MfePrice, trade.MfePercent, trade.MaePrice, trade.MaePercent, trade.SignalClose, trade.SignalEma9, trade.SignalEma15, trade.SignalEma100, trade.SignalGapPercent, trade.SignalGapState, session.RiskReward, session.FixedOrderSizeUsdt, session.WaitForConfirmationCandle, session.UseEma100Filter, session.TrailingStopEnabled, session.FeePercentPerSide, events, true, trade.SignalOpen, trade.PositionSizingMode.ToString(), trade.AccountEquityAtEntryUsdt, trade.MarginUsedUsdt, trade.Leverage, trade.IsReentry, trade.TrendRegimeCrossoverTimeUtc, session.MinEmaGapPercent); }
-}
-
-public static class BinanceIntervalMath
-{
-    public static DateTimeOffset Shift(DateTimeOffset value, string interval, int count)
-    {
-        if (interval == "1M") return value.AddMonths(count);
-        var unit = interval[^1]; var amount = int.Parse(interval[..^1]) * count;
-        return unit switch { 'm' => value.AddMinutes(amount), 'h' => value.AddHours(amount), 'd' => value.AddDays(amount), 'w' => value.AddDays(7 * amount), _ => throw new ArgumentException("Unsupported interval.") };
-    }
 }

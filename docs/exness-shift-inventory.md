@@ -19,6 +19,16 @@ The target branch must make changes in the staged order below; it must not
 attempt an MT5 or Exness connection until the broker-neutral contracts and
 their tests exist.
 
+## E2 implementation status
+
+E2 extracted the shared market concepts into `EmaBot.Api.Market`: `Candle`,
+`StrategyTimeframes`, `IHistoricalMarketDataProvider`,
+`IMarketBarStreamProvider`, `MarketBarUpdate`, `InstrumentSpec`, and
+`MarketQuote`. Strategy, backtest, H2, optimizer, diagnostics, trade charts,
+and internal Paper now depend on those neutral contracts. Binance remains the
+active legacy adapter through `BinanceHistoricalCandleService` and
+`BinanceFuturesStreamClient`; no MT5 or Exness support is implied.
+
 ## Target architecture
 
 ```text

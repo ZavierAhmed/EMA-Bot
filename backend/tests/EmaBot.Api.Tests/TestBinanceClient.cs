@@ -18,13 +18,13 @@ public sealed class TestBinanceClient : IBinanceFuturesMarketDataClient
     }
 }
 
-public sealed class TestBinanceStreamClient : IBinanceFuturesStreamClient
+public sealed class TestBinanceStreamClient : IMarketBarStreamProvider
 {
     public IReadOnlyList<string> LastSymbols { get; private set; } = [];
     public string? LastInterval { get; private set; }
-    public async Task StreamAsync(IReadOnlyCollection<string> symbols, string interval, Func<BinanceKlineUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
+    public async Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
     {
-        LastSymbols = symbols.ToArray(); LastInterval = interval; onStateChange?.Invoke("Connected");
+        LastSymbols = symbols.ToArray(); LastInterval = timeframe; onStateChange?.Invoke("Connected");
         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
     }
 }

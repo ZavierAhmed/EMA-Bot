@@ -1,6 +1,7 @@
 using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,7 +15,7 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
     [HttpPost]
     public async Task<ActionResult<BacktestRunDetailResponse>> Run(BacktestRequest request, CancellationToken token)
     {
-        if (!BinanceIntervals.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use a supported interval and a valid UTC date range."));
+        if (!StrategyTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use a supported interval and a valid UTC date range."));
         var symbol = request.Symbol.Trim().ToUpperInvariant(); if (!await database.MonitoredSymbols.AnyAsync(x => x.Symbol == symbol && x.IsEnabled, token)) return BadRequest(new ApiMessage("The symbol must be monitored and enabled."));
         try { var run = await service.RunAsync(symbol, request.Interval, request.StartUtc, request.EndUtc, token); return CreatedAtAction(nameof(Get), new { id = run.Id }, BacktestResponseMapper.ToDetail(run)); }
         catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); }

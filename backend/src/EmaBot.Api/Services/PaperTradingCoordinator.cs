@@ -1,5 +1,5 @@
-using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Strategy;
 using Microsoft.EntityFrameworkCore;
@@ -11,8 +11,8 @@ public sealed record PaperSymbolRuntimeSnapshot(decimal? LatestPrice, DateTimeOf
 
 public sealed class PaperTradingCoordinator(
     IServiceScopeFactory scopeFactory,
-    IBinanceFuturesMarketDataClient marketData,
-    IBinanceFuturesStreamClient stream,
+    IHistoricalMarketDataProvider historical,
+    IMarketBarStreamProvider stream,
     EmaSignalEngine strategy,
     ILogger<PaperTradingCoordinator> logger) : IHostedService
 {
@@ -94,14 +94,14 @@ public sealed class PaperTradingCoordinator(
     {
         foreach (var runtime in state.Symbols.Values)
         {
-            var candles = await marketData.GetKlinesAsync(runtime.Symbol.Symbol, state.Session.Interval, null, null, 200, token);
+            var candles = await historical.GetLatestAsync(runtime.Symbol.Symbol, state.Session.Interval, 200, token);
             runtime.Candles.AddRange(candles.Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).TakeLast(200));
         }
     }
 
-    private async Task ResyncCandlesAsync(RuntimeSession state, RuntimeSymbol runtime, BinanceKlineUpdate current, CancellationToken token)
+    private async Task ResyncCandlesAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate current, CancellationToken token)
     {
-        var candles = await marketData.GetKlinesAsync(runtime.Symbol.Symbol, state.Session.Interval, null, null, 200, token);
+        var candles = await historical.GetLatestAsync(runtime.Symbol.Symbol, state.Session.Interval, 200, token);
         runtime.Candles.Clear();
         runtime.Candles.AddRange(candles.Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).TakeLast(200));
         // The current close remains the only potentially actionable candle after the resync.
@@ -145,15 +145,15 @@ public sealed class PaperTradingCoordinator(
         }
     }
 
-    internal async Task ProcessUpdateForTestAsync(BinanceKlineUpdate update, CancellationToken token = default)
+    internal async Task ProcessUpdateForTestAsync(MarketBarUpdate update, CancellationToken token = default)
     {
         var state = active ?? throw new InvalidOperationException("No active paper session.");
         await ProcessUpdateAsync(state, update, token);
     }
 
-    private async Task ProcessUpdateAsync(RuntimeSession state, BinanceKlineUpdate update, CancellationToken token)
+    private async Task ProcessUpdateAsync(RuntimeSession state, MarketBarUpdate update, CancellationToken token)
     {
-        if (!state.Symbols.TryGetValue(update.Symbol, out var runtime) || update.Interval != state.Session.Interval) return;
+        if (!state.Symbols.TryGetValue(update.Symbol, out var runtime) || update.Timeframe != state.Session.Interval) return;
         await gate.WaitAsync(token);
         try
         {
@@ -203,7 +203,7 @@ public sealed class PaperTradingCoordinator(
         logger.LogInformation("Paper re-entry {Direction} scheduled for {Symbol}.", direction, runtime.Symbol.Symbol);
     }
 
-    private async Task EnterPendingAsync(RuntimeSession state, RuntimeSymbol runtime, BinanceKlineUpdate update, CancellationToken token)
+    private async Task EnterPendingAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
     {
         var pending = runtime.Pending!; runtime.Pending = null;
         if ((pending.Direction == SignalDirection.Long && pending.Stop >= update.Open) || (pending.Direction == SignalDirection.Short && pending.Stop <= update.Open)) { await UpdateSessionAsync(state.Session.Id, session => session.InvalidStopLoss++); await PersistRuntimeSymbolAsync(runtime, token); return; }
@@ -221,7 +221,7 @@ public sealed class PaperTradingCoordinator(
         logger.LogInformation("Paper trade entered for {Symbol} at {Price}.", trade.Symbol, trade.EntryPrice);
     }
 
-    private async Task ManageOpenTradeAsync(RuntimeSession state, RuntimeSymbol runtime, BinanceKlineUpdate update, CancellationToken token)
+    private async Task ManageOpenTradeAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
     {
         var trade = runtime.OpenTrade!; var direction = trade.Direction;
         // Only live observed prices participate in management; kline highs/lows can predate a reconnect.

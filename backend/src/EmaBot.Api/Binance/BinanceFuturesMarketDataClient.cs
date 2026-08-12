@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
+using EmaBot.Api.Market;
 
 namespace EmaBot.Api.Binance;
 
@@ -32,7 +33,7 @@ public sealed class BinanceFuturesMarketDataClient(HttpClient httpClient, TimePr
     public async Task<IReadOnlyList<Candle>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc, DateTimeOffset? endTimeUtc, int? limit, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(symbol) || !symbol.All(char.IsLetterOrDigit)) throw new ArgumentException("A valid Binance symbol is required.", nameof(symbol));
-        if (!BinanceIntervals.IsSupported(interval)) throw new ArgumentException("Unsupported Binance interval.", nameof(interval));
+        if (!StrategyTimeframes.IsSupported(interval)) throw new ArgumentException("Unsupported Binance interval.", nameof(interval));
         var requestedLimit = limit ?? 300;
         if (requestedLimit is < 1 or > 1500) throw new ArgumentOutOfRangeException(nameof(limit), "Limit must be between 1 and 1500.");
         if (startTimeUtc > endTimeUtc) throw new ArgumentException("Start time must not be after end time.");

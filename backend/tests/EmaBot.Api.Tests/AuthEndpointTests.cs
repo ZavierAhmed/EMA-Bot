@@ -165,8 +165,8 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
             services.RemoveAll<IBinanceFuturesMarketDataClient>();
             services.AddSingleton<IBinanceFuturesMarketDataClient>(BinanceClient);
-            services.RemoveAll<IBinanceFuturesStreamClient>();
-            services.AddSingleton<IBinanceFuturesStreamClient>(StreamClient);
+            services.RemoveAll<IMarketBarStreamProvider>();
+            services.AddSingleton<IMarketBarStreamProvider>(StreamClient);
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));
             services.RemoveAll(typeof(IDbContextOptionsConfiguration<EmaBotDbContext>));
             services.RemoveAll<IHostedService>();

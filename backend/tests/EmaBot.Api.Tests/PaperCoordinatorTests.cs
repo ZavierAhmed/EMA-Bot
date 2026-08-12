@@ -94,7 +94,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         var session = await CreateSession(PaperSessionStatus.Running, openTrade: true);
         await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
         var time = DateTimeOffset.UnixEpoch.AddHours(1);
-        await coordinator.ProcessUpdateForTestAsync(new BinanceKlineUpdate("BTCUSDT", "3m", time, time, time.AddMinutes(3).AddMilliseconds(-1), 100m, 150m, 50m, 101m, 1m, false));
+        await coordinator.ProcessUpdateForTestAsync(new MarketBarUpdate("BTCUSDT", "3m", time, time, time.AddMinutes(3).AddMilliseconds(-1), 100m, 150m, 50m, 101m, 1m, false));
         var trade = coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"].OpenTrade!;
         Assert.Equal(90m, trade.CurrentStopLoss);
         Assert.Equal(1m, trade.MfePrice);
@@ -190,9 +190,9 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         var session = await CreateSession(PaperSessionStatus.Running);
         await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
         var first = DateTimeOffset.UnixEpoch.AddHours(2);
-        await coordinator.ProcessUpdateForTestAsync(new BinanceKlineUpdate("BTCUSDT", "3m", first, first, first.AddMinutes(3).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true));
+        await coordinator.ProcessUpdateForTestAsync(new MarketBarUpdate("BTCUSDT", "3m", first, first, first.AddMinutes(3).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true));
         var afterGap = first.AddMinutes(6);
-        await coordinator.ProcessUpdateForTestAsync(new BinanceKlineUpdate("BTCUSDT", "3m", afterGap, afterGap, afterGap.AddMinutes(3).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true));
+        await coordinator.ProcessUpdateForTestAsync(new MarketBarUpdate("BTCUSDT", "3m", afterGap, afterGap, afterGap.AddMinutes(3).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true));
         Assert.Equal(2, _factory.BinanceClient.KlineRequests);
         Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"].PendingDirection);
         await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
@@ -207,7 +207,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         db.PaperSessions.Add(session); await db.SaveChangesAsync(); return session;
     }
     private async Task<PaperSessionStatus> Status(int id) { using var scope = _factory.Services.CreateScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessions.Where(session => session.Id == id).Select(session => session.Status).SingleAsync(); }
-    private static BinanceKlineUpdate Update(DateTimeOffset open, decimal close) => new("BTCUSDT", "3m", open, open, open.AddMinutes(3).AddMilliseconds(-1), close, close, close, close, 1m, false);
-    private static BinanceKlineUpdate Kline(DateTimeOffset open, decimal candleOpen, decimal close, decimal extreme, bool closed) => new("BTCUSDT", "3m", open, open, open.AddMinutes(3).AddMilliseconds(-1), candleOpen, Math.Max(candleOpen, Math.Max(close, extreme)), Math.Min(candleOpen, Math.Min(close, extreme)), close, 1m, closed);
+    private static MarketBarUpdate Update(DateTimeOffset open, decimal close) => new("BTCUSDT", "3m", open, open, open.AddMinutes(3).AddMilliseconds(-1), close, close, close, close, 1m, false);
+    private static MarketBarUpdate Kline(DateTimeOffset open, decimal candleOpen, decimal close, decimal extreme, bool closed) => new("BTCUSDT", "3m", open, open, open.AddMinutes(3).AddMilliseconds(-1), candleOpen, Math.Max(candleOpen, Math.Max(close, extreme)), Math.Min(candleOpen, Math.Min(close, extreme)), close, 1m, closed);
     private static IReadOnlyList<Candle> TrendingWarmup(SignalDirection direction) => Enumerable.Range(0, 200).Select(index => { var close = direction == SignalDirection.Long ? 100m + index : 500m - index; var open = direction == SignalDirection.Long ? close - .5m : close + .5m; var time = DateTimeOffset.UnixEpoch.AddMinutes(index * 3); return new Candle(time, time.AddMinutes(3).AddMilliseconds(-1), open, Math.Max(open, close) + 1m, Math.Min(open, close) - 1m, close, 1m, true); }).ToArray();
 }

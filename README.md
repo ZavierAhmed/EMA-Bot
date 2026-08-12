@@ -14,6 +14,9 @@ This is a migration target only: it is **not implemented**, Binance components
 remain the current legacy market-data/research infrastructure, and live Exness
 orders are not available. Strategy logic remains in .NET.
 
+Broker-neutral market contracts are now in place; Binance remains the active
+legacy adapter.
+
 See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
 [the strategy origin and kernel lock](docs/strategy-origin.md).
 

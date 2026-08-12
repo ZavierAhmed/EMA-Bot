@@ -1,11 +1,11 @@
-using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using Microsoft.EntityFrameworkCore;
 
 namespace EmaBot.Api.Services;
 
-public sealed class BacktestService(EmaBotDbContext database, IBinanceHistoricalCandleService historical, TradingSettingsService settingsService, BacktestEngine engine)
+public sealed class BacktestService(EmaBotDbContext database, IHistoricalMarketDataProvider historical, TradingSettingsService settingsService, BacktestEngine engine)
 {
     public async Task<BacktestRun> RunAsync(string symbol, string interval, DateTimeOffset start, DateTimeOffset end, CancellationToken token)
     {

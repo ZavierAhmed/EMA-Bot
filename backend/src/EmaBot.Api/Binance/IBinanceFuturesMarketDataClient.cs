@@ -1,3 +1,5 @@
+using EmaBot.Api.Market;
+
 namespace EmaBot.Api.Binance;
 
 public interface IBinanceFuturesMarketDataClient

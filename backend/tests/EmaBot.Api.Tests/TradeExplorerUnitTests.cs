@@ -12,7 +12,7 @@ public sealed class TradeExplorerUnitTests
     public void MonthlyChartArithmetic_UsesCalendarMonths()
     {
         var date = new DateTimeOffset(2026, 1, 31, 0, 0, 0, TimeSpan.Zero);
-        Assert.Equal(new DateTimeOffset(2026, 2, 28, 0, 0, 0, TimeSpan.Zero), BinanceIntervalMath.Shift(date, "1M", 1));
+        Assert.Equal(new DateTimeOffset(2026, 2, 28, 0, 0, 0, TimeSpan.Zero), StrategyTimeframes.Shift(date, "1M", 1));
     }
 
     [Fact]

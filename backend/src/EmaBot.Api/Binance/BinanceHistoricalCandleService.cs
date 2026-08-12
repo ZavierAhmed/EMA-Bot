@@ -1,8 +1,8 @@
+using EmaBot.Api.Market;
+
 namespace EmaBot.Api.Binance;
 
-public interface IBinanceHistoricalCandleService { Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken); }
-
-public sealed class BinanceHistoricalCandleService(IBinanceFuturesMarketDataClient client) : IBinanceHistoricalCandleService
+public sealed class BinanceHistoricalCandleService(IBinanceFuturesMarketDataClient client) : IHistoricalMarketDataProvider
 {
     public const int MaximumCandles = 200_000;
     public async Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken)
@@ -22,5 +22,14 @@ public sealed class BinanceHistoricalCandleService(IBinanceFuturesMarketDataClie
             cursor = next;
         }
         return all.Values.ToArray();
+    }
+
+    public async Task<IReadOnlyList<Candle>> GetLatestAsync(string symbol, string timeframe, int count, CancellationToken cancellationToken)
+    {
+        if (count is < 1 or > 1500) throw new ArgumentOutOfRangeException(nameof(count), "Count must be between 1 and 1500.");
+        return (await client.GetKlinesAsync(symbol, timeframe, null, null, count, cancellationToken))
+            .Where(candle => candle.IsClosed)
+            .OrderBy(candle => candle.OpenTimeUtc)
+            .ToArray();
     }
 }

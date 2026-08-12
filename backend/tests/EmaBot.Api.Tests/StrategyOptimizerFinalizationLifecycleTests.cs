@@ -144,19 +144,19 @@ public sealed class StrategyOptimizerFinalizationLifecycleTests
         public async Task<StrategyOptimizationRun> AddRunAsync(StrategyOptimizationStatus status) { await using var db = new EmaBotDbContext(options); var run = new StrategyOptimizationRun { Status = status, CreatedAtUtc = new DateTimeOffset(2026, 8, 12, 0, 0, 0, TimeSpan.Zero) }; db.StrategyOptimizationRuns.Add(run); await db.SaveChangesAsync(); return run; }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-    private sealed class TestScopeFactory(DbContextOptions<EmaBotDbContext> options, IBinanceHistoricalCandleService historical) : IServiceScopeFactory
+    private sealed class TestScopeFactory(DbContextOptions<EmaBotDbContext> options, IHistoricalMarketDataProvider historical) : IServiceScopeFactory
     {
         public IServiceScope CreateScope() => new TestScope(options, historical);
         private sealed class TestScope : IServiceScope, IServiceProvider
         {
             private readonly EmaBotDbContext database;
-            private readonly IBinanceHistoricalCandleService historical;
-            public TestScope(DbContextOptions<EmaBotDbContext> options, IBinanceHistoricalCandleService historical) { database = new EmaBotDbContext(options); this.historical = historical; }
+            private readonly IHistoricalMarketDataProvider historical;
+            public TestScope(DbContextOptions<EmaBotDbContext> options, IHistoricalMarketDataProvider historical) { database = new EmaBotDbContext(options); this.historical = historical; }
             public IServiceProvider ServiceProvider => this;
-            public object? GetService(Type serviceType) => serviceType == typeof(EmaBotDbContext) ? database : serviceType == typeof(IBinanceHistoricalCandleService) ? historical : null;
+            public object? GetService(Type serviceType) => serviceType == typeof(EmaBotDbContext) ? database : serviceType == typeof(IHistoricalMarketDataProvider) ? historical : null;
             public void Dispose() => database.Dispose();
         }
     }
-    private sealed class StaticHistorical(IReadOnlyList<Candle> candles) : IBinanceHistoricalCandleService { public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken) => Task.FromResult(candles); }
+    private sealed class StaticHistorical(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider { public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken) => Task.FromResult(candles); }
     private sealed class FixedClock : TimeProvider { public override DateTimeOffset GetUtcNow() => new(2026, 8, 12, 12, 0, 0, TimeSpan.Zero); }
 }

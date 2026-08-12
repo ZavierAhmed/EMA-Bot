@@ -2,6 +2,7 @@ using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Configuration;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Identity;
@@ -88,8 +89,8 @@ builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMa
     client.Timeout = TimeSpan.FromSeconds(30);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
 });
-builder.Services.AddScoped<IBinanceHistoricalCandleService, BinanceHistoricalCandleService>();
-builder.Services.AddSingleton<IBinanceFuturesStreamClient, BinanceFuturesStreamClient>();
+builder.Services.AddSingleton<IHistoricalMarketDataProvider, BinanceHistoricalCandleService>();
+builder.Services.AddSingleton<IMarketBarStreamProvider, BinanceFuturesStreamClient>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

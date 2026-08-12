@@ -2,26 +2,22 @@ using System.Globalization;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using EmaBot.Api.Market;
 
 namespace EmaBot.Api.Binance;
 
 public sealed record BinanceKlineUpdate(string Symbol, string Interval, DateTimeOffset EventTimeUtc, DateTimeOffset OpenTimeUtc, DateTimeOffset CloseTimeUtc, decimal Open, decimal High, decimal Low, decimal Close, decimal Volume, bool IsClosed);
 
-public interface IBinanceFuturesStreamClient
-{
-    Task StreamAsync(IReadOnlyCollection<string> symbols, string interval, Func<BinanceKlineUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken);
-}
-
-public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClient> logger) : IBinanceFuturesStreamClient
+public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClient> logger) : IMarketBarStreamProvider
 {
     private static readonly Uri Endpoint = new("wss://fstream.binance.com/market/stream");
     private static readonly TimeSpan[] ReconnectDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30)];
     internal static readonly TimeSpan MarketDataSilenceTimeout = TimeSpan.FromSeconds(5);
 
-    public async Task StreamAsync(IReadOnlyCollection<string> symbols, string interval, Func<BinanceKlineUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
+    public async Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
     {
-        if (symbols.Count == 0 || !BinanceIntervals.IsSupported(interval)) throw new ArgumentException("A supported interval and at least one symbol are required.");
-        var streams = symbols.Select(symbol => $"{symbol.ToLowerInvariant()}@kline_{interval}").ToArray();
+        if (symbols.Count == 0 || !StrategyTimeframes.IsSupported(timeframe)) throw new ArgumentException("A supported interval and at least one symbol are required.");
+        var streams = symbols.Select(symbol => $"{symbol.ToLowerInvariant()}@kline_{timeframe}").ToArray();
         var attempt = 0;
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -44,7 +40,7 @@ public sealed class BinanceFuturesStreamClient(ILogger<BinanceFuturesStreamClien
                     if (result.MessageType == WebSocketMessageType.Close) break;
                     if (result.MessageType != WebSocketMessageType.Text) continue;
                     var payload = Encoding.UTF8.GetString(message.ToArray());
-                    if (BinanceKlineParser.TryParse(payload, out var update)) { liveness.Observe(DateTimeOffset.UtcNow); attempt = 0; onStateChange?.Invoke("Connected"); await onUpdate(update, cancellationToken); }
+                    if (BinanceKlineParser.TryParse(payload, out var update)) { liveness.Observe(DateTimeOffset.UtcNow); attempt = 0; onStateChange?.Invoke("Connected"); await onUpdate(update.ToMarketBarUpdate(), cancellationToken); }
                     else if (BinanceKlineParser.IsSubscriptionAcknowledgement(payload)) { onStateChange?.Invoke("Connected"); }
                     else if (BinanceKlineParser.TryGetSubscriptionError(payload, out var error)) { onStateChange?.Invoke("Degraded"); logger.LogWarning("Binance rejected the market-stream subscription: {Message}", error); }
                     else logger.LogWarning("Skipped malformed Binance kline stream message.");
@@ -83,7 +79,7 @@ public static class BinanceKlineParser
             if (root.TryGetProperty("data", out var combined)) root = combined;
             if (!root.TryGetProperty("e", out var eventType) || eventType.GetString() != "kline" || !root.TryGetProperty("k", out var kline)) return false;
             var symbol = String(root, "s"); var interval = String(kline, "i");
-            if (!BinanceIntervals.IsSupported(interval)) return false;
+            if (!StrategyTimeframes.IsSupported(interval)) return false;
             update = new BinanceKlineUpdate(symbol.ToUpperInvariant(), interval, Timestamp(root, "E"), Timestamp(kline, "t"), Timestamp(kline, "T"), Decimal(kline, "o"), Decimal(kline, "h"), Decimal(kline, "l"), Decimal(kline, "c"), Decimal(kline, "v"), kline.GetProperty("x").GetBoolean());
             return true;
         }
@@ -110,4 +106,9 @@ public static class BinanceKlineParser
     private static string String(JsonElement element, string property) => element.GetProperty(property).GetString() is { Length: > 0 } value ? value : throw new FormatException();
     private static DateTimeOffset Timestamp(JsonElement element, string property) => DateTimeOffset.FromUnixTimeMilliseconds(element.GetProperty(property).GetInt64());
     private static decimal Decimal(JsonElement element, string property) => decimal.Parse(String(element, property), NumberStyles.Number, CultureInfo.InvariantCulture);
+}
+
+public static class BinanceKlineUpdateExtensions
+{
+    public static MarketBarUpdate ToMarketBarUpdate(this BinanceKlineUpdate update) => new(update.Symbol, update.Interval, update.EventTimeUtc, update.OpenTimeUtc, update.CloseTimeUtc, update.Open, update.High, update.Low, update.Close, update.Volume, update.IsClosed);
 }
