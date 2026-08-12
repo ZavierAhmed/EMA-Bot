@@ -43,6 +43,7 @@ public sealed class StrategyOptimizationCandidate
     public decimal MaxStopDistancePercent { get; set; }
     public bool WaitForConfirmationCandle { get; set; }
     public bool UseEma100Filter { get; set; }
+    public bool UseHtfRegimeFilter { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public bool IsBaseline { get; set; }
     public bool RobustCandidate { get; set; }
@@ -103,5 +104,5 @@ public sealed class OptimizationMetrics
     public decimal MaxDrawdownUsdt { get; set; } public decimal MaxDrawdownPercent { get; set; } public decimal AverageNetPnl { get; set; } public decimal AverageNetR { get; set; } public decimal MedianHoldingMinutes { get; set; } public decimal MaximumHoldingMinutes { get; set; }
     public decimal LongNetPnl { get; set; } public decimal ShortNetPnl { get; set; } public int ReentryTrades { get; set; } public decimal ReentryNetPnl { get; set; }
     public decimal MedianExpectedNetTargetR { get; set; } public decimal MinimumExpectedNetTargetR { get; set; } public decimal AverageExpectedNetTargetR { get; set; }
-    public int TotalCrossovers { get; set; } public int LongSignals { get; set; } public int ShortSignals { get; set; } public int ConfirmationFailed { get; set; } public int RejectedByEma100 { get; set; } public int RejectedByEmaGap { get; set; } public int RejectedByStopDistance { get; set; } public int RejectedByFees { get; set; } public int InvalidStopLoss { get; set; } public int SkippedWhilePositionOpen { get; set; } public int NoEntryCandle { get; set; }
+    public int TotalCrossovers { get; set; } public int LongSignals { get; set; } public int ShortSignals { get; set; } public int ConfirmationFailed { get; set; } public int RejectedByEma100 { get; set; } public int RejectedByEmaGap { get; set; } public int RejectedByHtfRegime { get; set; } public int RejectedByStopDistance { get; set; } public int RejectedByFees { get; set; } public int InvalidStopLoss { get; set; } public int SkippedWhilePositionOpen { get; set; } public int NoEntryCandle { get; set; }
 }

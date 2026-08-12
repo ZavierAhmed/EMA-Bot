@@ -31,6 +31,7 @@ public sealed class BacktestRun
     public decimal Leverage { get; set; }
     public bool WaitForConfirmationCandle { get; set; }
     public bool UseEma100Filter { get; set; }
+    public bool UseHtfRegimeFilter { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public decimal FeePercentPerSide { get; set; }
     public int TotalTrades { get; set; }
@@ -52,6 +53,7 @@ public sealed class BacktestRun
     public int ShortSignals { get; set; }
     public int RejectedByEma100 { get; set; }
     public int RejectedByEmaGap { get; set; }
+    public int RejectedByHtfRegime { get; set; }
     public int RejectedByStopDistance { get; set; }
     public int RejectedByFees { get; set; }
     public int ConfirmationFailed { get; set; }
@@ -109,6 +111,10 @@ public sealed class BacktestTrade
     public decimal? SignalEma15 { get; set; }
     public decimal? SignalEma100 { get; set; }
     public decimal? SignalGapPercent { get; set; }
+    public string? HtfTimeframe { get; set; }
+    public DateTimeOffset? SignalHtfCandleCloseTimeUtc { get; set; }
+    public decimal? SignalHtfEma100Slope20Percent { get; set; }
+    public decimal? SignalHtfAtr14Percent { get; set; }
     public GapState SignalGapState { get; set; }
     public bool IsReentry { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }

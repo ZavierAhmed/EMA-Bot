@@ -43,7 +43,9 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
         var requestedSymbols = symbols.ToHashSet(StringComparer.Ordinal);
         var monitored = enabledMonitored.Where(symbol => requestedSymbols.Contains(symbol.Symbol)).ToList();
         if (monitored.Count != symbols.Length) return BadRequest(new ApiMessage("Every selected symbol must be monitored and enabled."));
-        var settings = await settingsService.GetAsync(token); var now = DateTimeOffset.UtcNow;
+        var settings = await settingsService.GetAsync(token);
+        if (settings.UseHtfRegimeFilter) return BadRequest(new ApiMessage("HTF Regime Filter is currently supported for historical backtesting only."));
+        var now = DateTimeOffset.UtcNow;
         var session = new PaperSession { Interval = request.Interval, Status = PaperSessionStatus.Running, CreatedAtUtc = now, StartedAtUtc = now, RiskReward = settings.RiskReward, FixedOrderSizeUsdt = settings.FixedOrderSizeUsdt, MinEmaGapPercent = settings.MinEmaGapPercent, MaxStopDistancePercent = settings.MaxStopDistancePercent, PositionSizingMode = settings.PositionSizingMode, StartingBalanceUsdt = settings.SimulatedAccountBalanceUsdt, CurrentBalanceUsdt = settings.SimulatedAccountBalanceUsdt, MarginPerTradePercent = settings.MarginPerTradePercent, Leverage = settings.Leverage, WaitForConfirmationCandle = settings.WaitForConfirmationCandle, UseEma100Filter = settings.UseEma100Filter, TrailingStopEnabled = settings.TrailingStopEnabled, FeePercentPerSide = settings.FeePercentPerSide, Symbols = monitored.Select(symbol => new PaperSessionSymbol { Symbol = symbol.Symbol }).ToList() };
         database.PaperSessions.Add(session); await database.SaveChangesAsync(token);
         try { await coordinator.StartSessionAsync(session.Id, false, token); }

@@ -11,7 +11,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace EmaBot.Api.Services;
 
-public sealed record HigherTimeframeDiagnostic(string? Timeframe, DateTimeOffset? CandleCloseTimeUtc, decimal? AgeMinutes, decimal? Close, decimal? Ema9, decimal? Ema15, decimal? Ema100, decimal? EmaGapPercent, decimal? Ema9Slope5Percent, decimal? Ema15Slope5Percent, decimal? Ema100Slope5Percent, decimal? Ema100Slope20Percent, decimal? DistanceFromEma100Percent, decimal? PriceReturn20Percent, decimal? Atr14Percent, decimal? TrendEfficiency20, string? FastTrend, bool? FastTrendAligned, bool? PriceVsEma100Aligned, bool? Ema100Slope5Aligned, bool? Ema100Slope20Aligned, bool? FullTrendAligned);
 public sealed record RegimeTradeDiagnostic(string Symbol, string Timeframe, BacktestTrade Trade, decimal? Ema9Slope5Percent, decimal? Ema15Slope5Percent, decimal? Ema100Slope5Percent, decimal? Ema100Slope20Percent, decimal? DistanceFromEma100Percent, decimal? PriceReturn20Percent, decimal? Atr14Percent, decimal? TrendEfficiency20, bool? Ema100Slope5Aligned, bool? Ema100Slope20Aligned, bool? PriceVsEma100Aligned, HigherTimeframeDiagnostic HigherTimeframe);
 public sealed record RegimeExportData(StrategyOptimizationRun Run, StrategyOptimizationCandidate Candidate, IReadOnlyList<RegimeTradeDiagnostic> Trades);
 
@@ -28,7 +27,7 @@ public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, I
         {
             token.ThrowIfCancellationRequested(); var fetch = Stopwatch.StartNew(); var candles = await CandlesAsync(symbol, frame, run, cache, token);
             var htf = HigherTimeframe(frame); var htfCandles = htf is null ? null : await CandlesAsync(symbol, htf, run, cache, token); fetch.Stop(); fetchDuration += fetch.Elapsed;
-            var diagnostics = Stopwatch.StartNew(); var calculation = engine.RunResearch(candles, settings, run.RequestedStartUtc, run.RequestedEndUtc); result.AddRange(Describe(symbol, frame, candles, calculation.Trades, htf, htfCandles)); diagnostics.Stop(); diagnosticDuration += diagnostics.Elapsed;
+            var diagnostics = Stopwatch.StartNew(); var context = settings.UseHtfRegimeFilter ? new StrategyMarketContext(candles, htf, htfCandles) : null; var calculation = engine.RunResearch(candles, settings, run.RequestedStartUtc, run.RequestedEndUtc, context); result.AddRange(Describe(symbol, frame, candles, calculation.Trades, htf, htfCandles)); diagnostics.Stop(); diagnosticDuration += diagnostics.Elapsed;
         }
         var uniqueHtfMarkets = symbols.SelectMany(symbol => frames.Select(frame => (Symbol: symbol, Frame: HigherTimeframe(frame)))).Where(value => value.Frame is not null).Distinct().Count();
         logger?.LogInformation("Regime diagnostics run {RunId}, candidate {CandidateId}: {ExecutionMarkets} execution markets, {UniqueHtfMarkets} unique HTF markets, candle fetch {FetchDuration}, diagnostics {DiagnosticDuration}, {TradeCount} trades.", runId, candidateId, symbols.Length * frames.Length, uniqueHtfMarkets, fetchDuration, diagnosticDuration, result.Count);
@@ -41,7 +40,7 @@ public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, I
         values = (await historical.GetRangeAsync(symbol, frame, run.RequestedStartUtc - Warmup(frame), run.RequestedEndUtc, token)).Where(candle => candle.IsClosed).OrderBy(candle => candle.CloseTimeUtc).ToArray(); cache[(symbol, frame)] = values; return values;
     }
 
-    public static string? HigherTimeframe(string timeframe) => timeframe switch { "3m" => "15m", "5m" => "30m", "15m" => "1h", "30m" => "2h", "1h" => "4h", _ => null };
+    public static string? HigherTimeframe(string timeframe) => HigherTimeframeRegime.ForExecutionTimeframe(timeframe);
 
     public static IReadOnlyList<RegimeTradeDiagnostic> Describe(string symbol, string timeframe, IReadOnlyList<Candle> input, IEnumerable<BacktestTrade> trades, string? htfTimeframe = null, IReadOnlyList<Candle>? htfInput = null)
     {
@@ -49,14 +48,7 @@ public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, I
         return trades.Select(trade => { var index = Array.FindIndex(candles, candle => candle.CloseTimeUtc == trade.SignalTimeUtc); return new RegimeTradeDiagnostic(symbol, timeframe, trade, Slope(ema9,index,5), Slope(ema15,index,5), Slope(ema100,index,5), Slope(ema100,index,20), Percent(trade.SignalClose, ema100.ElementAtOrDefault(index)), Return(closes,index,20), Atr(candles,index), Efficiency(closes,index), Align(Slope(ema100,index,5),trade.Direction), Align(Slope(ema100,index,20),trade.Direction), AlignPrice(trade.SignalClose,ema100.ElementAtOrDefault(index),trade.Direction), DescribeHigherTimeframe(trade, htfTimeframe, htfInput)); }).ToArray();
     }
 
-    public static HigherTimeframeDiagnostic DescribeHigherTimeframe(BacktestTrade trade, string? timeframe, IReadOnlyList<Candle>? input)
-    {
-        if (timeframe is null || input is null) return new(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
-        var candles = input.Where(candle => candle.IsClosed).OrderBy(candle => candle.CloseTimeUtc).ToArray(); var index = Array.FindLastIndex(candles, candle => candle.CloseTimeUtc <= trade.SignalTimeUtc);
-        if (index < 0) return new(timeframe, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
-        var closes = candles.Select(candle => candle.Close).ToArray(); var ema9 = EmaCalculator.Calculate(closes, 9); var ema15 = EmaCalculator.Calculate(closes, 15); var ema100 = EmaCalculator.Calculate(closes, 100); var fast = ema9[index].HasValue && ema15[index].HasValue ? ema9[index] > ema15[index] ? "Bullish" : ema9[index] < ema15[index] ? "Bearish" : "Flat" : null; var s5 = Slope(ema100,index,5); var s20 = Slope(ema100,index,20); bool? fastAligned = ema9[index].HasValue && ema15[index].HasValue ? AlignFast(ema9[index]!.Value, ema15[index]!.Value, trade.Direction) : null; var priceAligned = AlignPrice(candles[index].Close, ema100[index], trade.Direction); bool? full = fastAligned.HasValue && priceAligned.HasValue && s20.HasValue ? fastAligned.Value && priceAligned.Value && Align(s20, trade.Direction) == true : null;
-        return new(timeframe, candles[index].CloseTimeUtc, (decimal)(trade.SignalTimeUtc-candles[index].CloseTimeUtc).TotalMinutes, candles[index].Close, ema9[index], ema15[index], ema100[index], ema9[index].HasValue && ema15[index].HasValue && candles[index].Close != 0 ? decimal.Abs(ema9[index]!.Value-ema15[index]!.Value)/candles[index].Close*100m : null, Slope(ema9,index,5), Slope(ema15,index,5), s5, s20, Percent(candles[index].Close,ema100[index]), Return(closes,index,20), Atr(candles,index), Efficiency(closes,index), fast, fastAligned, priceAligned, Align(s5,trade.Direction), Align(s20,trade.Direction), full);
-    }
+    public static HigherTimeframeDiagnostic DescribeHigherTimeframe(BacktestTrade trade, string? timeframe, IReadOnlyList<Candle>? input) => HigherTimeframeRegime.Calculate(trade.SignalTimeUtc, trade.Direction, timeframe, input);
 
     private static decimal? Slope(IReadOnlyList<decimal?> values, int index, int bars) => index < bars || !values.ElementAtOrDefault(index).HasValue || !values[index-bars].HasValue || values[index-bars] == 0 ? null : (values[index]!.Value-values[index-bars]!.Value)/values[index-bars]!.Value*100m;
     private static decimal? Percent(decimal value, decimal? baseValue) => !baseValue.HasValue || baseValue == 0 ? null : (value-baseValue.Value)/baseValue.Value*100m;
@@ -67,7 +59,7 @@ public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, I
     private static bool AlignFast(decimal ema9, decimal ema15, SignalDirection direction) => direction == SignalDirection.Long ? ema9 > ema15 : ema9 < ema15;
     private static bool? AlignPrice(decimal close, decimal? ema, SignalDirection direction) => !ema.HasValue ? null : direction == SignalDirection.Long ? close > ema : close < ema;
     private static TimeSpan Warmup(string frame) => frame switch { "3m"=>TimeSpan.FromMinutes(600),"5m"=>TimeSpan.FromMinutes(1000),"15m"=>TimeSpan.FromMinutes(3000),"30m"=>TimeSpan.FromMinutes(6000),"1h"=>TimeSpan.FromHours(200),"2h"=>TimeSpan.FromHours(400),"4h"=>TimeSpan.FromHours(800),"6h"=>TimeSpan.FromHours(1200),"8h"=>TimeSpan.FromHours(1600),"12h"=>TimeSpan.FromHours(2400),"1d"=>TimeSpan.FromDays(200),"3d"=>TimeSpan.FromDays(600),"1w"=>TimeSpan.FromDays(1400),_=>TimeSpan.FromDays(6200) };
-    private static TradingSettings Settings(StrategyOptimizationCandidate candidate, StrategyOptimizationRun run) => new(){Id=1,RiskReward=candidate.RiskReward,MinEmaGapPercent=candidate.MinEmaGapPercent,MaxStopDistancePercent=candidate.MaxStopDistancePercent,WaitForConfirmationCandle=candidate.WaitForConfirmationCandle,UseEma100Filter=candidate.UseEma100Filter,TrailingStopEnabled=candidate.TrailingStopEnabled,SimulatedAccountBalanceUsdt=run.SimulatedAccountBalanceUsdt,FixedOrderSizeUsdt=run.FixedOrderSizeUsdt,MarginPerTradePercent=run.MarginPerTradePercent,Leverage=run.Leverage,FeePercentPerSide=run.FeePercentPerSide,PositionSizingMode=run.PositionSizingMode};
+    private static TradingSettings Settings(StrategyOptimizationCandidate candidate, StrategyOptimizationRun run) => new(){Id=1,RiskReward=candidate.RiskReward,MinEmaGapPercent=candidate.MinEmaGapPercent,MaxStopDistancePercent=candidate.MaxStopDistancePercent,WaitForConfirmationCandle=candidate.WaitForConfirmationCandle,UseEma100Filter=candidate.UseEma100Filter,UseHtfRegimeFilter=candidate.UseHtfRegimeFilter,TrailingStopEnabled=candidate.TrailingStopEnabled,SimulatedAccountBalanceUsdt=run.SimulatedAccountBalanceUsdt,FixedOrderSizeUsdt=run.FixedOrderSizeUsdt,MarginPerTradePercent=run.MarginPerTradePercent,Leverage=run.Leverage,FeePercentPerSide=run.FeePercentPerSide,PositionSizingMode=run.PositionSizingMode};
 }
 
 public static class StrategyRegimeWorkbook
