@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
-import { getHealth, type HealthStatus } from '../api'
+import { getHealth, getMarketProviderCapabilities, type HealthStatus, type MarketProviderCapabilities } from '../api'
 
 export function DashboardPage() {
   const [health, setHealth] = useState<HealthStatus | null>(null)
+  const [capabilities, setCapabilities] = useState<MarketProviderCapabilities | null>(null)
 
   useEffect(() => {
     void getHealth().then(setHealth).catch(() => setHealth({ api: 'unavailable', database: 'unavailable' }))
+    void getMarketProviderCapabilities().then(setCapabilities).catch(() => setCapabilities(null))
   }, [])
 
   return (
@@ -14,10 +16,13 @@ export function DashboardPage() {
       <h1 className="mt-2 text-3xl font-semibold tracking-tight">EMA-Bot</h1>
       <p className="mt-3 max-w-xl text-slate-600">EMA crossover research and trading system with backtesting, paper simulation, and trade analysis.</p>
       <dl className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        <StatusCard label="Historical research data" value="Legacy Binance" />
-        <StatusCard label="Live market-data provider" value="Not configured" />
-        <StatusCard label="Execution broker" value="Not configured" />
-        <StatusCard label="Target" value="MT5 / Exness" />
+        <StatusCard label="Historical research" value={capabilities?.historicalProvider ?? 'Checking…'} />
+        <StatusCard label="Target terminal" value={capabilities?.targetTerminal ?? 'Checking…'} />
+        <StatusCard label="Target broker" value={capabilities?.targetBroker ?? 'Checking…'} />
+        <StatusCard label="Instrument catalog" value={capabilities?.instrumentCatalogConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking…'} />
+        <StatusCard label="Quotes" value={capabilities?.quoteProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking…'} />
+        <StatusCard label="Live market data" value={capabilities?.liveBarProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking…'} />
+        <StatusCard label="Execution" value={capabilities?.executionProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking…'} />
         <StatusCard label="API status" value={health?.api ?? 'Checking…'} />
         <StatusCard label="Database status" value={health?.database ?? 'Checking…'} />
       </dl>

@@ -4,6 +4,7 @@ using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Services;
 using Microsoft.AspNetCore.DataProtection;
@@ -110,11 +111,13 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         }
         using var scope = _factory.Services.CreateScope();
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider());
+        var before = await database.PaperSessions.CountAsync();
+        var symbolsBefore = await database.PaperSessionSymbols.CountAsync();
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new TestBinanceStreamClient(), TestMarketProviderCapabilities.WithLiveBars(false));
         var response = await controller.Start(new StartPaperSessionRequest("3m", ["BTCUSDT", "ETHUSDT"]), CancellationToken.None);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsType<ObjectResult>(response.Result).StatusCode);
-        Assert.Equal(0, await database.PaperSessions.CountAsync());
-        Assert.Equal(0, await database.PaperSessionSymbols.CountAsync());
+        Assert.Equal(before, await database.PaperSessions.CountAsync());
+        Assert.Equal(symbolsBefore, await database.PaperSessionSymbols.CountAsync());
     }
 
     [Fact]
@@ -124,12 +127,26 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var session = new PaperSession { Interval = "3m", Status = PaperSessionStatus.Interrupted, StartedAtUtc = DateTimeOffset.UtcNow, CreatedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m };
         database.PaperSessions.Add(session); await database.SaveChangesAsync();
-        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider());
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new TestBinanceStreamClient(), TestMarketProviderCapabilities.WithLiveBars(false));
 
         var response = await controller.Resume(session.Id, CancellationToken.None);
 
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsType<ObjectResult>(response).StatusCode);
         Assert.Equal(PaperSessionStatus.Interrupted, (await database.PaperSessions.FindAsync(session.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task PaperSessionStart_DoesNotTrustCapabilityWithoutAConfiguredStream()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var before = await database.PaperSessions.CountAsync();
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider(), TestMarketProviderCapabilities.WithLiveBars(true));
+
+        var response = await controller.Start(new StartPaperSessionRequest("3m", ["BTCUSDT"]), CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsType<ObjectResult>(response.Result).StatusCode);
+        Assert.Equal(before, await database.PaperSessions.CountAsync());
     }
 
     [Fact]

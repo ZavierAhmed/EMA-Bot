@@ -91,6 +91,9 @@ builder.Services.AddHttpClient<IBinanceHistoricalKlineClient, BinanceHistoricalK
 });
 builder.Services.AddSingleton<IHistoricalMarketDataProvider, BinanceHistoricalMarketDataProvider>();
 builder.Services.AddSingleton<IMarketBarStreamProvider, UnavailableMarketBarStreamProvider>();
+builder.Services.AddSingleton<IInstrumentCatalogProvider, UnavailableInstrumentCatalogProvider>();
+builder.Services.AddSingleton<IMarketQuoteProvider, UnavailableMarketQuoteProvider>();
+builder.Services.AddSingleton<IMarketProviderCapabilities, MarketProviderCapabilityService>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

@@ -30,6 +30,7 @@ public sealed record MarketBarUpdate(
 
 public interface IMarketBarStreamProvider
 {
+    bool IsConfigured => true;
     Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken);
 }
 
@@ -37,6 +38,7 @@ public sealed class UnavailableMarketBarStreamProvider : IMarketBarStreamProvide
 {
     public const string Message = "Live market-bar streaming is unavailable until the MT5 provider is configured.";
 
+    public bool IsConfigured => false;
     public Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
         => Task.FromException(new NotSupportedException(Message));
 }

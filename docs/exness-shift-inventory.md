@@ -20,6 +20,17 @@ sizing and percentage fee behavior by default. Bid/Ask execution, spread,
 swap, slippage, account-currency conversion, MT5 margin validation, and broker
 instrument specifications remain deferred until a provider supplies real data.
 
+## Phase E5 completed
+
+The application now defines neutral instrument-catalog, quote-provider, and
+provider-capability contracts, plus MT5-native timeframe capability metadata.
+Legacy Binance history remains the only configured research source; there is no
+MT5 connection, catalog, quote feed, live bar feed, or execution provider.
+EMA-Bot's canonical `3d` timeframe remains supported, while MT5 does not
+natively support it; no three-day aggregation is implemented. Named Pipe,
+MQL5 bridge, actual MT5 catalog/quotes, execution, commission discovery, swap,
+and account data remain deferred.
+
 ## Scope and branch safety
 
 This is an architecture and dependency inventory only.  It was prepared on

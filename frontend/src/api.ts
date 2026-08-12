@@ -9,6 +9,8 @@ export type HealthStatus = {
   database: string
 }
 
+export type MarketProviderCapabilities = { historicalProvider: string; historicalResearchConfigured: boolean; targetTerminal: string; targetBroker: string; instrumentCatalogConfigured: boolean; quoteProviderConfigured: boolean; liveBarProviderConfigured: boolean; executionProviderConfigured: boolean; nativeTargetTimeframes: string[] }
+
 export type MonitoredSymbol = { id: number; symbol: string; baseAsset: string; quoteAsset: string; isEnabled: boolean }
 export type PositionSizingMode = 'FixedNotional' | 'MarginPercent'
 export type TradingSettings = { riskReward: number; fixedOrderSizeUsdt: number; minEmaGapPercent: number; maxStopDistancePercent: number; positionSizingMode: PositionSizingMode; simulatedAccountBalanceUsdt: number; marginPerTradePercent: number; leverage: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; useHtfRegimeFilter: boolean; trailingStopEnabled: boolean; feePercentPerSide: number; updatedAtUtc: string }
@@ -78,6 +80,8 @@ export async function logout(): Promise<void> {
 export async function getHealth(): Promise<HealthStatus> {
   return request<HealthStatus>('/api/health')
 }
+
+export const getMarketProviderCapabilities = () => request<MarketProviderCapabilities>('/api/market/provider-capabilities')
 
 async function protectedRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
   const token = await antiforgeryToken()

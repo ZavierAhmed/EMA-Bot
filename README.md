@@ -23,6 +23,8 @@ discovery are unavailable until the MT5/Exness adapters are implemented.
 Broker-neutral lot-volume and commission calculation foundations are available,
 but the current application continues to use legacy percentage-fee/notional sizing by default.
 
+MT5 catalog, quote, and provider-capability contracts are defined, but no MT5 provider is connected.
+
 See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
 [the strategy origin and kernel lock](docs/strategy-origin.md).
 

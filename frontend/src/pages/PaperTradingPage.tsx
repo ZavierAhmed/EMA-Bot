@@ -1,16 +1,16 @@
 import { useEffect, useState } from 'react'
-import { getActivePaperSession, getPaperSessions, stopPaperSession, type PaperSession, type PaperSessionSummary, type PaperTrade } from '../api'
+import { getActivePaperSession, getMarketProviderCapabilities, getPaperSessions, stopPaperSession, type MarketProviderCapabilities, type PaperSession, type PaperSessionSummary, type PaperTrade } from '../api'
 
 const price = (value: number | null | undefined) => value === null || value === undefined ? '-' : value.toFixed(4)
 const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '-'
 
 export function PaperTradingPage() {
-  const [active, setActive] = useState<PaperSession | null>(null); const [history, setHistory] = useState<PaperSessionSummary[]>([]); const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false)
-  async function refresh() { setHistory(await getPaperSessions()); try { setActive(await getActivePaperSession()) } catch { setActive(null) } }
+  const [active, setActive] = useState<PaperSession | null>(null); const [history, setHistory] = useState<PaperSessionSummary[]>([]); const [capabilities, setCapabilities] = useState<MarketProviderCapabilities | null>(null); const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false)
+  async function refresh() { const [sessions, providerCapabilities] = await Promise.all([getPaperSessions(), getMarketProviderCapabilities()]); setHistory(sessions); setCapabilities(providerCapabilities); try { setActive(await getActivePaperSession()) } catch { setActive(null) } }
   useEffect(() => { void refresh().catch(e => setError(e instanceof Error ? e.message : 'Could not load paper trading.')) }, [])
   async function stop() { if (!active || busy) return; setBusy(true); setError(null); try { await stopPaperSession(active.id); await refresh() } catch (e) { setError(e instanceof Error ? e.message : 'Could not stop the session.') } finally { setBusy(false) } }
   if (active) return <Active session={active} busy={busy} onStop={stop} error={error} />
-  return <div className="space-y-8" aria-busy={busy}><div><p className="text-sm font-medium text-slate-500">Simulation</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">Paper Trading</h1><p className="mt-2 text-slate-600">Historical paper records remain available for review.</p></div><section className="rounded-lg border border-amber-200 bg-amber-50 p-6"><h2 className="font-semibold text-amber-950">Live Paper is temporarily unavailable until the MT5 market-data adapter is connected.</h2><p className="mt-2 text-sm text-amber-900">Starting and resuming Paper sessions are disabled during this migration. Existing session history and trade reports remain available.</p></section>{error && <p className="text-sm text-red-700">{error}</p>}<History rows={history}/></div>
+  return <div className="space-y-8" aria-busy={busy}><div><p className="text-sm font-medium text-slate-500">Simulation</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">Paper Trading</h1><p className="mt-2 text-slate-600">Historical paper records remain available for review.</p></div><section className="rounded-lg border border-amber-200 bg-amber-50 p-6"><h2 className="font-semibold text-amber-950">Live Paper is temporarily unavailable until the MT5 market-data adapter is connected.</h2><p className="mt-2 text-sm text-amber-900">Live market data: {capabilities?.liveBarProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking…'}. Starting and resuming Paper sessions remain disabled during this migration.</p></section>{error && <p className="text-sm text-red-700">{error}</p>}<History rows={history}/></div>
 }
 
 function Active({ session, busy, onStop, error }: { session: PaperSession; busy: boolean; onStop: () => Promise<void>; error: string | null }) {

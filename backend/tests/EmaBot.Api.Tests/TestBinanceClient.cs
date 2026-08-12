@@ -25,3 +25,9 @@ public sealed class TestBinanceStreamClient : IMarketBarStreamProvider
         await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
     }
 }
+
+public sealed class TestMarketProviderCapabilities(MarketProviderCapabilities current) : IMarketProviderCapabilities
+{
+    public MarketProviderCapabilities Current { get; } = current;
+    public static TestMarketProviderCapabilities WithLiveBars(bool configured) => new(new MarketProviderCapabilities("Legacy Binance", true, "MetaTrader 5", "Exness", false, false, configured, false, Mt5NativeTimeframes.Supported));
+}

@@ -15,4 +15,10 @@ public sealed record InstrumentSpec(
     decimal VolumeStep,
     string? CurrencyBase,
     string? CurrencyProfit,
-    string? CurrencyMargin);
+    string? CurrencyMargin,
+    decimal? TickSize = null,
+    decimal? TickValueProfit = null,
+    decimal? TickValueLoss = null,
+    decimal? VolumeLimit = null,
+    int? StopsLevelPoints = null,
+    int? FreezeLevelPoints = null);
