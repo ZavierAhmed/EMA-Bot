@@ -20,6 +20,9 @@ the legacy historical research provider for backtests, optimization,
 diagnostics, charts, and previews. Live market data, execution, and instrument
 discovery are unavailable until the MT5/Exness adapters are implemented.
 
+Broker-neutral lot-volume and commission calculation foundations are available,
+but the current application continues to use legacy percentage-fee/notional sizing by default.
+
 See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
 [the strategy origin and kernel lock](docs/strategy-origin.md).
 

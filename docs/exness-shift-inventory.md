@@ -11,6 +11,15 @@ unavailable pending the MT5 provider and MT5/Exness catalog. No MT5, Exness,
 Named Pipe, strategy, cost/sizing, database, or migration implementation was
 added in this phase.
 
+## Phase E4 completed
+
+The execution foundation now has broker-neutral `PositionExposure`, deterministic
+instrument-volume normalization, and pluggable percentage-notional and per-lot
+commission cost models. The current application still uses its legacy notional
+sizing and percentage fee behavior by default. Bid/Ask execution, spread,
+swap, slippage, account-currency conversion, MT5 margin validation, and broker
+instrument specifications remain deferred until a provider supplies real data.
+
 ## Scope and branch safety
 
 This is an architecture and dependency inventory only.  It was prepared on
