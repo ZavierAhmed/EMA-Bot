@@ -79,6 +79,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<TradingSettingsService>();
 builder.Services.AddSingleton<BacktestEngine>();
 builder.Services.AddScoped<BacktestService>();
+builder.Services.AddScoped<StrategyRegimeDiagnosticsService>();
 builder.Services.AddSingleton<StrategyOptimizationService>();
 builder.Services.AddSingleton<EmaSignalEngine>();
 builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>

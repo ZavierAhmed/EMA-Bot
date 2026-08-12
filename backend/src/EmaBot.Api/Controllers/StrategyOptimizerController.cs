@@ -14,7 +14,7 @@ using Microsoft.EntityFrameworkCore;
 namespace EmaBot.Api.Controllers;
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/strategy-optimizer")]
-public sealed class StrategyOptimizerController(EmaBotDbContext database, StrategyOptimizationService service, ILogger<StrategyOptimizerController> logger) : ControllerBase
+public sealed class StrategyOptimizerController(EmaBotDbContext database, StrategyOptimizationService service, StrategyRegimeDiagnosticsService regimeDiagnostics, ILogger<StrategyOptimizerController> logger) : ControllerBase
 {
     [HttpGet("options")] public async Task<IActionResult> Options(CancellationToken token) => Ok(await service.GetOptionsAsync(token));
     [HttpPost("runs")] public async Task<IActionResult> Start(StrategyOptimizerStartRequest request, CancellationToken token) { try { var run = await service.StartAsync(request, token); return Accepted($"api/strategy-optimizer/runs/{run.Id}", Summary(run)); } catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); } catch (InvalidOperationException exception) { return Conflict(new ApiMessage(exception.Message)); } }
@@ -46,6 +46,12 @@ public sealed class StrategyOptimizerController(EmaBotDbContext database, Strate
             logger.LogError(exception, "Optimizer Excel export {RunId} failed after {Elapsed}.", id, total.Elapsed);
             return StatusCode(StatusCodes.Status500InternalServerError, new ApiMessage("The optimizer Excel export could not be generated. Check the API log for details."));
         }
+    }
+    [HttpGet("runs/{runId:int}/candidates/{candidateId:int}/regime-excel")]
+    public async Task<IActionResult> RegimeExcel(int runId, int candidateId, CancellationToken token)
+    {
+        try { var data = await regimeDiagnostics.CreateAsync(runId, candidateId, token); return data is null ? NotFound(new ApiMessage("Completed optimizer run or candidate not found.")) : File(StrategyRegimeWorkbook.Create(data), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-regime-{runId}-{candidateId}.xlsx"); }
+        catch (Exception exception) { logger.LogError(exception, "Regime diagnostic export for run {RunId}, candidate {CandidateId} failed.", runId, candidateId); return StatusCode(StatusCodes.Status500InternalServerError, new ApiMessage("The regime diagnostic export could not be generated. Check the API log for details.")); }
     }
 
     private static object Summary(StrategyOptimizationRun run) => new { run.Id, status=run.Status.ToString(), run.CreatedAtUtc, run.StartedAtUtc, run.CompletedAtUtc, run.FailureMessage, run.RequestedStartUtc, run.RequestedEndUtc, run.CandidateCount, run.MarketCount, run.TotalWork, run.CompletedWork, progress=run.TotalWork==0?0m:(decimal)run.CompletedWork/run.TotalWork*100m, run.RecommendedCandidateId, assumptions=new { run.SimulatedAccountBalanceUsdt, run.FixedOrderSizeUsdt, run.MarginPerTradePercent, run.Leverage, run.FeePercentPerSide, positionSizingMode=run.PositionSizingMode.ToString() }, robustCandidateCount=run.Candidates.Count(candidate=>candidate.RobustCandidate) };

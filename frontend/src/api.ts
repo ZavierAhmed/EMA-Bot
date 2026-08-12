@@ -104,6 +104,7 @@ export const getOptimizerCandidate = (runId: number, candidateId: number) => req
 export const startOptimizer = (body: { symbols: string[]; timeframes: string[]; startUtc: string; endUtc: string; grid: OptimizerGrid }) => protectedRequest<OptimizerRun>('/api/strategy-optimizer/runs', 'POST', body)
 export const cancelOptimizer = (id: number) => protectedRequest<void>(`/api/strategy-optimizer/runs/${id}/cancel`, 'POST')
 export async function downloadOptimizerExcel(id: number) { await download(`/api/strategy-optimizer/runs/${id}/excel`, `ema-bot-optimizer-${id}.xlsx`) }
+export async function downloadOptimizerRegimeExcel(runId: number, candidateId: number) { await download(`/api/strategy-optimizer/runs/${runId}/candidates/${candidateId}/regime-excel`, `ema-bot-regime-${runId}-${candidateId}.xlsx`) }
 export const getPaperSessions = () => request<PaperSessionSummary[]>('/api/paper-sessions')
 export const getActivePaperSession = () => request<PaperSession>('/api/paper-sessions/active')
 export const startPaperSession = (interval: string, symbols: string[]) => protectedRequest<PaperSession>('/api/paper-sessions', 'POST', { interval, symbols })
