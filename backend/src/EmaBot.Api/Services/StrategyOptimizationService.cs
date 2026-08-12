@@ -14,6 +14,7 @@ public sealed record StrategyOptimizerGrid(IReadOnlyList<decimal> RiskRewards, I
 public readonly record struct StrategyOptimizerCandidateKey(decimal RiskReward, decimal MinEmaGapPercent, decimal MaxStopDistancePercent, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled);
 public sealed record StrategyOptimizerStartRequest(IReadOnlyList<string> Symbols, IReadOnlyList<string> Timeframes, DateTimeOffset StartUtc, DateTimeOffset EndUtc, StrategyOptimizerGrid Grid, int? WorkerCount = null);
 public sealed record StrategyOptimizerOptions(IReadOnlyList<string> EnabledSymbols, IReadOnlyList<string> SupportedTimeframes, TradingSettings Assumptions, StrategyOptimizerGrid DefaultGrid, int DetectedProcessors, int EffectiveWorkers);
+public sealed record StrategyOptimizerRuntimeStatus(string Phase, int? FinalizationTotalMarkets, int? FinalizationCompletedMarkets);
 
 public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactory, BacktestEngine engine, TimeProvider clock, ILogger<StrategyOptimizationService> logger)
 {
@@ -21,6 +22,7 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly ConcurrentDictionary<int, CancellationTokenSource> cancellations = new();
     private readonly ConcurrentDictionary<int, int> workerCounts = new();
+    private readonly ConcurrentDictionary<int, StrategyOptimizerRuntimeStatus> runtimeStatuses = new();
     // Reporting-only tolerance: fee-aware exits can leave decimal dust around zero.
     private const decimal BreakEvenToleranceUsdt = 0.000000000001m;
     public static int EffectiveWorkerCount(int? processors = null, int? requestedWorkers = null) { if (requestedWorkers is < 1 or > 16) throw new ArgumentOutOfRangeException(nameof(requestedWorkers), "CPU workers must be from 1 through 16."); return requestedWorkers ?? Math.Clamp(((processors ?? Environment.ProcessorCount) * 2) / 3, 1, 16); }
@@ -35,7 +37,7 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
 
     public async Task<StrategyOptimizationRun> StartAsync(StrategyOptimizerStartRequest request, CancellationToken token)
     {
-        var normalized = ValidateAndNormalize(request); var requestedWorkers = EffectiveWorkerCount(requestedWorkers: request.WorkerCount);
+        var normalized = ValidateAndNormalize(request, clock); var requestedWorkers = EffectiveWorkerCount(requestedWorkers: request.WorkerCount);
         await gate.WaitAsync(token);
         try
         {
@@ -51,6 +53,7 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
             db.StrategyOptimizationRuns.Add(run); await db.SaveChangesAsync(token);
             var cancellation = new CancellationTokenSource(); cancellations[run.Id] = cancellation;
             workerCounts[run.Id] = requestedWorkers;
+            runtimeStatuses[run.Id] = new("Queued", null, null);
             _ = Task.Run(() => ExecuteAsync(run.Id, cancellation.Token));
             return run;
         }
@@ -65,11 +68,14 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
         run.Status = StrategyOptimizationStatus.Cancelled; run.CompletedAtUtc = clock.GetUtcNow(); await db.SaveChangesAsync(token); return true;
     }
 
+    public StrategyOptimizerRuntimeStatus RuntimeStatusFor(int id, StrategyOptimizationStatus persistedStatus)
+        => runtimeStatuses.TryGetValue(id, out var status) ? status : new(persistedStatus.ToString(), null, null);
+
     public async Task MarkRunningAsInterruptedAsync(CancellationToken token)
     {
         await using var scope = scopeFactory.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var runs = await db.StrategyOptimizationRuns.Where(run => run.Status == StrategyOptimizationStatus.Running || run.Status == StrategyOptimizationStatus.Queued).ToListAsync(token);
-        foreach (var run in runs) { run.Status = StrategyOptimizationStatus.Interrupted; run.CompletedAtUtc = clock.GetUtcNow(); run.FailureMessage = "The application restarted; optimizer runs are not resumed automatically."; }
+        foreach (var run in runs) { run.Status = StrategyOptimizationStatus.Interrupted; run.CompletedAtUtc = clock.GetUtcNow(); run.FailureMessage = "The application restarted; optimizer runs are not resumed automatically."; runtimeStatuses.TryRemove(run.Id, out _); workerCounts.TryRemove(run.Id, out _); if (cancellations.TryRemove(run.Id, out var cancellation)) cancellation.Dispose(); }
         if (runs.Count > 0) await db.SaveChangesAsync(token);
     }
 
@@ -78,7 +84,7 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
         try
         {
             await using var scope = scopeFactory.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var historical = scope.ServiceProvider.GetRequiredService<IBinanceHistoricalCandleService>();
-            var run = await db.StrategyOptimizationRuns.SingleAsync(value => value.Id == id, token); run.Status = StrategyOptimizationStatus.Running; run.StartedAtUtc = clock.GetUtcNow(); await db.SaveChangesAsync(token);
+            var run = await db.StrategyOptimizationRuns.SingleAsync(value => value.Id == id, token); run.Status = StrategyOptimizationStatus.Running; run.StartedAtUtc = clock.GetUtcNow(); runtimeStatuses[id] = new("LoadingHistoricalData", null, null); await db.SaveChangesAsync(token);
             var symbols = JsonSerializer.Deserialize<string[]>(run.SymbolsJson) ?? []; var frames = JsonSerializer.Deserialize<string[]>(run.TimeframesJson) ?? []; var grid = JsonSerializer.Deserialize<StrategyOptimizerGrid>(run.GridJson) ?? DefaultGrid;
             var fixedSettings = JsonSerializer.Deserialize<TradingSettings>(run.BaselineSettingsJson) ?? new TradingSettings { Id = 1, RiskReward = 1m };
             var candidates = CandidateSettings(grid, fixedSettings).ToArray(); var cache = new Dictionary<(string Symbol, string Frame), Candle[]>();
@@ -87,20 +93,27 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
                 token.ThrowIfCancellationRequested(); var warmupStart = run.RequestedStartUtc - WarmupDuration(frame);
                 cache[(symbol, frame)] = (await historical.GetRangeAsync(symbol, frame, warmupStart, run.RequestedEndUtc, token)).Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).ToArray();
             }
-            var workers = workerCounts.TryGetValue(id, out var configuredWorkers) ? configuredWorkers : EffectiveWorkerCount(); var parallelTimer = Stopwatch.StartNew(); var channel = Channel.CreateBounded<StrategyOptimizationCandidate>(workers * 2);
+            var workers = workerCounts.TryGetValue(id, out var configuredWorkers) ? configuredWorkers : EffectiveWorkerCount(); var parallelTimer = Stopwatch.StartNew(); runtimeStatuses[id] = new("EvaluatingCandidates", null, null); var channel = Channel.CreateBounded<StrategyOptimizationCandidate>(workers * 2);
             logger.LogInformation("Optimizer {RunId}: {Workers} workers for {Candidates} candidates, {Markets} markets, {Work} logical / {Segments} segment executions.", id, workers, candidates.Length, run.MarketCount, run.TotalWork, run.TotalWork * 3);
             var producer = Task.Run(async () => { Exception? error = null; try { await Parallel.ForEachAsync(candidates, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = token }, async (parameters, cancellation) => { var candidate = ComputeCandidate(id, parameters, fixedSettings, symbols, frames, cache, run, cancellation); await channel.Writer.WriteAsync(candidate, cancellation); }); } catch (Exception exception) { error = exception; } finally { channel.Writer.TryComplete(error); } });
             await foreach (var candidate in channel.Reader.ReadAllAsync()) { db.StrategyOptimizationCandidates.Add(candidate); run.CompletedWork = Math.Min(run.TotalWork, run.CompletedWork + run.MarketCount); await db.SaveChangesAsync(CancellationToken.None); }
-            await producer; token.ThrowIfCancellationRequested(); logger.LogInformation("Optimizer {RunId}: candidate computation and streaming persistence completed in {Elapsed}.", id, parallelTimer.Elapsed);
+            await producer; token.ThrowIfCancellationRequested(); parallelTimer.Stop(); logger.LogInformation("Optimizer {RunId}: candidate computation and streaming persistence completed in {Elapsed}.", id, parallelTimer.Elapsed);
             var saved = await db.StrategyOptimizationCandidates.Include(candidate => candidate.MarketResults).Where(candidate => candidate.StrategyOptimizationRunId == id).ToListAsync(token);
             var ranked = saved.Where(candidate => candidate.RobustCandidate).OrderByDescending(candidate => candidate.Validation.NetProfitFactor).ThenByDescending(candidate => candidate.Validation.NetReturnPercent).ThenByDescending(candidate => candidate.ProfitableMarketRatio).ThenBy(candidate => candidate.Validation.MaxDrawdownPercent).ThenByDescending(candidate => candidate.Validation.TotalTrades).ThenBy(candidate => candidate.RiskReward).ThenBy(candidate => candidate.MinEmaGapPercent).ThenBy(candidate => candidate.MaxStopDistancePercent).ThenBy(candidate => candidate.WaitForConfirmationCandle).ThenBy(candidate => candidate.UseEma100Filter).ThenBy(candidate => candidate.TrailingStopEnabled).ToArray();
-            for (var index = 0; index < ranked.Length; index++) ranked[index].RobustRank = index + 1;
+            var rankingTimer = Stopwatch.StartNew(); for (var index = 0; index < ranked.Length; index++) ranked[index].RobustRank = index + 1;
             run.RecommendedCandidateId = ranked.FirstOrDefault()?.Id;
-            foreach (var candidate in saved.OrderBy(candidate => candidate.RobustRank ?? int.MaxValue).ThenByDescending(candidate => candidate.Validation.NetProfitFactor).Take(5))
+            rankingTimer.Stop(); var topCandidates = saved.OrderBy(candidate => candidate.RobustRank ?? int.MaxValue).ThenByDescending(candidate => candidate.Validation.NetProfitFactor).Take(5).ToArray(); var finalizationTimer = Stopwatch.StartNew(); var finalizationTotal = topCandidates.Length * run.MarketCount;
+            runtimeStatuses[id] = new("FinalizingTopCandidates", finalizationTotal, 0); var completedFinalizationMarkets = 0; var finalizationTrades = new List<StrategyOptimizationTrade>();
+            foreach (var candidate in topCandidates)
             {
-                var settings = Settings(candidate, run); foreach (var symbol in symbols) foreach (var frame in frames) foreach (var trade in engine.RunResearch(cache[(symbol, frame)], settings, run.RequestedStartUtc, run.RequestedEndUtc).Trades) run.Trades.Add(ToTrade(candidate.Id, symbol, frame, trade, run.FeePercentPerSide));
+                token.ThrowIfCancellationRequested(); var settings = Settings(candidate, run); foreach (var symbol in symbols) foreach (var frame in frames)
+                {
+                    token.ThrowIfCancellationRequested(); var calculation = engine.RunResearch(cache[(symbol, frame)], settings, run.RequestedStartUtc, run.RequestedEndUtc); token.ThrowIfCancellationRequested();
+                    finalizationTrades.AddRange(calculation.Trades.Select(trade => ToTrade(id, candidate.Id, symbol, frame, trade, run.FeePercentPerSide)));
+                    completedFinalizationMarkets++; runtimeStatuses[id] = new("FinalizingTopCandidates", finalizationTotal, completedFinalizationMarkets);
+                }
             }
-            run.Status = StrategyOptimizationStatus.Completed; run.CompletedAtUtc = clock.GetUtcNow(); await db.SaveChangesAsync(token);
+            token.ThrowIfCancellationRequested(); db.StrategyOptimizationTrades.AddRange(finalizationTrades.OrderBy(trade => trade.StrategyOptimizationCandidateId).ThenBy(trade => trade.Symbol).ThenBy(trade => trade.Timeframe).ThenBy(trade => trade.EntryTimeUtc).ThenBy(trade => trade.ExitTimeUtc)); run.Status = StrategyOptimizationStatus.Completed; run.CompletedAtUtc = clock.GetUtcNow(); await db.SaveChangesAsync(token); finalizationTimer.Stop(); logger.LogInformation("Optimizer {RunId} completed: candidate evaluation {CandidateElapsed}, ranking {RankingElapsed}, finalization {FinalizationElapsed}, {FinalizationMarkets} finalization markets, total {TotalElapsed}.", id, parallelTimer.Elapsed, rankingTimer.Elapsed, finalizationTimer.Elapsed, finalizationTotal, parallelTimer.Elapsed + rankingTimer.Elapsed + finalizationTimer.Elapsed);
         }
         catch (OperationCanceledException)
         {
@@ -108,9 +121,9 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Strategy optimization run {RunId} failed.", id); await SetTerminalAsync(id, StrategyOptimizationStatus.Failed, exception.Message);
+            logger.LogError(exception, "Strategy optimization run {RunId} failed during {Phase}.", id, runtimeStatuses.TryGetValue(id, out var state) ? state.Phase : "unknown"); await SetTerminalAsync(id, StrategyOptimizationStatus.Failed, "Optimizer finalization or evaluation failed. Check the API log for details.");
         }
-        finally { workerCounts.TryRemove(id, out _); if (cancellations.TryRemove(id, out var cancellation)) cancellation.Dispose(); }
+        finally { runtimeStatuses.TryRemove(id, out _); workerCounts.TryRemove(id, out _); if (cancellations.TryRemove(id, out var cancellation)) cancellation.Dispose(); }
     }
 
     private static StrategyOptimizationCandidate ComputeCandidate(int id, TradingSettings parameters, TradingSettings baseline, IReadOnlyList<string> symbols, IReadOnlyList<string> frames, IReadOnlyDictionary<(string Symbol, string Frame), Candle[]> cache, StrategyOptimizationRun run, CancellationToken cancellation)
@@ -141,7 +154,7 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
     private static decimal? ProfitFactor(decimal gains, decimal losses) => losses == 0m ? gains > 0m ? decimal.MaxValue : null : gains / losses;
     private static decimal Median(IEnumerable<decimal> source) { var values = source.OrderBy(value => value).ToArray(); return values.Length == 0 ? 0m : values.Length % 2 == 1 ? values[values.Length / 2] : (values[values.Length / 2 - 1] + values[values.Length / 2]) / 2m; }
     private static BacktestDiagnostics Sum(IEnumerable<BacktestDiagnostics> values) => values.Aggregate(new BacktestDiagnostics(0,0,0,0,0,0,0,0,0,0,0), (a,b) => new(a.TotalCrossovers+b.TotalCrossovers,a.LongSignals+b.LongSignals,a.ShortSignals+b.ShortSignals,a.RejectedByEma100+b.RejectedByEma100,a.RejectedByEmaGap+b.RejectedByEmaGap,a.RejectedByStopDistance+b.RejectedByStopDistance,a.RejectedByFees+b.RejectedByFees,a.ConfirmationFailed+b.ConfirmationFailed,a.InvalidStopLoss+b.InvalidStopLoss,a.SkippedWhilePositionOpen+b.SkippedWhilePositionOpen,a.NoEntryCandle+b.NoEntryCandle));
-    private static StrategyOptimizationTrade ToTrade(int candidateId, string symbol, string timeframe, BacktestTrade trade, decimal fee) => new() { StrategyOptimizationCandidateId = candidateId, Symbol=symbol, Timeframe=timeframe, Direction=trade.Direction, IsReentry=trade.IsReentry, EntryTimeUtc=trade.EntryTimeUtc, ExitTimeUtc=trade.ExitTimeUtc, EntryPrice=trade.EntryPrice, ExitPrice=trade.ExitPrice, InitialStopLoss=trade.InitialStopLoss, FinalStopLoss=trade.FinalStopLoss, OriginalTakeProfit=trade.OriginalTakeProfit, FinalTakeProfit=trade.FinalTakeProfit, GrossPnlUsdt=trade.GrossPnlUsdt, TotalFeesUsdt=trade.TotalFeesUsdt, NetPnlUsdt=trade.NetPnlUsdt, NetRMultiple=trade.NetRMultiple, ExitReason=trade.ExitReason, SignalEma9=trade.SignalEma9, SignalEma15=trade.SignalEma15, SignalEma100=trade.SignalEma100, SignalGapPercent=trade.SignalGapPercent, ExpectedNetTargetR=ExpectedNetTargetR(trade, fee) };
+    private static StrategyOptimizationTrade ToTrade(int runId, int candidateId, string symbol, string timeframe, BacktestTrade trade, decimal fee) => new() { StrategyOptimizationRunId = runId, StrategyOptimizationCandidateId = candidateId, Symbol=symbol, Timeframe=timeframe, Direction=trade.Direction, IsReentry=trade.IsReentry, EntryTimeUtc=trade.EntryTimeUtc, ExitTimeUtc=trade.ExitTimeUtc, EntryPrice=trade.EntryPrice, ExitPrice=trade.ExitPrice, InitialStopLoss=trade.InitialStopLoss, FinalStopLoss=trade.FinalStopLoss, OriginalTakeProfit=trade.OriginalTakeProfit, FinalTakeProfit=trade.FinalTakeProfit, GrossPnlUsdt=trade.GrossPnlUsdt, TotalFeesUsdt=trade.TotalFeesUsdt, NetPnlUsdt=trade.NetPnlUsdt, NetRMultiple=trade.NetRMultiple, ExitReason=trade.ExitReason, SignalEma9=trade.SignalEma9, SignalEma15=trade.SignalEma15, SignalEma100=trade.SignalEma100, SignalGapPercent=trade.SignalGapPercent, ExpectedNetTargetR=ExpectedNetTargetR(trade, fee) };
     private static TradingSettings Settings(StrategyOptimizationCandidate candidate, StrategyOptimizationRun run) => new() { Id=1,RiskReward=candidate.RiskReward,MinEmaGapPercent=candidate.MinEmaGapPercent,MaxStopDistancePercent=candidate.MaxStopDistancePercent,WaitForConfirmationCandle=candidate.WaitForConfirmationCandle,UseEma100Filter=candidate.UseEma100Filter,TrailingStopEnabled=candidate.TrailingStopEnabled,SimulatedAccountBalanceUsdt=run.SimulatedAccountBalanceUsdt,MarginPerTradePercent=run.MarginPerTradePercent,Leverage=run.Leverage,FeePercentPerSide=run.FeePercentPerSide,PositionSizingMode=run.PositionSizingMode,FixedOrderSizeUsdt=run.FixedOrderSizeUsdt };
     private static bool IsSame(TradingSettings left, TradingSettings right) => left.RiskReward==right.RiskReward && left.MinEmaGapPercent==right.MinEmaGapPercent && left.MaxStopDistancePercent==right.MaxStopDistancePercent && left.WaitForConfirmationCandle==right.WaitForConfirmationCandle && left.UseEma100Filter==right.UseEma100Filter && left.TrailingStopEnabled==right.TrailingStopEnabled;
     public static IReadOnlyList<TradingSettings> CandidateSettings(StrategyOptimizerGrid grid, TradingSettings fixedSettings) { var all = new Dictionary<StrategyOptimizerCandidateKey,TradingSettings>(); foreach(var rr in grid.RiskRewards) foreach(var gap in grid.MinEmaGapPercents) foreach(var max in grid.MaxStopDistancePercents) foreach(var confirm in grid.WaitForConfirmationCandles) foreach(var ema in grid.UseEma100Filters) foreach(var trailing in grid.TrailingStopEnableds) { var value = Clone(fixedSettings,rr,gap,max,confirm,ema,trailing); all[Key(value)] = value; } var baseline = Clone(fixedSettings,fixedSettings.RiskReward,fixedSettings.MinEmaGapPercent,fixedSettings.MaxStopDistancePercent,fixedSettings.WaitForConfirmationCandle,fixedSettings.UseEma100Filter,fixedSettings.TrailingStopEnabled); all.TryAdd(Key(baseline), baseline); return all.Values.ToArray(); }
@@ -153,6 +166,6 @@ public sealed class StrategyOptimizationService(IServiceScopeFactory scopeFactor
         var startDate = DateOnly.FromDateTime(startUtc.UtcDateTime); var endDate = DateOnly.FromDateTime(endUtc.UtcDateTime);
         return endDate.DayNumber - startDate.DayNumber + 1;
     }
-    public static StrategyOptimizerStartRequest ValidateAndNormalize(StrategyOptimizerStartRequest request) { var symbols=request.Symbols.Select(symbol=>symbol.Trim().ToUpperInvariant()).Where(symbol=>symbol.Length>0).Distinct().ToArray(); var frames=request.Timeframes.Distinct().ToArray(); if(symbols.Length==0||frames.Length==0||frames.Any(frame=>!BinanceIntervals.IsSupported(frame))) throw new ArgumentException("Choose at least one enabled market and supported timeframe."); var startDate=DateOnly.FromDateTime(request.StartUtc.UtcDateTime); var endDate=DateOnly.FromDateTime(request.EndUtc.UtcDateTime); var inclusiveDays=InclusiveUtcCalendarDays(request.StartUtc,request.EndUtc); if(startDate>endDate || inclusiveDays<30 || inclusiveDays>90) throw new ArgumentException("Choose a UTC historical period from 30 through 90 days."); var grid=new StrategyOptimizerGrid(request.Grid.RiskRewards.Distinct().Order().ToArray(),request.Grid.MinEmaGapPercents.Distinct().Order().ToArray(),request.Grid.MaxStopDistancePercents.Distinct().Order().ToArray(),request.Grid.WaitForConfirmationCandles.Distinct().ToArray(),request.Grid.UseEma100Filters.Distinct().ToArray(),request.Grid.TrailingStopEnableds.Distinct().ToArray()); if(grid.RiskRewards.Any(value=>value<=0)||grid.MinEmaGapPercents.Any(value=>value<0)||grid.MaxStopDistancePercents.Any(value=>value<0)||grid.RiskRewards.Count==0||grid.MinEmaGapPercents.Count==0||grid.MaxStopDistancePercents.Count==0||grid.WaitForConfirmationCandles.Count==0||grid.UseEma100Filters.Count==0||grid.TrailingStopEnableds.Count==0) throw new ArgumentException("Parameter lists must contain unique valid values."); return new(symbols,frames,request.StartUtc,request.EndUtc,grid,request.WorkerCount); }
+    public static StrategyOptimizerStartRequest ValidateAndNormalize(StrategyOptimizerStartRequest request, TimeProvider? clock = null) { var symbols=request.Symbols.Select(symbol=>symbol.Trim().ToUpperInvariant()).Where(symbol=>symbol.Length>0).Distinct().ToArray(); var frames=request.Timeframes.Distinct().ToArray(); if(symbols.Length==0||frames.Length==0||frames.Any(frame=>!BinanceIntervals.IsSupported(frame))) throw new ArgumentException("Choose at least one enabled market and supported timeframe."); var startDate=DateOnly.FromDateTime(request.StartUtc.UtcDateTime); var endDate=DateOnly.FromDateTime(request.EndUtc.UtcDateTime); var latestCompletedDate=DateOnly.FromDateTime((clock ?? TimeProvider.System).GetUtcNow().UtcDateTime).AddDays(-1); var inclusiveDays=InclusiveUtcCalendarDays(request.StartUtc,request.EndUtc); if(endDate>latestCompletedDate) throw new ArgumentException("The optimizer end date must be a fully completed UTC calendar day."); if(startDate>endDate || inclusiveDays<30 || inclusiveDays>90) throw new ArgumentException("Choose a UTC historical period from 30 through 90 days."); var grid=new StrategyOptimizerGrid(request.Grid.RiskRewards.Distinct().Order().ToArray(),request.Grid.MinEmaGapPercents.Distinct().Order().ToArray(),request.Grid.MaxStopDistancePercents.Distinct().Order().ToArray(),request.Grid.WaitForConfirmationCandles.Distinct().ToArray(),request.Grid.UseEma100Filters.Distinct().ToArray(),request.Grid.TrailingStopEnableds.Distinct().ToArray()); if(grid.RiskRewards.Any(value=>value<=0)||grid.MinEmaGapPercents.Any(value=>value<0)||grid.MaxStopDistancePercents.Any(value=>value<0)||grid.RiskRewards.Count==0||grid.MinEmaGapPercents.Count==0||grid.MaxStopDistancePercents.Count==0||grid.WaitForConfirmationCandles.Count==0||grid.UseEma100Filters.Count==0||grid.TrailingStopEnableds.Count==0) throw new ArgumentException("Parameter lists must contain unique valid values."); return new(symbols,frames,request.StartUtc,request.EndUtc,grid,request.WorkerCount); }
     private static TimeSpan WarmupDuration(string interval) => interval switch { "3m"=>TimeSpan.FromMinutes(600),"5m"=>TimeSpan.FromMinutes(1000),"15m"=>TimeSpan.FromMinutes(3000),"30m"=>TimeSpan.FromMinutes(6000),"1h"=>TimeSpan.FromHours(200),"2h"=>TimeSpan.FromHours(400),"4h"=>TimeSpan.FromHours(800),"6h"=>TimeSpan.FromHours(1200),"8h"=>TimeSpan.FromHours(1600),"12h"=>TimeSpan.FromHours(2400),"1d"=>TimeSpan.FromDays(200),"3d"=>TimeSpan.FromDays(600),"1w"=>TimeSpan.FromDays(1400),_=>TimeSpan.FromDays(6200) };
 }
