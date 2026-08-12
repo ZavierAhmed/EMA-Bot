@@ -55,7 +55,7 @@ public sealed class PaperTradingCoordinator(
             {
                 proposed.Cancellation.Cancel(); proposed.Cancellation.Dispose();
                 session.Status = resume ? PaperSessionStatus.Interrupted : PaperSessionStatus.Faulted;
-                session.FailureMessage = resume ? "Warmup data is unavailable; resume can be retried." : "Public Binance warmup data is unavailable.";
+                session.FailureMessage = resume ? "Warmup data is unavailable; resume can be retried." : "Historical warmup data is unavailable.";
                 if (resume) session.InterruptedAtUtc = DateTimeOffset.UtcNow;
                 await database.SaveChangesAsync(cancellationToken);
                 throw;
@@ -136,7 +136,7 @@ public sealed class PaperTradingCoordinator(
         catch (Exception exception) when (!state.Cancellation.IsCancellationRequested)
         {
             logger.LogError(exception, "Paper session {SessionId} stream faulted.", state.Session.Id);
-            await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Public Binance stream could not be maintained."; });
+            await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Live market-bar streaming could not be maintained."; });
             state.ConnectionState = "Degraded";
             await gate.WaitAsync();
             try { if (ReferenceEquals(active, state)) active = null; }

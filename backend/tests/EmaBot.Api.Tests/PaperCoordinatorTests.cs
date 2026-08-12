@@ -1,5 +1,6 @@
 using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
@@ -19,7 +20,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
         _factory.BinanceClient.KlinesException = new BinanceApiException("unavailable", 502);
         var failed = await CreateSession(PaperSessionStatus.Running);
-        await Assert.ThrowsAsync<BinanceApiException>(() => coordinator.StartSessionAsync(failed.Id, false, CancellationToken.None));
+        await Assert.ThrowsAsync<MarketDataProviderException>(() => coordinator.StartSessionAsync(failed.Id, false, CancellationToken.None));
         Assert.Null(coordinator.GetRuntimeSnapshot());
         Assert.Equal(PaperSessionStatus.Faulted, await Status(failed.Id));
         _factory.BinanceClient.KlinesException = null;
@@ -35,7 +36,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
         _factory.BinanceClient.KlinesException = new BinanceApiException("unavailable", 502);
         var session = await CreateSession(PaperSessionStatus.Interrupted);
-        await Assert.ThrowsAsync<BinanceApiException>(() => coordinator.StartSessionAsync(session.Id, true, CancellationToken.None));
+        await Assert.ThrowsAsync<MarketDataProviderException>(() => coordinator.StartSessionAsync(session.Id, true, CancellationToken.None));
         Assert.Null(coordinator.GetRuntimeSnapshot());
         Assert.Equal(PaperSessionStatus.Interrupted, await Status(session.Id));
         _factory.BinanceClient.KlinesException = null;

@@ -14,8 +14,11 @@ This is a migration target only: it is **not implemented**, Binance components
 remain the current legacy market-data/research infrastructure, and live Exness
 orders are not available. Strategy logic remains in .NET.
 
-Broker-neutral market contracts are now in place; Binance remains the active
-legacy adapter.
+Broker-neutral market contracts are now in place. Phase E3 retires Binance
+live streaming and instrument discovery: Binance remains temporarily only as
+the legacy historical research provider for backtests, optimization,
+diagnostics, charts, and previews. Live market data, execution, and instrument
+discovery are unavailable until the MT5/Exness adapters are implemented.
 
 See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
 [the strategy origin and kernel lock](docs/strategy-origin.md).

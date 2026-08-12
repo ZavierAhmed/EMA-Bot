@@ -9,7 +9,6 @@ export type HealthStatus = {
   database: string
 }
 
-export type BinanceSymbol = { symbol: string; baseAsset: string; quoteAsset: string; status: string; contractType: string }
 export type MonitoredSymbol = { id: number; symbol: string; baseAsset: string; quoteAsset: string; isEnabled: boolean }
 export type PositionSizingMode = 'FixedNotional' | 'MarginPercent'
 export type TradingSettings = { riskReward: number; fixedOrderSizeUsdt: number; minEmaGapPercent: number; maxStopDistancePercent: number; positionSizingMode: PositionSizingMode; simulatedAccountBalanceUsdt: number; marginPerTradePercent: number; leverage: number; waitForConfirmationCandle: boolean; useEma100Filter: boolean; useHtfRegimeFilter: boolean; trailingStopEnabled: boolean; feePercentPerSide: number; updatedAtUtc: string }
@@ -85,9 +84,7 @@ async function protectedRequest<T>(path: string, method: string, body?: unknown)
   return request<T>(path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token }, body: body === undefined ? undefined : JSON.stringify(body) })
 }
 
-export const getBinanceSymbols = () => request<BinanceSymbol[]>('/api/binance/symbols')
 export const getMonitoredSymbols = () => request<MonitoredSymbol[]>('/api/symbols')
-export const addMonitoredSymbol = (symbol: string) => protectedRequest<MonitoredSymbol>('/api/symbols', 'POST', { symbol })
 export const setSymbolEnabled = (id: number, isEnabled: boolean) => protectedRequest<MonitoredSymbol>(`/api/symbols/${id}/enabled`, 'PATCH', { isEnabled })
 export const removeMonitoredSymbol = (id: number) => protectedRequest<void>(`/api/symbols/${id}`, 'DELETE')
 export const getTradingSettings = () => request<TradingSettings>('/api/settings/trading')
@@ -107,9 +104,7 @@ export async function downloadOptimizerExcel(id: number) { await download(`/api/
 export async function downloadOptimizerRegimeExcel(runId: number, candidateId: number) { await download(`/api/strategy-optimizer/runs/${runId}/candidates/${candidateId}/regime-excel`, `ema-bot-regime-${runId}-${candidateId}.xlsx`) }
 export const getPaperSessions = () => request<PaperSessionSummary[]>('/api/paper-sessions')
 export const getActivePaperSession = () => request<PaperSession>('/api/paper-sessions/active')
-export const startPaperSession = (interval: string, symbols: string[]) => protectedRequest<PaperSession>('/api/paper-sessions', 'POST', { interval, symbols })
 export const stopPaperSession = (id: number) => protectedRequest<void>(`/api/paper-sessions/${id}/stop`, 'POST')
-export const resumePaperSession = (id: number) => protectedRequest<PaperSession>(`/api/paper-sessions/${id}/resume`, 'POST')
 export const getTrades = (filters: Record<string, string>) => request<TradeSummary[]>(`/api/trades?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString()}`)
 export const getTrade = (source: string, id: number, signal?: AbortSignal) => request<TradeDetail>(`/api/trades/${source.toLowerCase()}/${id}`, { signal })
 export const getTradeChart = (source: string, id: number, signal?: AbortSignal) => request<TradeChartData>(`/api/trades/${source.toLowerCase()}/${id}/chart`, { signal })

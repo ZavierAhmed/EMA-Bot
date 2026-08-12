@@ -83,14 +83,14 @@ builder.Services.AddScoped<BacktestService>();
 builder.Services.AddScoped<StrategyRegimeDiagnosticsService>();
 builder.Services.AddSingleton<StrategyOptimizationService>();
 builder.Services.AddSingleton<EmaSignalEngine>();
-builder.Services.AddHttpClient<IBinanceFuturesMarketDataClient, BinanceFuturesMarketDataClient>(client =>
+builder.Services.AddHttpClient<IBinanceHistoricalKlineClient, BinanceHistoricalKlineClient>(client =>
 {
     client.BaseAddress = new Uri("https://fapi.binance.com/");
     client.Timeout = TimeSpan.FromSeconds(30);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
 });
-builder.Services.AddSingleton<IHistoricalMarketDataProvider, BinanceHistoricalCandleService>();
-builder.Services.AddSingleton<IMarketBarStreamProvider, BinanceFuturesStreamClient>();
+builder.Services.AddSingleton<IHistoricalMarketDataProvider, BinanceHistoricalMarketDataProvider>();
+builder.Services.AddSingleton<IMarketBarStreamProvider, UnavailableMarketBarStreamProvider>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

@@ -1,5 +1,4 @@
 using EmaBot.Api.Auth;
-using EmaBot.Api.Binance;
 using EmaBot.Api.Data;
 using EmaBot.Api.Market;
 using EmaBot.Api.Models;
@@ -18,8 +17,9 @@ public sealed record PaperTradeResponse(int Id, string Symbol, PaperTradeStatus 
 public sealed record PaperSessionDetailResponse(int Id, string Interval, PaperSessionStatus Status, DateTimeOffset StartedAtUtc, DateTimeOffset? StoppedAtUtc, DateTimeOffset? InterruptedAtUtc, string? FailureMessage, decimal RiskReward, decimal FixedOrderSizeUsdt, bool WaitForConfirmationCandle, bool UseEma100Filter, bool TrailingStopEnabled, decimal FeePercentPerSide, int TotalCrossovers, int LongSignals, int ShortSignals, int RejectedByEma100, int ConfirmationFailed, int InvalidStopLoss, int SkippedWhilePositionOpen, int CompletedTrades, decimal NetPnlUsdt, decimal TotalFeesUsdt, string ConnectionState, DateTimeOffset? LastUpdateUtc, IReadOnlyList<PaperSymbolResponse> Symbols, IReadOnlyList<PaperTradeResponse> RecentTrades);
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/paper-sessions")]
-public sealed class PaperSessionsController(EmaBotDbContext database, TradingSettingsService settingsService, PaperTradingCoordinator coordinator) : ControllerBase
+public sealed class PaperSessionsController(EmaBotDbContext database, TradingSettingsService settingsService, PaperTradingCoordinator coordinator, IMarketBarStreamProvider marketBarStream) : ControllerBase
 {
+    private const string LiveUnavailableMessage = "Live market data is temporarily unavailable while the MT5 provider is being implemented.";
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken token) => Ok((await database.PaperSessions.AsNoTracking().Include(session => session.Symbols).OrderByDescending(session => session.CreatedAtUtc).Take(30).ToListAsync(token)).Select(session => new PaperSessionSummaryResponse(session.Id, session.Interval, session.Status, session.StartedAtUtc, session.Symbols.Count, session.CompletedTrades, session.NetPnlUsdt, session.TotalFeesUsdt)));
 
@@ -36,6 +36,7 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
     [HttpPost]
     public async Task<ActionResult<PaperSessionDetailResponse>> Start(StartPaperSessionRequest request, CancellationToken token)
     {
+        if (marketBarStream is UnavailableMarketBarStreamProvider) return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(LiveUnavailableMessage));
         var symbols = request.Symbols?.Select(symbol => symbol.Trim().ToUpperInvariant()).Where(symbol => symbol.Length > 0).ToArray() ?? [];
         if (!StrategyTimeframes.IsSupported(request.Interval) || symbols.Length == 0) return BadRequest(new ApiMessage("Use a supported interval and select at least one symbol."));
         if (symbols.Distinct(StringComparer.Ordinal).Count() != symbols.Length) return BadRequest(new ApiMessage("Symbols must not contain duplicates."));
@@ -50,7 +51,7 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
         var session = new PaperSession { Interval = request.Interval, Status = PaperSessionStatus.Running, CreatedAtUtc = now, StartedAtUtc = now, RiskReward = settings.RiskReward, FixedOrderSizeUsdt = settings.FixedOrderSizeUsdt, MinEmaGapPercent = settings.MinEmaGapPercent, MaxStopDistancePercent = settings.MaxStopDistancePercent, PositionSizingMode = settings.PositionSizingMode, StartingBalanceUsdt = settings.SimulatedAccountBalanceUsdt, CurrentBalanceUsdt = settings.SimulatedAccountBalanceUsdt, MarginPerTradePercent = settings.MarginPerTradePercent, Leverage = settings.Leverage, WaitForConfirmationCandle = settings.WaitForConfirmationCandle, UseEma100Filter = settings.UseEma100Filter, TrailingStopEnabled = settings.TrailingStopEnabled, FeePercentPerSide = settings.FeePercentPerSide, Symbols = monitored.Select(symbol => new PaperSessionSymbol { Symbol = symbol.Symbol }).ToList() };
         database.PaperSessions.Add(session); await database.SaveChangesAsync(token);
         try { await coordinator.StartSessionAsync(session.Id, false, token); }
-        catch (BinanceApiException) { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Public Binance warmup data is unavailable."; await database.SaveChangesAsync(token); return StatusCode(502, new ApiMessage("Binance market data is currently unavailable.")); }
+        catch (MarketDataProviderException) { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Historical warmup data is unavailable."; await database.SaveChangesAsync(token); return StatusCode(502, new ApiMessage("Historical market data is currently unavailable.")); }
         return CreatedAtAction(nameof(Get), new { id = session.Id }, ToDetail(session, coordinator.GetRuntimeSnapshot()));
     }
 
@@ -65,10 +66,11 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
     [HttpPost("{id:int}/resume")]
     public async Task<IActionResult> Resume(int id, CancellationToken token)
     {
+        if (marketBarStream is UnavailableMarketBarStreamProvider) return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(LiveUnavailableMessage));
         try { await coordinator.StartSessionAsync(id, true, token); var session = await DetailQuery().SingleAsync(item => item.Id == id, token); return Ok(ToDetail(session, coordinator.GetRuntimeSnapshot())); }
         catch (KeyNotFoundException) { return NotFound(new ApiMessage("Paper session not found.")); }
         catch (InvalidOperationException exception) { return Conflict(new ApiMessage(exception.Message)); }
-        catch (BinanceApiException) { return StatusCode(502, new ApiMessage("Binance market data is currently unavailable.")); }
+        catch (MarketDataProviderException) { return StatusCode(502, new ApiMessage("Historical market data is currently unavailable.")); }
     }
 
     private IQueryable<PaperSession> DetailQuery() => database.PaperSessions.AsNoTracking().Include(session => session.Symbols).Include(session => session.Trades).ThenInclude(trade => trade.Events);

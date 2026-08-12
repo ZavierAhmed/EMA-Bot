@@ -9,6 +9,8 @@ using EmaBot.Api.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -88,38 +90,72 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
-    public async Task Symbols_RejectUnsupportedAndDuplicateContracts()
+    public async Task Symbols_OnlyExposeExistingMonitoredInstrumentActions()
     {
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         var token = await GetAntiforgeryToken(client);
         Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, token, "admin", "A-strong-password-123!")).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, (await PostJson(client, "/api/symbols", "ETHUSDT")).StatusCode);
-        Assert.Equal(HttpStatusCode.Created, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
-        Assert.Equal(HttpStatusCode.Conflict, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
     }
 
     [Fact]
-    public async Task PaperSessionStart_AcceptsTwoEnabledMonitoredSymbols()
+    public async Task PaperSessionStart_IsUnavailableBeforePersistence()
     {
-        using (var scope = _factory.Services.CreateScope())
+        using (var setupScope = _factory.Services.CreateScope())
         {
-            var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            var setupDatabase = setupScope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            if (!await setupDatabase.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) setupDatabase.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
+            if (!await setupDatabase.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "ETHUSDT")) setupDatabase.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "ETHUSDT", BaseAsset = "ETH", QuoteAsset = "USDT", IsEnabled = true });
+            await setupDatabase.SaveChangesAsync();
+        }
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider());
+        var response = await controller.Start(new StartPaperSessionRequest("3m", ["BTCUSDT", "ETHUSDT"]), CancellationToken.None);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsType<ObjectResult>(response.Result).StatusCode);
+        Assert.Equal(0, await database.PaperSessions.CountAsync());
+        Assert.Equal(0, await database.PaperSessionSymbols.CountAsync());
+    }
+
+    [Fact]
+    public async Task PaperSessionResume_IsUnavailableWithoutChangingPersistedState()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var session = new PaperSession { Interval = "3m", Status = PaperSessionStatus.Interrupted, StartedAtUtc = DateTimeOffset.UtcNow, CreatedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m };
+        database.PaperSessions.Add(session); await database.SaveChangesAsync();
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider());
+
+        var response = await controller.Resume(session.Id, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsType<ObjectResult>(response).StatusCode);
+        Assert.Equal(PaperSessionStatus.Interrupted, (await database.PaperSessions.FindAsync(session.Id))!.Status);
+    }
+
+    [Fact]
+    public async Task StrategyPreview_UsesHistoricalProviderForEnabledMonitoredInstrument()
+    {
+        _factory.BinanceClient.Klines = Enumerable.Range(0, 105).Select(index =>
+        {
+            var time = DateTimeOffset.UnixEpoch.AddMinutes(index * 3);
+            var close = index < 100 ? 100m : 100m + index - 99m;
+            return new Market.Candle(time, time.AddMinutes(3).AddMilliseconds(-1), close - 1m, close + 1m, close - 2m, close, 1m, true);
+        }).ToArray();
+        using (var setupScope = _factory.Services.CreateScope())
+        {
+            var database = setupScope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
             if (!await database.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
-            if (!await database.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "ETHUSDT")) database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "ETHUSDT", BaseAsset = "ETH", QuoteAsset = "USDT", IsEnabled = true });
             await database.SaveChangesAsync();
         }
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
-        var loginToken = await GetAntiforgeryToken(client);
-        Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, loginToken, "admin", "A-strong-password-123!")).StatusCode);
         var token = await GetAntiforgeryToken(client);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/paper-sessions") { Content = JsonContent.Create(new { interval = "3m", symbols = new[] { "BTCUSDT", "ETHUSDT" } }) };
-        request.Headers.Add("X-CSRF-TOKEN", token);
-        var response = await client.SendAsync(request);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        using var session = System.Text.Json.JsonDocument.Parse(body);
-        Assert.Equal(2, session.RootElement.GetProperty("symbols").GetArrayLength());
-        await _factory.Services.GetRequiredService<PaperTradingCoordinator>().StopSessionAsync(session.RootElement.GetProperty("id").GetInt32(), CancellationToken.None);
+        Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, token, "admin", "A-strong-password-123!")).StatusCode);
+
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/strategy/preview?symbol=BTCUSDT&interval=3m&limit=105")).StatusCode);
+        using var verifyScope = _factory.Services.CreateScope();
+        var monitored = await verifyScope.ServiceProvider.GetRequiredService<EmaBotDbContext>().MonitoredSymbols.SingleAsync(symbol => symbol.Symbol == "BTCUSDT");
+        monitored.IsEnabled = false; await verifyScope.ServiceProvider.GetRequiredService<EmaBotDbContext>().SaveChangesAsync();
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync("/api/strategy/preview?symbol=BTCUSDT&interval=3m&limit=105")).StatusCode);
     }
 
     private static async Task<string> GetAntiforgeryToken(HttpClient client)
@@ -163,8 +199,8 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
         builder.ConfigureServices(services =>
         {
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
-            services.RemoveAll<IBinanceFuturesMarketDataClient>();
-            services.AddSingleton<IBinanceFuturesMarketDataClient>(BinanceClient);
+            services.RemoveAll<IBinanceHistoricalKlineClient>();
+            services.AddSingleton<IBinanceHistoricalKlineClient>(BinanceClient);
             services.RemoveAll<IMarketBarStreamProvider>();
             services.AddSingleton<IMarketBarStreamProvider>(StreamClient);
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));

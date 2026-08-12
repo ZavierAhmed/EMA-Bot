@@ -1,5 +1,13 @@
 namespace EmaBot.Api.Market;
 
+public enum MarketDataErrorKind { Unavailable, Timeout, RateLimited, InvalidResponse, Unknown }
+
+public sealed class MarketDataProviderException(string provider, MarketDataErrorKind kind, string message, Exception? innerException = null) : Exception(message, innerException)
+{
+    public string Provider { get; } = provider;
+    public MarketDataErrorKind Kind { get; } = kind;
+}
+
 public interface IHistoricalMarketDataProvider
 {
     Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string timeframe, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken);
@@ -23,4 +31,12 @@ public sealed record MarketBarUpdate(
 public interface IMarketBarStreamProvider
 {
     Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken);
+}
+
+public sealed class UnavailableMarketBarStreamProvider : IMarketBarStreamProvider
+{
+    public const string Message = "Live market-bar streaming is unavailable until the MT5 provider is configured.";
+
+    public Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)
+        => Task.FromException(new NotSupportedException(Message));
 }

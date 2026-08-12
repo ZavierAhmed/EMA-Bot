@@ -10,7 +10,7 @@ public sealed class BinanceTimeoutTests
     public async Task HttpClientTimeout_BecomesGatewayTimeoutBinanceException()
     {
         using var client = new HttpClient(new DelayingHandler()) { BaseAddress = new Uri("https://example.test/"), Timeout = TimeSpan.FromMilliseconds(20) };
-        var market = new BinanceFuturesMarketDataClient(client, TimeProvider.System);
+        var market = new BinanceHistoricalKlineClient(client, TimeProvider.System);
         var exception = await Assert.ThrowsAsync<BinanceApiException>(() => market.GetKlinesAsync("BTCUSDT", "3m", null, null, 1, CancellationToken.None));
         Assert.Equal(StatusCodes.Status504GatewayTimeout, exception.StatusCode);
     }
@@ -20,7 +20,7 @@ public sealed class BinanceTimeoutTests
     {
         using var client = new HttpClient(new DelayingHandler()) { BaseAddress = new Uri("https://example.test/"), Timeout = TimeSpan.FromSeconds(5) };
         var cancellation = new CancellationTokenSource(); cancellation.Cancel();
-        var market = new BinanceFuturesMarketDataClient(client, TimeProvider.System);
+        var market = new BinanceHistoricalKlineClient(client, TimeProvider.System);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => market.GetKlinesAsync("BTCUSDT", "3m", null, null, 1, cancellation.Token));
     }
 

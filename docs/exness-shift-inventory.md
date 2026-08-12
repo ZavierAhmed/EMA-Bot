@@ -1,5 +1,16 @@
 # Exness shift migration inventory (E0)
 
+## Phase E3 completed
+
+The application core uses neutral market contracts. Historical research is
+temporarily supplied by the legacy Binance kline adapter only; it remains in
+place for backtests, optimizer runs, diagnostics, charts, and strategy preview.
+Binance live streaming, product-facing symbol discovery, and the Binance
+controller have been removed. Live market bars and new instrument discovery are
+unavailable pending the MT5 provider and MT5/Exness catalog. No MT5, Exness,
+Named Pipe, strategy, cost/sizing, database, or migration implementation was
+added in this phase.
+
 ## Scope and branch safety
 
 This is an architecture and dependency inventory only.  It was prepared on
@@ -25,9 +36,10 @@ E2 extracted the shared market concepts into `EmaBot.Api.Market`: `Candle`,
 `StrategyTimeframes`, `IHistoricalMarketDataProvider`,
 `IMarketBarStreamProvider`, `MarketBarUpdate`, `InstrumentSpec`, and
 `MarketQuote`. Strategy, backtest, H2, optimizer, diagnostics, trade charts,
-and internal Paper now depend on those neutral contracts. Binance remains the
-active legacy adapter through `BinanceHistoricalCandleService` and
-`BinanceFuturesStreamClient`; no MT5 or Exness support is implied.
+and internal Paper now depend on those neutral contracts. E3 retains the
+history-only `BinanceHistoricalMarketDataProvider` for research and registers
+an unavailable neutral live-stream provider pending MT5; no MT5 or Exness
+support is implied.
 
 ## Target architecture
 
@@ -104,11 +116,11 @@ broker-independent, but their input type is not yet.
 
 | Current item | Why it is provider-specific | Future target | Dependents |
 | --- | --- | --- | --- |
-| `BinanceFuturesMarketDataClient` | REST endpoint, Futures exchange metadata, USDT perpetual filtering, kline JSON and Binance errors/timeouts. | MT5/Exness adapter behind broker-neutral catalog and historical interfaces. | `BinanceController`, historical service, tests |
-| `BinanceHistoricalCandleService` | Binance pagination cap, millisecond cursor, Binance intervals and closed-kline filtering. | Normalized historical provider backed by MT5 history/bars, with source and completeness metadata. | Backtest service, optimizer, regime diagnostics, paper warmup |
-| `BinanceFuturesStreamClient` | Binance WebSocket endpoint/subscription/parser and five-second silence watchdog. | MT5 bridge quote/bar events over Named Pipes. Retain liveness/reconnect concepts at the transport layer. | `PaperTradingCoordinator`, paper tests |
-| `BinanceController` | Exposes Binance-only tradable USDT perpetual discovery. | Instrument/catalog controller backed by the selected broker adapter. | `SymbolsPage.tsx`, API contract/tests |
-| Binance live-paper wiring | Paper coordinator directly speaks Binance historical + kline stream. | Broker-neutral internal-paper feed; separately an MT5 Demo execution/session adapter. | Coordinator, controller, page/tests |
+| `BinanceHistoricalKlineClient` | Legacy REST kline JSON, pagination cursor, and provider-specific error parsing. | MT5/Exness historical adapter behind `IHistoricalMarketDataProvider`. | Legacy historical provider and parity tests |
+| `BinanceHistoricalMarketDataProvider` | Temporary research-only source for normalized closed bars. | Normalized historical provider backed by MT5 history/bars, with source and completeness metadata. | Backtest service, optimizer, diagnostics, charts, preview |
+| `UnavailableMarketBarStreamProvider` | Explicitly rejects live market-bar streaming until a provider exists. | MT5 bridge quote/bar events over Named Pipes. | Paper controller/coordinator |
+| Instrument discovery | Temporarily unavailable; existing monitored records remain intact. | Broker-neutral MT5/Exness catalog controller. | Symbols page/API |
+| Internal Paper live wiring | New starts/resumes return 503 without persisting a new session. | Broker-neutral internal-paper feed; separately an MT5 Demo execution/session adapter. | Coordinator, controller, page/tests |
 
 ## Conservative REMOVE candidates (not E0 deletions)
 

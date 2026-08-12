@@ -2,11 +2,8 @@ using EmaBot.Api.Binance;
 
 namespace EmaBot.Api.Tests;
 
-public sealed class TestBinanceClient : IBinanceFuturesMarketDataClient
+public sealed class TestBinanceClient : IBinanceHistoricalKlineClient
 {
-    private static readonly IReadOnlyList<BinanceSymbol> Symbols = [new("BTCUSDT", "BTC", "USDT", "TRADING", "PERPETUAL")];
-    public Task<BinanceExchangeInfo> GetExchangeInfoAsync(CancellationToken cancellationToken) => Task.FromResult(new BinanceExchangeInfo(Symbols));
-    public Task<IReadOnlyList<BinanceSymbol>> GetTradableUsdtPerpetualSymbolsAsync(CancellationToken cancellationToken) => Task.FromResult(Symbols);
     public IReadOnlyList<Candle> Klines { get; set; } = [];
     public Exception? KlinesException { get; set; }
     public int KlineRequests { get; private set; }

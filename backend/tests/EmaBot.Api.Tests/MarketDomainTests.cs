@@ -27,7 +27,7 @@ public sealed class MarketDomainTests
         var start = DateTimeOffset.UnixEpoch;
         var duplicate = new Candle(start.AddMinutes(3), start.AddMinutes(6).AddMilliseconds(-1), 2m, 3m, 1m, 2m, 4m, true);
         var replacement = duplicate with { Close = 2.5m };
-        IHistoricalMarketDataProvider provider = new BinanceHistoricalCandleService(new HistoricalClient([
+        IHistoricalMarketDataProvider provider = new BinanceHistoricalMarketDataProvider(new HistoricalClient([
             new Candle(start.AddMinutes(-3), start.AddMilliseconds(-1), 1m, 1m, 1m, 1m, 1m, true),
             new Candle(start, start.AddMinutes(3).AddMilliseconds(-1), 1m, 2m, 0m, 1.5m, 3m, true),
             duplicate,
@@ -44,24 +44,11 @@ public sealed class MarketDomainTests
     }
 
     [Fact]
-    public void BinanceKlineUpdate_MapsEveryFieldToNeutralMarketBarUpdate()
+    public async Task UnavailableLiveProvider_FailsClearly()
     {
-        var open = DateTimeOffset.UnixEpoch.AddMinutes(3);
-        var update = new BinanceKlineUpdate("BTCUSDT", "3m", open.AddSeconds(4), open, open.AddMinutes(3).AddMilliseconds(-1), 100m, 105m, 99m, 102m, 123m, true);
-
-        var neutral = update.ToMarketBarUpdate();
-
-        Assert.Equal(update.Symbol, neutral.Symbol);
-        Assert.Equal(update.Interval, neutral.Timeframe);
-        Assert.Equal(update.EventTimeUtc, neutral.EventTimeUtc);
-        Assert.Equal(update.OpenTimeUtc, neutral.OpenTimeUtc);
-        Assert.Equal(update.CloseTimeUtc, neutral.CloseTimeUtc);
-        Assert.Equal(update.Open, neutral.Open);
-        Assert.Equal(update.High, neutral.High);
-        Assert.Equal(update.Low, neutral.Low);
-        Assert.Equal(update.Close, neutral.Close);
-        Assert.Equal(update.Volume, neutral.Volume);
-        Assert.Equal(update.IsClosed, neutral.IsClosed);
+        var provider = new UnavailableMarketBarStreamProvider();
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() => provider.StreamAsync([], "3m", (_, _) => Task.CompletedTask, null, CancellationToken.None));
+        Assert.Equal(UnavailableMarketBarStreamProvider.Message, error.Message);
     }
 
     [Fact]
@@ -91,7 +78,7 @@ public sealed class MarketDomainTests
     {
         using var factory = new EmaBotApiFactory();
 
-        Assert.IsType<BinanceHistoricalCandleService>(factory.Services.GetRequiredService<IHistoricalMarketDataProvider>());
+        Assert.IsType<BinanceHistoricalMarketDataProvider>(factory.Services.GetRequiredService<IHistoricalMarketDataProvider>());
         Assert.IsType<TestBinanceStreamClient>(factory.Services.GetRequiredService<IMarketBarStreamProvider>());
     }
 
@@ -105,10 +92,8 @@ public sealed class MarketDomainTests
         Assert.Equal(0.00020m, quote.Spread);
     }
 
-    private sealed class HistoricalClient(IReadOnlyList<Candle> candles) : IBinanceFuturesMarketDataClient
+    private sealed class HistoricalClient(IReadOnlyList<Candle> candles) : IBinanceHistoricalKlineClient
     {
-        public Task<BinanceExchangeInfo> GetExchangeInfoAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task<IReadOnlyList<BinanceSymbol>> GetTradableUsdtPerpetualSymbolsAsync(CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<IReadOnlyList<Candle>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? startTimeUtc, DateTimeOffset? endTimeUtc, int? limit, CancellationToken cancellationToken) => Task.FromResult(candles);
     }
 }

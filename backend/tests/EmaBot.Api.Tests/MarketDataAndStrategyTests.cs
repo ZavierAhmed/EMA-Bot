@@ -32,22 +32,20 @@ public sealed class MarketDataAndStrategyTests
     }
 
     [Fact]
-    public async Task Client_FiltersEligibleContractsAndParsesClosedKlines()
+    public async Task HistoricalClient_ParsesClosedKlines()
     {
-        const string exchange = """{"symbols":[{"symbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","status":"TRADING","contractType":"PERPETUAL"},{"symbol":"OLDUSDT","baseAsset":"OLD","quoteAsset":"USDT","status":"BREAK","contractType":"PERPETUAL"},{"symbol":"BTCUSD","baseAsset":"BTC","quoteAsset":"USD","status":"TRADING","contractType":"PERPETUAL"}]}""";
         const string klines = """[[1700000000000,"1","2","0.5","1.5","100",1700000179999,"0",1,"0","0","0"]]""";
-        var client = new BinanceFuturesMarketDataClient(new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(_.RequestUri!.AbsolutePath.Contains("exchangeInfo") ? exchange : klines, Encoding.UTF8, "application/json") })) { BaseAddress = new Uri("https://fapi.binance.com/") }, TimeProvider.System);
-        var symbols = await client.GetTradableUsdtPerpetualSymbolsAsync(CancellationToken.None);
+        var client = new BinanceHistoricalKlineClient(new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(klines, Encoding.UTF8, "application/json") })) { BaseAddress = new Uri("https://fapi.binance.com/") }, TimeProvider.System);
         var candles = await client.GetKlinesAsync("btcusdt", "3m", null, null, 10, CancellationToken.None);
-        Assert.Single(symbols); Assert.Equal("BTCUSDT", symbols[0].Symbol); Assert.Single(candles); Assert.True(candles[0].IsClosed); Assert.Equal(1.5m, candles[0].Close);
+        Assert.Single(candles); Assert.True(candles[0].IsClosed); Assert.Equal(1.5m, candles[0].Close);
         await Assert.ThrowsAsync<ArgumentException>(() => client.GetKlinesAsync("BTCUSDT", "1m", null, null, 10, CancellationToken.None));
     }
 
     [Fact]
     public async Task Client_MapsRateLimitToControlledException()
     {
-        var client = new BinanceFuturesMarketDataClient(new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = new StringContent("{\"msg\":\"Too many requests\"}") })) { BaseAddress = new Uri("https://fapi.binance.com/") }, TimeProvider.System);
-        var exception = await Assert.ThrowsAsync<BinanceApiException>(() => client.GetExchangeInfoAsync(CancellationToken.None));
+        var client = new BinanceHistoricalKlineClient(new HttpClient(new FakeHandler(_ => new HttpResponseMessage(HttpStatusCode.TooManyRequests) { Content = new StringContent("{\"msg\":\"Too many requests\"}") })) { BaseAddress = new Uri("https://fapi.binance.com/") }, TimeProvider.System);
+        var exception = await Assert.ThrowsAsync<BinanceApiException>(() => client.GetKlinesAsync("BTCUSDT", "3m", null, null, 1, CancellationToken.None));
         Assert.True(exception.IsRateLimited);
     }
 

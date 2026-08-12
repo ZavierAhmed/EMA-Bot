@@ -26,7 +26,7 @@ public sealed class HistoricalCandleServiceTests
         var exact = CandleAt(start, 1, true);
         var crossingEnd = new Candle(start.AddMinutes(2), start.AddMinutes(9), 1, 1, 1, 1, 1, true);
         var open = CandleAt(start.AddMinutes(3), 1, false);
-        var service = new BinanceHistoricalCandleService(new PageClient([exact, crossingEnd, open]));
+        var service = new BinanceHistoricalMarketDataProvider(new PageClient([exact, crossingEnd, open]));
 
         var result = await service.GetRangeAsync("BTCUSDT", "1w", start, exact.CloseTimeUtc, CancellationToken.None);
 
@@ -39,7 +39,7 @@ public sealed class HistoricalCandleServiceTests
     public async Task Range_ExcludesLongIntervalCandleThatClosesAfterEnd(string interval)
     {
         var start = DateTimeOffset.UnixEpoch;
-        var service = new BinanceHistoricalCandleService(new PageClient([new Candle(start, start.AddDays(7), 1, 1, 1, 1, 1, true)]));
+        var service = new BinanceHistoricalMarketDataProvider(new PageClient([new Candle(start, start.AddDays(7), 1, 1, 1, 1, 1, true)]));
 
         var result = await service.GetRangeAsync("BTCUSDT", interval, start, start.AddDays(2), CancellationToken.None);
 
@@ -54,7 +54,7 @@ public sealed class HistoricalCandleServiceTests
         var duplicate = first[^1];
         var final = CandleAt(start.AddMinutes(1500), 1, true);
         var client = new PageClient(first, [duplicate, final]);
-        var service = new BinanceHistoricalCandleService(client);
+        var service = new BinanceHistoricalMarketDataProvider(client);
 
         var result = await service.GetRangeAsync("BTCUSDT", "1m", start, final.CloseTimeUtc, CancellationToken.None);
 
@@ -68,19 +68,19 @@ public sealed class HistoricalCandleServiceTests
     public async Task Range_StopsForEmptyPageAndPropagatesRateLimits()
     {
         var start = DateTimeOffset.UnixEpoch;
-        var empty = new BinanceHistoricalCandleService(new PageClient([]));
+        var empty = new BinanceHistoricalMarketDataProvider(new PageClient([]));
         Assert.Empty(await empty.GetRangeAsync("BTCUSDT", "1h", start, start.AddHours(1), CancellationToken.None));
-        var rateLimited = new BinanceHistoricalCandleService(new PageClient(new BinanceApiException("slow down", 429)));
-        var error = await Assert.ThrowsAsync<BinanceApiException>(() => rateLimited.GetRangeAsync("BTCUSDT", "1h", start, start.AddHours(1), CancellationToken.None));
-        Assert.True(error.IsRateLimited);
+        var rateLimited = new BinanceHistoricalMarketDataProvider(new PageClient(new BinanceApiException("slow down", 429)));
+        var error = await Assert.ThrowsAsync<MarketDataProviderException>(() => rateLimited.GetRangeAsync("BTCUSDT", "1h", start, start.AddHours(1), CancellationToken.None));
+        Assert.Equal(MarketDataErrorKind.RateLimited, error.Kind);
     }
 
     [Fact]
     public async Task Range_RejectsOverMaximumAndHonorsCancellation()
     {
         var start = DateTimeOffset.UnixEpoch;
-        var tooMany = Enumerable.Range(0, BinanceHistoricalCandleService.MaximumCandles + 1).Select(index => CandleAt(start.AddSeconds(index), 1, true)).ToArray();
-        var service = new BinanceHistoricalCandleService(new PageClient(tooMany));
+        var tooMany = Enumerable.Range(0, BinanceHistoricalMarketDataProvider.MaximumCandles + 1).Select(index => CandleAt(start.AddSeconds(index), 1, true)).ToArray();
+        var service = new BinanceHistoricalMarketDataProvider(new PageClient(tooMany));
         await Assert.ThrowsAsync<ArgumentException>(() => service.GetRangeAsync("BTCUSDT", "1m", start, start.AddDays(3), CancellationToken.None));
         using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.GetRangeAsync("BTCUSDT", "1m", start, start.AddDays(1), cancellation.Token));
@@ -88,14 +88,12 @@ public sealed class HistoricalCandleServiceTests
 
     private static Candle CandleAt(DateTimeOffset open, int minutes, bool closed) => new(open, open.AddMinutes(minutes), 1, 2, 0.5m, 1.5m, 1, closed);
 
-    private sealed class PageClient : IBinanceFuturesMarketDataClient
+    private sealed class PageClient : IBinanceHistoricalKlineClient
     {
         private readonly Queue<IReadOnlyList<Candle>> _pages = new(); private readonly Exception? _error;
         public List<DateTimeOffset?> RequestStarts { get; } = [];
         public PageClient(params IReadOnlyList<Candle>[] pages) { foreach (var page in pages) _pages.Enqueue(page); }
         public PageClient(Exception error) => _error = error;
-        public Task<BinanceExchangeInfo> GetExchangeInfoAsync(CancellationToken token) => throw new NotSupportedException();
-        public Task<IReadOnlyList<BinanceSymbol>> GetTradableUsdtPerpetualSymbolsAsync(CancellationToken token) => throw new NotSupportedException();
         public Task<IReadOnlyList<Candle>> GetKlinesAsync(string symbol, string interval, DateTimeOffset? start, DateTimeOffset? end, int? limit, CancellationToken token)
         {
             RequestStarts.Add(start); if (_error is not null) throw _error;
