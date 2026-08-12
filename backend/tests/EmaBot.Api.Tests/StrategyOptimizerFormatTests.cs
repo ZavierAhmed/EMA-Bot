@@ -32,4 +32,25 @@ public sealed class StrategyOptimizerFormatTests
         using var reader = new StreamReader(archive.GetEntry($"xl/worksheets/{sheet}")!.Open(), Encoding.UTF8);
         Assert.Contains(header, reader.ReadToEnd());
     }
+
+    [Fact]
+    public void Workbook_LargeResearchDataset_RemainsValidAndContainsAllRows()
+    {
+        const int candidateCount = 288, marketsPerCandidate = 20, tradeCount = 3000;
+        var candidates = Enumerable.Range(1, candidateCount).Select(id => new StrategyOptimizationCandidate { Id = id, RiskReward = 1.1m, Validation = new OptimizationMetrics { TotalTrades = 10 }, MarketResults = Enumerable.Range(1, marketsPerCandidate).Select(market => new StrategyOptimizationMarketResult { Symbol = $"S{market}", Timeframe = "3m", Validation = new OptimizationMetrics { TotalTrades = 1 } }).ToList() }).ToList();
+        var trades = Enumerable.Range(1, tradeCount).Select(id => new StrategyOptimizationTrade { StrategyOptimizationCandidateId = (id % candidateCount) + 1, Symbol = "BTCUSDT", Timeframe = "3m", Direction = SignalDirection.Long, EntryTimeUtc = DateTimeOffset.UnixEpoch, ExitTimeUtc = DateTimeOffset.UnixEpoch.AddMinutes(3), ExitReason = BacktestExitReason.EndOfData }).ToList();
+        var run = new StrategyOptimizationRun { Id = 99, Status = StrategyOptimizationStatus.Completed, RequestedStartUtc = DateTimeOffset.UnixEpoch, RequestedEndUtc = DateTimeOffset.UnixEpoch.AddDays(30), CandidateCount = candidateCount, MarketCount = marketsPerCandidate, SymbolsJson = "[]", TimeframesJson = "[]", GridJson = "{}", Candidates = candidates, Trades = trades };
+
+        using var archive = new ZipArchive(new MemoryStream(StrategyOptimizerWorkbook.Create(run)), ZipArchiveMode.Read);
+        Assert.Equal(7, archive.Entries.Count(entry => entry.FullName.StartsWith("xl/worksheets/sheet", StringComparison.Ordinal)));
+        Assert.Equal(candidateCount + 1, Rows(archive, "sheet2.xml"));
+        Assert.Equal(candidateCount * marketsPerCandidate + 1, Rows(archive, "sheet3.xml"));
+        Assert.Equal(tradeCount + 1, Rows(archive, "sheet6.xml"));
+    }
+
+    private static int Rows(ZipArchive archive, string sheet)
+    {
+        using var reader = new StreamReader(archive.GetEntry($"xl/worksheets/{sheet}")!.Open(), Encoding.UTF8);
+        return reader.ReadToEnd().Split("<row>", StringSplitOptions.None).Length - 1;
+    }
 }

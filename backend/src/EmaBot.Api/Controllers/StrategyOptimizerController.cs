@@ -1,6 +1,8 @@
 using System.IO.Compression;
 using System.Security;
 using System.Text;
+using System.Diagnostics;
+using System.Globalization;
 using EmaBot.Api.Auth;
 using EmaBot.Api.Data;
 using EmaBot.Api.Models;
@@ -12,7 +14,7 @@ using Microsoft.EntityFrameworkCore;
 namespace EmaBot.Api.Controllers;
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/strategy-optimizer")]
-public sealed class StrategyOptimizerController(EmaBotDbContext database, StrategyOptimizationService service) : ControllerBase
+public sealed class StrategyOptimizerController(EmaBotDbContext database, StrategyOptimizationService service, ILogger<StrategyOptimizerController> logger) : ControllerBase
 {
     [HttpGet("options")] public async Task<IActionResult> Options(CancellationToken token) => Ok(await service.GetOptionsAsync(token));
     [HttpPost("runs")] public async Task<IActionResult> Start(StrategyOptimizerStartRequest request, CancellationToken token) { try { var run = await service.StartAsync(request, token); return Accepted($"api/strategy-optimizer/runs/{run.Id}", Summary(run)); } catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); } catch (InvalidOperationException exception) { return Conflict(new ApiMessage(exception.Message)); } }
@@ -21,7 +23,30 @@ public sealed class StrategyOptimizerController(EmaBotDbContext database, Strate
     [HttpGet("runs/{id:int}/candidates")] public async Task<IActionResult> Candidates(int id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken token = default) { page=Math.Max(page,1); pageSize=Math.Clamp(pageSize,1,100); var all=(await database.StrategyOptimizationCandidates.AsNoTracking().Where(candidate=>candidate.StrategyOptimizationRunId==id).ToListAsync(token)).OrderBy(candidate=>candidate.RobustRank??int.MaxValue).ThenByDescending(candidate=>candidate.Validation.NetProfitFactor).ThenBy(candidate=>candidate.Id).ToArray(); var baseline=all.FirstOrDefault(candidate=>candidate.IsBaseline); return Ok(new { total=all.Length, items=all.Skip((page-1)*pageSize).Take(pageSize).Select(candidate=>Candidate(candidate,baseline)) }); }
     [HttpGet("runs/{id:int}/candidates/{candidateId:int}")] public async Task<IActionResult> CandidateDetail(int id, int candidateId, CancellationToken token) { var candidate=await database.StrategyOptimizationCandidates.AsNoTracking().Include(value=>value.MarketResults).SingleOrDefaultAsync(value=>value.Id==candidateId&&value.StrategyOptimizationRunId==id,token); var baseline=await database.StrategyOptimizationCandidates.AsNoTracking().SingleOrDefaultAsync(value=>value.StrategyOptimizationRunId==id&&value.IsBaseline,token); return candidate is null ? NotFound(new ApiMessage("Candidate not found.")) : Ok(new { candidate=Candidate(candidate,baseline), markets=candidate.MarketResults.Select(Market) }); }
     [HttpPost("runs/{id:int}/cancel")] public async Task<IActionResult> Cancel(int id, CancellationToken token) => await service.CancelAsync(id, token) ? Accepted() : NotFound(new ApiMessage("No active optimization run found."));
-    [HttpGet("runs/{id:int}/excel")] public async Task<IActionResult> Excel(int id, CancellationToken token) { var run=await database.StrategyOptimizationRuns.AsNoTracking().Include(value=>value.Candidates).ThenInclude(candidate=>candidate.MarketResults).Include(value=>value.Trades).SingleOrDefaultAsync(value=>value.Id==id,token); return run is null ? NotFound(new ApiMessage("Optimization run not found.")) : File(StrategyOptimizerWorkbook.Create(run), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-optimizer-{id}.xlsx"); }
+    [HttpGet("runs/{id:int}/excel")] public async Task<IActionResult> Excel(int id, CancellationToken token)
+    {
+        var total = Stopwatch.StartNew();
+        try
+        {
+            var load = Stopwatch.StartNew();
+            var run = await database.StrategyOptimizationRuns.AsNoTracking().SingleOrDefaultAsync(value => value.Id == id, token);
+            if (run is null) return NotFound(new ApiMessage("Optimization run not found."));
+            if (run.Status != StrategyOptimizationStatus.Completed) return Conflict(new ApiMessage("The optimizer Excel export is available after the research run completes."));
+            var candidates = await database.StrategyOptimizationCandidates.AsNoTracking().AsSplitQuery().Include(candidate => candidate.MarketResults).Where(candidate => candidate.StrategyOptimizationRunId == id).ToListAsync(token);
+            var trades = await database.StrategyOptimizationTrades.AsNoTracking().Where(trade => trade.StrategyOptimizationRunId == id).ToListAsync(token);
+            load.Stop();
+            // All entities are detached; assembling navigations is export-only and never writes data back.
+            run.Candidates = candidates; run.Trades = trades;
+            var workbook = Stopwatch.StartNew(); var bytes = StrategyOptimizerWorkbook.Create(run); workbook.Stop();
+            logger.LogInformation("Optimizer export {RunId}: {Candidates} candidates, {Markets} markets, {Trades} trades, DB load {Load}, workbook {Workbook}, {Bytes} bytes, total {Total}.", id, candidates.Count, candidates.Sum(candidate => candidate.MarketResults.Count), trades.Count, load.Elapsed, workbook.Elapsed, bytes.Length, total.Elapsed);
+            return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-optimizer-{id}.xlsx");
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Optimizer Excel export {RunId} failed after {Elapsed}.", id, total.Elapsed);
+            return StatusCode(StatusCodes.Status500InternalServerError, new ApiMessage("The optimizer Excel export could not be generated. Check the API log for details."));
+        }
+    }
 
     private static object Summary(StrategyOptimizationRun run) => new { run.Id, status=run.Status.ToString(), run.CreatedAtUtc, run.StartedAtUtc, run.CompletedAtUtc, run.FailureMessage, run.RequestedStartUtc, run.RequestedEndUtc, run.CandidateCount, run.MarketCount, run.TotalWork, run.CompletedWork, progress=run.TotalWork==0?0m:(decimal)run.CompletedWork/run.TotalWork*100m, run.RecommendedCandidateId, assumptions=new { run.SimulatedAccountBalanceUsdt, run.FixedOrderSizeUsdt, run.MarginPerTradePercent, run.Leverage, run.FeePercentPerSide, positionSizingMode=run.PositionSizingMode.ToString() }, robustCandidateCount=run.Candidates.Count(candidate=>candidate.RobustCandidate) };
     private static object Candidate(StrategyOptimizationCandidate value, StrategyOptimizationCandidate? baseline = null) => new { value.Id,value.RiskReward,value.MinEmaGapPercent,value.MaxStopDistancePercent,value.WaitForConfirmationCandle,value.UseEma100Filter,value.TrailingStopEnabled,value.IsBaseline,value.RobustCandidate,value.RobustRank,value.ProfitableMarketRatio,full=value.Full,development=value.Development,validation=value.Validation, baselineDeltas=baseline is null ? null : new { deltaNetPnlUsdt=value.Validation.NetPnlUsdt-baseline.Validation.NetPnlUsdt,deltaNetReturnPercent=value.Validation.NetReturnPercent-baseline.Validation.NetReturnPercent,deltaNetProfitFactor=(value.Validation.NetProfitFactor ?? 0m)-(baseline.Validation.NetProfitFactor ?? 0m),deltaMaxDrawdownPercent=value.Validation.MaxDrawdownPercent-baseline.Validation.MaxDrawdownPercent,deltaTradeCount=value.Validation.TotalTrades-baseline.Validation.TotalTrades,deltaWinRatePercent=value.Validation.WinRatePercent-baseline.Validation.WinRatePercent } };
@@ -31,6 +56,12 @@ public sealed class StrategyOptimizerController(EmaBotDbContext database, Strate
 public static class StrategyOptimizerWorkbook
 {
     public static byte[] Create(StrategyOptimizationRun run)
+    {
+        var culture = CultureInfo.CurrentCulture; var uiCulture = CultureInfo.CurrentUICulture;
+        try { CultureInfo.CurrentCulture = CultureInfo.InvariantCulture; CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture; return CreateInvariant(run); }
+        finally { CultureInfo.CurrentCulture = culture; CultureInfo.CurrentUICulture = uiCulture; }
+    }
+    private static byte[] CreateInvariant(StrategyOptimizationRun run)
     {
         var baseline = run.Candidates.SingleOrDefault(candidate => candidate.IsBaseline);
         var sheets = new List<(string Name, IEnumerable<IEnumerable<string?>> Rows)>
@@ -43,7 +74,7 @@ public static class StrategyOptimizerWorkbook
             ("Top Candidate Trades", new[] { new[] { "Candidate ID","Symbol","Timeframe","Direction","IsReentry","EntryTimeUtc","ExitTimeUtc","HoldingMinutes","EntryPrice","ExitPrice","InitialStopLoss","FinalStopLoss","OriginalTakeProfit","FinalTakeProfit","GrossPnlUsdt","TotalFeesUsdt","NetPnlUsdt","NetRMultiple","ExitReason","Signal EMA9","Signal EMA15","Signal EMA100","Signal Gap","ExpectedNetTargetR" } }.Concat(run.Trades.Select(trade=>new[] { trade.StrategyOptimizationCandidateId.ToString(),trade.Symbol,trade.Timeframe,trade.Direction.ToString(),trade.IsReentry.ToString(),trade.EntryTimeUtc.ToString("O"),trade.ExitTimeUtc.ToString("O"),(trade.ExitTimeUtc-trade.EntryTimeUtc).TotalMinutes.ToString(),trade.EntryPrice.ToString(),trade.ExitPrice.ToString(),trade.InitialStopLoss.ToString(),trade.FinalStopLoss.ToString(),trade.OriginalTakeProfit.ToString(),trade.FinalTakeProfit.ToString(),trade.GrossPnlUsdt.ToString(),trade.TotalFeesUsdt.ToString(),trade.NetPnlUsdt.ToString(),trade.NetRMultiple.ToString(),trade.ExitReason.ToString(),trade.SignalEma9?.ToString(),trade.SignalEma15?.ToString(),trade.SignalEma100?.ToString(),trade.SignalGapPercent?.ToString(),trade.ExpectedNetTargetR.ToString() }))),
             ("Run Configuration", [["Symbols",run.SymbolsJson],["Timeframes",run.TimeframesJson],["Parameter grid",run.GridJson],["Position sizing mode",run.PositionSizingMode.ToString()],["Balance",run.SimulatedAccountBalanceUsdt.ToString()],["Fixed notional",run.FixedOrderSizeUsdt.ToString()],["Margin per trade",run.MarginPerTradePercent.ToString()],["Leverage",run.Leverage.ToString()],["Fee per side",run.FeePercentPerSide.ToString()]])
         };
-        using var stream=new MemoryStream(); using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true)){ Write(zip,"[Content_Types].xml","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"+string.Concat(Enumerable.Range(1,sheets.Count).Select(i=>$"<Override PartName=\"/xl/worksheets/sheet{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"))+"</Types>"); Write(zip,"_rels/.rels","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>"); Write(zip,"xl/workbook.xml","<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"+string.Concat(sheets.Select((sheet,index)=>$"<sheet name=\"{sheet.Name}\" sheetId=\"{index+1}\" r:id=\"rId{index+1}\"/>"))+"</sheets></workbook>"); Write(zip,"xl/_rels/workbook.xml.rels","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"+string.Concat(Enumerable.Range(1,sheets.Count).Select(i=>$"<Relationship Id=\"rId{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i}.xml\"/>"))+"</Relationships>"); foreach(var (sheet,index) in sheets.Select((sheet,index)=>(sheet,index+1))){var xml=new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");foreach(var row in sheet.Rows){xml.Append("<row>");foreach(var value in row)xml.Append("<c t=\"inlineStr\"><is><t>").Append(SecurityElement.Escape(value??string.Empty)).Append("</t></is></c>");xml.Append("</row>");}xml.Append("</sheetData></worksheet>");Write(zip,$"xl/worksheets/sheet{index}.xml",xml.ToString());} } return stream.ToArray();
+        using var stream=new MemoryStream(); using(var zip=new ZipArchive(stream,ZipArchiveMode.Create,true)){ Write(zip,"[Content_Types].xml","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/>"+string.Concat(Enumerable.Range(1,sheets.Count).Select(i=>$"<Override PartName=\"/xl/worksheets/sheet{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"))+"</Types>"); Write(zip,"_rels/.rels","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>"); Write(zip,"xl/workbook.xml","<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"+string.Concat(sheets.Select((sheet,index)=>$"<sheet name=\"{sheet.Name}\" sheetId=\"{index+1}\" r:id=\"rId{index+1}\"/>"))+"</sheets></workbook>"); Write(zip,"xl/_rels/workbook.xml.rels","<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"+string.Concat(Enumerable.Range(1,sheets.Count).Select(i=>$"<Relationship Id=\"rId{i}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{i}.xml\"/>"))+"</Relationships>"); foreach(var (sheet,index) in sheets.Select((sheet,index)=>(sheet,index+1))) WriteSheet(zip,$"xl/worksheets/sheet{index}.xml",sheet.Rows); } return stream.ToArray();
     }
     private static IEnumerable<IEnumerable<string?>> BestRows(StrategyOptimizationRun run)
     {
@@ -62,4 +93,16 @@ public static class StrategyOptimizerWorkbook
         }
     }
     private static void Write(ZipArchive archive,string name,string text){using var writer=new StreamWriter(archive.CreateEntry(name).Open(),Encoding.UTF8);writer.Write(text);}
+    private static void WriteSheet(ZipArchive archive, string name, IEnumerable<IEnumerable<string?>> rows)
+    {
+        using var writer = new StreamWriter(archive.CreateEntry(name).Open(), Encoding.UTF8);
+        writer.Write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>");
+        foreach (var row in rows)
+        {
+            writer.Write("<row>");
+            foreach (var value in row) { writer.Write("<c t=\"inlineStr\"><is><t>"); writer.Write(SecurityElement.Escape(value ?? string.Empty)); writer.Write("</t></is></c>"); }
+            writer.Write("</row>");
+        }
+        writer.Write("</sheetData></worksheet>");
+    }
 }
