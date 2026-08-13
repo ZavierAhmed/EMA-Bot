@@ -21,7 +21,12 @@ public sealed class DatabaseInitializer(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            var pendingMigrations = (await database.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+            if (pendingMigrations.Length > 0) logger.LogInformation("Applying {MigrationCount} pending database migrations: {Migrations}", pendingMigrations.Length, string.Join(", ", pendingMigrations));
             await database.Database.MigrateAsync(cancellationToken);
+            var remainingMigrations = (await database.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+            if (remainingMigrations.Length > 0) logger.LogError("Database migration completed with {MigrationCount} migrations still pending: {Migrations}", remainingMigrations.Length, string.Join(", ", remainingMigrations));
+            else logger.LogInformation("Database migration check completed with no pending migrations.");
             await scope.ServiceProvider.GetRequiredService<TradingSettingsService>().GetAsync(cancellationToken);
             var interruptedAt = DateTimeOffset.UtcNow;
             var runningSessions = await database.PaperSessions.Where(session => session.Status == PaperSessionStatus.Running).ToListAsync(cancellationToken);

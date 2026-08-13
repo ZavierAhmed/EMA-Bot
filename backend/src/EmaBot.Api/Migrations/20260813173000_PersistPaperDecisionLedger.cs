@@ -5,7 +5,6 @@ using Microsoft.EntityFrameworkCore.Metadata;
 
 namespace EmaBot.Api.Migrations;
 
-[Migration("20260813173000_PersistPaperDecisionLedger")]
 public partial class PersistPaperDecisionLedger : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)
