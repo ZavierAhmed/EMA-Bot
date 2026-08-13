@@ -77,7 +77,7 @@ public sealed class PaperTradingCoordinator(
         try
         {
             if (active is null || active.Session.Id != sessionId) throw new InvalidOperationException("That paper session is not running in this application.");
-            if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && (active.Session.MarketDataSource == MarketDataSource.Mt5Exness ? ExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) is null : !symbol.LatestPrice.HasValue))) throw new InvalidOperationException("An open paper position has no reliable executable market price and cannot be stopped safely.");
+            if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && (active.Session.MarketDataSource == MarketDataSource.Mt5Exness ? ExitExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) is null : !symbol.LatestPrice.HasValue))) throw new InvalidOperationException("An open paper position has no reliable executable market price and cannot be stopped safely.");
             state = active; state.AcceptSignals = false; state.Cancellation.Cancel(); active = null;
         }
         finally { gate.Release(); }
@@ -121,7 +121,7 @@ public sealed class PaperTradingCoordinator(
         foreach (var symbol in state.Symbols.Values.Where(symbol => symbol.OpenTrade is not null))
         {
             var price = state.Session.MarketDataSource == MarketDataSource.Mt5Exness
-                ? ExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) ?? throw new InvalidOperationException("An open paper position has no reliable executable Bid/Ask quote and cannot be stopped safely.")
+                ? ExitExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) ?? throw new InvalidOperationException("An open paper position has no reliable executable Bid/Ask quote and cannot be stopped safely.")
                 : symbol.LatestPrice!.Value;
             await CloseTradeAsync(state, symbol, price, PaperExitReason.SessionStopped, DateTimeOffset.UtcNow, token);
         }
@@ -241,7 +241,7 @@ public sealed class PaperTradingCoordinator(
     {
         var pending = runtime.Pending!;
         runtime.Pending = null;
-        var entry = ExecutablePrice(pending.Direction, update.Bid, update.Ask);
+        var entry = EntryExecutablePrice(pending.Direction, update.Bid, update.Ask);
         if (entry is null || runtime.Symbol.ContractSize is not > 0m || runtime.Symbol.CommissionPerLotPerSide is null)
         {
             await FaultSessionAsync(state, "MT5 Paper entry is missing an executable quote or broker economics snapshot.", token);
@@ -369,7 +369,7 @@ public sealed class PaperTradingCoordinator(
     private async Task ManageMt5OpenTradeAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
     {
         var trade = runtime.OpenTrade!;
-        var exit = ExecutablePrice(trade.Direction, update.Bid, update.Ask);
+        var exit = ExitExecutablePrice(trade.Direction, update.Bid, update.Ask);
         if (exit is null) return;
         var direction = trade.Direction;
         var best = direction == SignalDirection.Long ? Math.Max(trade.EntryPrice + trade.MfePrice, exit.Value) : Math.Min(trade.EntryPrice - trade.MfePrice, exit.Value);
@@ -466,7 +466,8 @@ public sealed class PaperTradingCoordinator(
     private async Task PersistTradeChangeAsync(PaperTrade runtimeTrade, PaperTradeEvent item, CancellationToken token) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var trade = await database.PaperTrades.SingleAsync(value => value.Id == runtimeTrade.Id, token); database.Entry(trade).CurrentValues.SetValues(runtimeTrade); item.PaperTradeId = trade.Id; database.PaperTradeEvents.Add(item); await database.SaveChangesAsync(token); }
     private async Task UpdateSessionAsync(int id, Action<PaperSession> change) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var session = await database.PaperSessions.SingleAsync(item => item.Id == id); change(session); await database.SaveChangesAsync(); }
     private EmaBot.Api.Mt5Bridge.IMt5TradeCalculator Calculator() => calculator ?? throw new InvalidOperationException("MT5 trade calculation is not configured.");
-    private static decimal? ExecutablePrice(SignalDirection direction, decimal? bid, decimal? ask) => direction switch { SignalDirection.Long when ask is > 0m => ask, SignalDirection.Short when bid is > 0m => bid, _ => null };
+    internal static decimal? EntryExecutablePrice(SignalDirection direction, decimal? bid, decimal? ask) => direction switch { SignalDirection.Long when ask is > 0m => ask, SignalDirection.Short when bid is > 0m => bid, _ => null };
+    internal static decimal? ExitExecutablePrice(SignalDirection direction, decimal? bid, decimal? ask) => direction switch { SignalDirection.Long when bid is > 0m => bid, SignalDirection.Short when ask is > 0m => ask, _ => null };
     private static bool AllowsDirection(InstrumentTradeMode? mode, SignalDirection direction) => mode switch { InstrumentTradeMode.Disabled or InstrumentTradeMode.CloseOnly => false, InstrumentTradeMode.LongOnly => direction == SignalDirection.Long, InstrumentTradeMode.ShortOnly => direction == SignalDirection.Short, _ => true };
     private static bool StopsAreValid(PaperSessionSymbol symbol, SignalDirection direction, decimal entry, decimal stop, decimal target)
     {
