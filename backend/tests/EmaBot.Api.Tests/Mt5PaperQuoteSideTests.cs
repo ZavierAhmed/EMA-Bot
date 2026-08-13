@@ -7,6 +7,8 @@ using EmaBot.Api.Strategy;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Collections;
+using System.Reflection;
 
 namespace EmaBot.Api.Tests;
 
@@ -61,6 +63,119 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         Assert.Equal("Long", calculator.ProfitRequests.Last().Direction);
         Assert.Equal(101m, calculator.ProfitRequests.Last().ClosePrice);
         Assert.NotNull(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task TrailingBelowFirstLockLevel_StillQueuesLivePnl()
+    {
+        var calculator = new TestCalculator { Profit = 20m };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await ConfigureAsync(session.Id, (value, _) => value.TrailingStopEnabled = true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(2), 100.8m, 101m));
+
+        var runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.Single(calculator.ProfitRequests);
+        Assert.Equal(100.8m, calculator.ProfitRequests.Single().ClosePrice);
+        Assert.Equal(20m, runtime.CurrentGrossPnl);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task TrailingAboveFirstLockLevel_ManagesStopAndQueuesLivePnl()
+    {
+        var calculator = new TestCalculator { Profit = 20m };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await ConfigureAsync(session.Id, (value, _) => value.TrailingStopEnabled = true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(2), 101.6m, 101.8m));
+
+        var runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.True(runtime.OpenTrade!.CurrentStopLoss > runtime.OpenTrade.InitialStopLoss);
+        Assert.Equal(2, calculator.ProfitRequests.Count);
+        Assert.Equal(101.6m, calculator.ProfitRequests.Last().ClosePrice);
+        Assert.Equal(20m, runtime.CurrentGrossPnl);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ClosingTrade_InvalidatesPendingLivePnl()
+    {
+        var calculator = new TestCalculator { FirstProfitCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var at = DateTimeOffset.UnixEpoch.AddHours(2);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(at, 101m, 101.2m));
+        Assert.NotNull(calculator.HeldProfitRequest);
+        await coordinator.ProcessUpdateForTestAsync(Update(at.AddSeconds(1), 102.7m, 102.9m));
+
+        var runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.Null(runtime.OpenTrade);
+        Assert.Null(runtime.CurrentGrossPnl);
+        Assert.False(runtime.CurrentPnlAvailable);
+        var held = calculator.HeldProfitRequest!;
+        calculator.FirstProfitCompletion!.SetResult(new Mt5ProfitCalculationPayload(held.BrokerSymbol, held.Direction, held.VolumeLots, held.OpenPrice, held.ClosePrice, 999m, "USD"));
+        await Task.Yield();
+
+        runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.Null(runtime.CurrentGrossPnl);
+        Assert.False(runtime.CurrentPnlAvailable);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task NewTrade_DoesNotReceiveStaleLivePnlAndQueuesItsOwnValuation()
+    {
+        var calculator = new TestCalculator { Profit = 20m, FirstProfitCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var at = DateTimeOffset.UnixEpoch.AddHours(2);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(at, 101m, 101.2m));
+        var oldTrade = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade!;
+        await coordinator.ProcessUpdateForTestAsync(Update(at.AddSeconds(1), 102.7m, 102.9m));
+        var nextTrade = new PaperTrade { Id = oldTrade.Id + 1000, Symbol = oldTrade.Symbol, Interval = oldTrade.Interval, Status = PaperTradeStatus.Open, Direction = oldTrade.Direction, EntryPrice = oldTrade.EntryPrice, InitialStopLoss = oldTrade.InitialStopLoss, CurrentStopLoss = oldTrade.CurrentStopLoss, OriginalTakeProfit = oldTrade.OriginalTakeProfit, CurrentTakeProfit = oldTrade.CurrentTakeProfit, Lots = oldTrade.Lots, MarginUsed = oldTrade.MarginUsed, RoundTripCommission = oldTrade.RoundTripCommission };
+        SetRuntimeOpenTradeForTest(coordinator, nextTrade);
+
+        var held = calculator.HeldProfitRequest!;
+        calculator.FirstProfitCompletion!.SetResult(new Mt5ProfitCalculationPayload(held.BrokerSymbol, held.Direction, held.VolumeLots, held.OpenPrice, held.ClosePrice, 999m, "USD"));
+        await Task.Yield();
+        var runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.Equal(nextTrade.Id, runtime.OpenTrade!.Id);
+        Assert.Null(runtime.CurrentNetPnl);
+        Assert.False(runtime.CurrentPnlAvailable);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(at.AddSeconds(3), 101m, 101.2m));
+        runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.Equal(20m, runtime.CurrentGrossPnl);
+        Assert.True(runtime.CurrentPnlAvailable);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task FailedLivePnl_KeepsLastValueButMarksItUnavailable()
+    {
+        var calculator = new TestCalculator { Profit = 20m };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var at = DateTimeOffset.UnixEpoch.AddHours(2);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(at, 101m, 101.2m));
+        calculator.ThrowOnProfit = true;
+        await coordinator.ProcessUpdateForTestAsync(Update(at.AddSeconds(1), 101.1m, 101.3m));
+
+        var runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.Equal(20m, runtime.CurrentGrossPnl);
+        Assert.False(runtime.CurrentPnlAvailable);
         await coordinator.StopAsync(CancellationToken.None);
     }
 
@@ -349,6 +464,14 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessions.Where(item => item.Id == sessionId).Select(item => item.Status).SingleAsync();
     }
 
+    private static void SetRuntimeOpenTradeForTest(PaperTradingCoordinator coordinator, PaperTrade trade)
+    {
+        var active = typeof(PaperTradingCoordinator).GetField("active", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(coordinator)!;
+        var symbols = (IDictionary)active.GetType().GetProperty("Symbols")!.GetValue(active)!;
+        var runtime = symbols["XAUUSDm"]!;
+        typeof(PaperTradingCoordinator).GetMethod("SetOpenTrade", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [runtime, trade]);
+    }
+
     private sealed class FixedResolver(IHistoricalMarketDataProvider provider) : IHistoricalMarketDataProviderResolver
     {
         public IHistoricalMarketDataProvider Resolve(MarketDataSource source) => provider;
@@ -357,7 +480,10 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
     private sealed class TestCalculator : IMt5TradeCalculator
     {
         public bool ThrowOnMargin { get; set; }
+        public bool ThrowOnProfit { get; set; }
         public decimal Profit { get; set; } = 10m;
+        public TaskCompletionSource<Mt5ProfitCalculationPayload>? FirstProfitCompletion { get; set; }
+        public Mt5CalculateProfitRequest? HeldProfitRequest { get; private set; }
         public List<Mt5CalculateMarginRequest> MarginRequests { get; } = [];
         public List<Mt5CalculateProfitRequest> ProfitRequests { get; } = [];
 
@@ -371,6 +497,12 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken cancellationToken)
         {
             ProfitRequests.Add(request);
+            if (ThrowOnProfit) throw new MarketDataProviderException("MT5 trade calculation", MarketDataErrorKind.Unavailable, "calculator unavailable");
+            if (FirstProfitCompletion is not null && HeldProfitRequest is null)
+            {
+                HeldProfitRequest = request;
+                return FirstProfitCompletion.Task;
+            }
             return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, Profit, "USD"));
         }
     }
