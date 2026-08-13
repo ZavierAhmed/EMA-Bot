@@ -61,3 +61,21 @@ live; EMA values, trend, gap, decision evaluation, and funnel totals update on
 candle close; entry values and margin are fixed at entry; SL/TP, MFE, and MAE
 change only when their relevant management event occurs. Current balance is
 realized only—open-position unrealized P/L is deliberately not estimated.
+
+## E10.6 Paper workspace
+
+The active Paper workspace has four tabs: **Trades**, **Market**, **Session**,
+and **Decision**. Tab selection remains local while the single active-session
+poll continues in the background.
+
+For an open MT5 Paper position, the Trades tab displays runtime-only live P/L
+from MT5 `OrderCalcProfit`: Long uses current Bid and Short uses current Ask.
+Net live P/L is gross P/L less the configured round-trip commission. Current
+P/L % is `net P/L / simulated margin used * 100`; it is not account return or
+price movement. Valuation is throttled and a temporary valuation failure never
+closes or faults the position.
+
+The Position Chart uses MT5/Exness historical closed candles plus EMA lines and
+live Entry, SL, TP, and executable-current price levels. Chart history refreshes
+only for a trade change or a newly closed candle, while the current level moves
+with the normal Paper poll.

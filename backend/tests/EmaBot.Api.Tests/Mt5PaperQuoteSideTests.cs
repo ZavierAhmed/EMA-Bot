@@ -27,6 +27,24 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         Assert.Null(PaperTradingCoordinator.ExitExecutablePrice(SignalDirection.Short, 100m, 0m));
     }
 
+    [Fact]
+    public async Task OpenShortLivePnl_UsesAskAndMarginReturnWithoutChangingTrade()
+    {
+        var calculator = new TestCalculator { Profit = 20m };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Short, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(2), 99m, 99.2m));
+
+        var runtime = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"];
+        Assert.NotNull(runtime.OpenTrade);
+        Assert.Equal(99.2m, calculator.ProfitRequests.Last().ClosePrice);
+        Assert.Equal(20m, runtime.CurrentGrossPnl);
+        Assert.Equal(19.94m, runtime.CurrentNetPnl);
+        Assert.Equal(19.94m / 35m * 100m, runtime.CurrentPnlPercent);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
     [Theory]
     [InlineData(SignalDirection.Long)]
     [InlineData(SignalDirection.Short)]
@@ -47,7 +65,7 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         Assert.Equal(expectedEntry, trade.EntryPrice);
         Assert.Equal(.06m, trade.RoundTripCommission);
         Assert.Equal("XAUUSDm", calculator.MarginRequests.Single().BrokerSymbol);
-        var targetRequest = calculator.ProfitRequests.Single();
+        var targetRequest = calculator.ProfitRequests.First();
         Assert.Equal(direction.ToString(), targetRequest.Direction);
         Assert.Equal(expectedEntry, targetRequest.OpenPrice);
         await coordinator.StopAsync(CancellationToken.None);
@@ -320,6 +338,7 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
     private sealed class TestCalculator : IMt5TradeCalculator
     {
         public bool ThrowOnMargin { get; set; }
+        public decimal Profit { get; set; } = 10m;
         public List<Mt5CalculateMarginRequest> MarginRequests { get; } = [];
         public List<Mt5CalculateProfitRequest> ProfitRequests { get; } = [];
 
@@ -333,7 +352,7 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken cancellationToken)
         {
             ProfitRequests.Add(request);
-            return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, 10m, "USD"));
+            return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, Profit, "USD"));
         }
     }
 }
