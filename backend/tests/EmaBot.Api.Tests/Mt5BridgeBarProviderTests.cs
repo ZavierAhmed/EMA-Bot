@@ -31,6 +31,18 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
+    public async Task LatestCount_IsClosedBarCountAndAllowsMaximum1500()
+    {
+        var bridge = new TestMt5BridgeRequestClient();
+        bridge.Responses[Mt5BridgeOperation.GetLatestBars] = Response(Mt5BridgeOperation.GetLatestBars, Bars());
+        var provider = new Mt5BridgeHistoricalMarketDataProvider(bridge);
+
+        await provider.GetLatestAsync("XAUUSDm", "3m", 1_500, CancellationToken.None);
+
+        Assert.Equal(new Mt5GetLatestBarsRequest("XAUUSDm", "3m", 1_500), bridge.LastPayload);
+    }
+
+    [Fact]
     public async Task RangeMapping_DeduplicatesAscendingAndFiltersClosedBoundaries()
     {
         var bridge = new TestMt5BridgeRequestClient();
@@ -39,6 +51,24 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
         var candles = await provider.GetRangeAsync("XAUUSDm", "3m", Time(12, 0), Time(12, 6), CancellationToken.None);
 
         Assert.Equal(2, candles.Count); Assert.Equal(Time(12, 0), candles[0].OpenTimeUtc); Assert.Equal(Time(12, 3), candles[1].OpenTimeUtc); Assert.All(candles, candle => Assert.True(candle.CloseTimeUtc <= Time(12, 6)));
+    }
+
+    [Fact]
+    public async Task FractionalRangeEnd_CeilsWireStopButKeepsExactFinalFilter()
+    {
+        var bridge = new TestMt5BridgeRequestClient();
+        var start = new DateTimeOffset(2026, 8, 13, 23, 54, 0, TimeSpan.Zero);
+        var end = new DateTimeOffset(2026, 8, 13, 23, 59, 59, 999, TimeSpan.Zero);
+        bridge.Responses[Mt5BridgeOperation.GetBarsRange] = Response(Mt5BridgeOperation.GetBarsRange, new[] { BarAt(start, false), BarAt(start.AddMinutes(3), false), BarAt(new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero), true) });
+        var provider = new Mt5BridgeHistoricalMarketDataProvider(bridge);
+
+        var candles = await provider.GetRangeAsync("XAUUSDm", "3m", start, end, CancellationToken.None);
+        var request = Assert.IsType<Mt5GetBarsRangeRequest>(bridge.LastPayload);
+
+        Assert.Equal(new DateTimeOffset(2026, 8, 14, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds(), request.EndUnixSeconds);
+        var final = Assert.Single(candles, candle => candle.OpenTimeUtc == start.AddMinutes(3));
+        Assert.Equal(end, final.CloseTimeUtc); Assert.DoesNotContain(candles, candle => candle.OpenTimeUtc.Date > start.Date);
+        Assert.Equal(end.ToUnixTimeSeconds(), Mt5BridgeHistoricalMarketDataProvider.ToInclusiveStopUnixSeconds(new DateTimeOffset(2026, 8, 13, 23, 59, 59, TimeSpan.Zero)));
     }
 
     [Fact]
@@ -77,5 +107,6 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
     private static Mt5BridgeEnvelope Response(Mt5BridgeOperation operation, object payload) => Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Response, operation, Guid.NewGuid(), payload, TimeProvider.System);
     private static Mt5BarPayload[] Bars() => [Bar(12, 0, false, realVolume: 30), Bar(12, 3, false, realVolume: 0), Bar(12, 6, true, realVolume: 40)];
     private static Mt5BarPayload Bar(int hour, int minute, bool current, decimal close = 101m, long realVolume = 0) => new("XAUUSDm", "3m", Time(hour, minute), 100m, 105m, 99m, close, 20, realVolume, 4, current);
+    private static Mt5BarPayload BarAt(DateTimeOffset open, bool current) => new("XAUUSDm", "3m", open, 100m, 105m, 99m, 101m, 20, 0, 4, current);
     private static DateTimeOffset Time(int hour, int minute, int second = 0, int millisecond = 0) => new(2026, 8, 13, hour, minute, second, millisecond, TimeSpan.Zero);
 }

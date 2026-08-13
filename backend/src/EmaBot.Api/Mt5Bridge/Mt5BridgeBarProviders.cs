@@ -12,7 +12,7 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
     {
         ValidateTimeframe(timeframe);
         if (count is < 1 or > 1_500) throw new ArgumentOutOfRangeException(nameof(count), "Count must be between 1 and 1500.");
-        var bars = await RequestBarsAsync(Mt5BridgeOperation.GetLatestBars, new Mt5GetLatestBarsRequest(symbol, timeframe, count + 1), cancellationToken);
+        var bars = await RequestBarsAsync(Mt5BridgeOperation.GetLatestBars, new Mt5GetLatestBarsRequest(symbol, timeframe, count), cancellationToken);
         return MapClosed(bars).TakeLast(count).ToArray();
     }
 
@@ -28,7 +28,7 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
             cancellationToken.ThrowIfCancellationRequested();
             var candidateEnd = cursor + window;
             var windowEnd = candidateEnd < endUtc ? candidateEnd : endUtc;
-            var page = await RequestBarsAsync(Mt5BridgeOperation.GetBarsRange, new Mt5GetBarsRangeRequest(symbol, timeframe, cursor.ToUnixTimeSeconds(), windowEnd.ToUnixTimeSeconds()), cancellationToken);
+            var page = await RequestBarsAsync(Mt5BridgeOperation.GetBarsRange, new Mt5GetBarsRangeRequest(symbol, timeframe, cursor.ToUnixTimeSeconds(), ToInclusiveStopUnixSeconds(windowEnd)), cancellationToken);
             foreach (var bar in page) all[bar.OpenTimeUtc] = bar;
             if (all.Count > MaximumCandles) throw new ArgumentException($"Backtests cannot exceed {MaximumCandles:N0} candles.");
             if (windowEnd == endUtc) break;
@@ -53,6 +53,12 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
     internal static void ValidateTimeframe(string timeframe)
     {
         if (!Mt5NativeTimeframes.IsSupported(timeframe)) throw new ArgumentException("The 3d timeframe is supported by EMA-Bot but is not native to the current MT5 market-data adapter.", nameof(timeframe));
+    }
+
+    internal static long ToInclusiveStopUnixSeconds(DateTimeOffset value)
+    {
+        var seconds = value.ToUnixTimeSeconds();
+        return value.Ticks % TimeSpan.TicksPerSecond == 0 ? seconds : checked(seconds + 1);
     }
 
     private async Task<IReadOnlyList<Mt5BarPayload>> RequestBarsAsync(Mt5BridgeOperation operation, object request, CancellationToken cancellationToken)

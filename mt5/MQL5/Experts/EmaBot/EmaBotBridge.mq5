@@ -230,7 +230,6 @@ bool TryBarRequest(const string operation,const string request_id,const string p
    if(!TryMapTimeframe(timeframe,period)) { SendError(operation,request_id,"UnsupportedTimeframe","The requested timeframe is not native to MT5.",false); return false; }
    bool custom=false;
    if(!SymbolExist(symbol,custom) || !((bool)SymbolInfoInteger(symbol,SYMBOL_SELECT))) { SendError(operation,request_id,"NotFound","The requested symbol was not found in Market Watch.",false); return false; }
-   if((bool)SeriesInfoInteger(symbol,period,SERIES_SYNCHRONIZED)==false) { SendError(operation,request_id,"HistoryNotReady","MT5 history is not synchronized yet.",true); return false; }
    return true;
 }
 
@@ -247,6 +246,7 @@ void SendLatestBars(const string request_id,const string payload)
    const int count=(int)StringToInteger(raw); if(count<1 || count>1500) { SendError("GetLatestBars",request_id,"InvalidRequest","count must be between 1 and 1500.",false); return; }
    MqlRates rates[]; ArraySetAsSeries(rates,false); const int copied=CopyRates(symbol,period,0,count+1,rates);
    if(copied<=0) { SendError("GetLatestBars",request_id,"HistoryNotReady","MT5 history is not ready.",true); return; }
+   if((bool)SeriesInfoInteger(symbol,period,SERIES_SYNCHRONIZED)==false) { SendError("GetLatestBars",request_id,"HistoryNotReady","MT5 history is not synchronized yet.",true); return; }
    string result="["; for(int i=0;i<copied;i++) { if(i>0) result+=","; result+=RateJson(symbol,timeframe,rates[i],i==copied-1); } result+="]"; SendResponse("GetLatestBars",request_id,result);
 }
 
@@ -258,6 +258,7 @@ void SendBarsRange(const string request_id,const string payload)
    const long start=StringToInteger(start_raw), end=StringToInteger(end_raw); if(start>=end) { SendError("GetBarsRange",request_id,"InvalidRequest","start must be before end.",false); return; }
    MqlRates rates[]; ArraySetAsSeries(rates,false); const int copied=CopyRates(symbol,period,(datetime)start,(datetime)end,rates);
    if(copied<0) { SendError("GetBarsRange",request_id,"HistoryNotReady","MT5 history is not ready.",true); return; }
+   if((bool)SeriesInfoInteger(symbol,period,SERIES_SYNCHRONIZED)==false) { SendError("GetBarsRange",request_id,"HistoryNotReady","MT5 history is not synchronized yet.",true); return; }
    string result="["; for(int i=0;i<copied;i++) { if(i>0) result+=","; result+=RateJson(symbol,timeframe,rates[i],false); } result+="]"; SendResponse("GetBarsRange",request_id,result);
 }
 
@@ -267,6 +268,7 @@ void SendBarSnapshot(const string request_id,const string payload)
    if(!TryBarRequest("GetBarSnapshot",request_id,payload,symbol,timeframe,period)) return;
    MqlRates rates[]; ArraySetAsSeries(rates,false); const int copied=CopyRates(symbol,period,0,2,rates);
    if(copied<2) { SendError("GetBarSnapshot",request_id,"HistoryNotReady","MT5 history is not ready.",true); return; }
+   if((bool)SeriesInfoInteger(symbol,period,SERIES_SYNCHRONIZED)==false) { SendError("GetBarSnapshot",request_id,"HistoryNotReady","MT5 history is not synchronized yet.",true); return; }
    MqlTick tick; if(!SymbolInfoTick(symbol,tick)) { SendError("GetBarSnapshot",request_id,"SymbolUnavailable","A current symbol tick is unavailable.",true); return; }
    const string event_time=IsoUtcMilliseconds(tick.time_msc);
    const string result="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"timeframe\":\""+JsonEscape(timeframe)+"\",\"eventTimeUtc\":\""+event_time+"\",\"previousClosed\":"+RateJson(symbol,timeframe,rates[copied-2],false)+",\"current\":"+RateJson(symbol,timeframe,rates[copied-1],true)+"}";
