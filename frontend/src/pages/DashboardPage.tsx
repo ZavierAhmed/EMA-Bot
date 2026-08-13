@@ -25,7 +25,8 @@ export function DashboardPage() {
         <StatusCard label="Quotes" value={capabilities?.quoteProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
         <StatusCard label="Live market data" value={capabilities?.liveBarProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
         <StatusCard label="Execution" value={capabilities?.executionProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
-        <StatusCard label="MT5 Bridge server" value={bridge?.connectionState ?? 'Checking...'} />
+        <StatusCard label="MT5 Bridge configured" value={bridge?.enabled ? 'Configured' : bridge ? 'Not configured' : 'Checking...'} />
+        <StatusCard label="MT5 Bridge connection" value={bridge?.connectionState ?? 'Checking...'} />
         <StatusCard label="MT5 terminal" value={bridge?.terminalName ?? 'Not connected'} />
         <StatusCard label="Last heartbeat" value={bridge?.lastHeartbeatAtUtc ? new Date(bridge.lastHeartbeatAtUtc).toLocaleString() : 'Not available'} />
         <StatusCard label="Transport RTT" value={bridge?.lastRoundTripMs === null || bridge?.lastRoundTripMs === undefined ? 'Not measured' : `${bridge.lastRoundTripMs} ms`} />

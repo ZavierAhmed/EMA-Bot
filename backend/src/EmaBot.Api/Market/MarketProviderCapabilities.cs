@@ -18,5 +18,11 @@ public interface IMarketProviderCapabilities
 
 public sealed class MarketProviderCapabilityService : IMarketProviderCapabilities
 {
-    public MarketProviderCapabilities Current { get; } = new("Legacy Binance", true, "MetaTrader 5", "Exness", false, false, false, false, Mt5NativeTimeframes.Supported);
+    public MarketProviderCapabilityService() : this(false) { }
+    public MarketProviderCapabilityService(Microsoft.Extensions.Options.IOptions<EmaBot.Api.Mt5Bridge.Mt5BridgeOptions> options) : this(options.Value.Enabled) { }
+    private MarketProviderCapabilityService(bool bridgeEnabled)
+    {
+        Current = new("Legacy Binance", true, "MetaTrader 5", "Exness", bridgeEnabled, bridgeEnabled, false, false, Mt5NativeTimeframes.Supported);
+    }
+    public MarketProviderCapabilities Current { get; }
 }

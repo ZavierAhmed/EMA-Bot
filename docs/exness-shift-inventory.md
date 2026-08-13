@@ -41,6 +41,16 @@ and quote requests. No MQL5 client, terminal connection, provider wiring,
 market data, execution operation, database change, or trading behavior has
 been added.
 
+## Phase E7 code foundation implemented
+
+The repository contains the thin, read-only MQL5 Bridge EA and wires the
+existing .NET bridge transport to MT5 Market Watch catalog, individual
+instrument, bid/ask quote, and sanitized account-read contracts. Catalog and
+quote capability configuration is true only when the bridge is enabled; live
+bars and execution remain false. No account, instrument, or quote is persisted
+and no trading operation exists. Manual live terminal validation remains
+pending.
+
 ## Scope and branch safety
 
 This is an architecture and dependency inventory only.  It was prepared on

@@ -21,6 +21,10 @@ frontend/node_modules/
 frontend/dist/
 *.tsbuildinfo
 
+# MetaTrader build products
+*.ex5
+*.mq5.log
+
 # IDE and OS files
 .idea/
 .vscode/

@@ -39,7 +39,10 @@ dotnet user-secrets set "Mt5Bridge:HandshakeSecret" "<strong-secret>" --project 
 
 The secret must be at least 32 characters and is never committed. See the
 [MT5 Bridge protocol v1](docs/mt5-bridge-protocol-v1.md) for the local-only
-server/client contract.
+server/client contract. The E7 EA source is at
+`mt5/MQL5/Experts/EmaBot/EmaBotBridge.mq5`; follow the
+[manual E7 live-test guide](docs/mt5-bridge-e7-live-test.md) after compiling
+it in your own MT5 data folder.
 
 See [the Exness-shift migration inventory](docs/exness-shift-inventory.md) and
 [the strategy origin and kernel lock](docs/strategy-origin.md).

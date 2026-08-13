@@ -90,3 +90,24 @@ read/write access to this duplex pipe, implement this exact v1 framing and
 Hello-first handshake, preserve request IDs and terminal symbol spelling, and
 perform the required flush/seek transition whenever it switches between
 writing and reading. It must not add EMA, signal, sizing, or execution policy.
+
+## E7 implementation notes and golden JSON
+
+E7 implements the single-file, timer-driven MQL5 client at
+`mt5/MQL5/Experts/EmaBot/EmaBotBridge.mq5`. It opens only the local logical
+pipe as `\\.\pipe\<name>` in binary read/write mode, uses UTF-8 bytes without a
+terminating zero byte, and processes a bounded number of frames per timer tick.
+It reports only the selected instruments in Market Watch and never selects a
+symbol or submits a trade.
+
+These synthetic examples are protocol-v1 compatibility fixtures; they contain
+no secret or real terminal/account value.
+
+```json
+{"protocolVersion":1,"kind":"Hello","operation":"Hello","requestId":null,"sentAtUtc":"2026-08-13T12:00:00Z","payload":{"secret":"<strong-secret>","clientVersion":"EMA-Bot-MT5-Bridge/1","terminalInstanceId":"mt5-ABC","terminalName":"MetaTrader 5","terminalCompany":"MetaQuotes","terminalBuild":5000,"accountServer":"Demo","accountCurrency":"USD","accountMode":"Demo"}}
+{"protocolVersion":1,"kind":"Heartbeat","operation":"Heartbeat","requestId":null,"sentAtUtc":"2026-08-13T12:00:05Z","payload":{"clientTimeUtc":"2026-08-13T12:00:05Z"}}
+{"protocolVersion":1,"kind":"Request","operation":"GetQuote","requestId":"11111111-1111-1111-1111-111111111111","sentAtUtc":"2026-08-13T12:00:10Z","payload":{"brokerSymbol":"terminal.symbol"}}
+{"protocolVersion":1,"kind":"Response","operation":"GetQuote","requestId":"11111111-1111-1111-1111-111111111111","sentAtUtc":"2026-08-13T12:00:10Z","payload":{"brokerSymbol":"terminal.symbol","timeUtc":"2026-08-13T12:00:10Z","bid":100.0,"ask":100.2,"last":null,"volume":null}}
+{"protocolVersion":1,"kind":"Request","operation":"GetInstrument","requestId":"22222222-2222-2222-2222-222222222222","sentAtUtc":"2026-08-13T12:00:11Z","payload":{"brokerSymbol":"terminal.symbol"}}
+{"protocolVersion":1,"kind":"Response","operation":"GetAccount","requestId":"33333333-3333-3333-3333-333333333333","sentAtUtc":"2026-08-13T12:00:12Z","payload":{"login":123456,"server":"Demo","currency":"USD","balance":1000.0,"equity":1000.0,"margin":0.0,"freeMargin":1000.0,"marginLevel":0.0,"tradeMode":"Demo"}}
+```

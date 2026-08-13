@@ -95,11 +95,12 @@ builder.Services.AddHttpClient<IBinanceHistoricalKlineClient, BinanceHistoricalK
 });
 builder.Services.AddSingleton<IHistoricalMarketDataProvider, BinanceHistoricalMarketDataProvider>();
 builder.Services.AddSingleton<IMarketBarStreamProvider, UnavailableMarketBarStreamProvider>();
-builder.Services.AddSingleton<IInstrumentCatalogProvider, UnavailableInstrumentCatalogProvider>();
-builder.Services.AddSingleton<IMarketQuoteProvider, UnavailableMarketQuoteProvider>();
+builder.Services.AddSingleton<IInstrumentCatalogProvider, Mt5BridgeInstrumentCatalogProvider>();
+builder.Services.AddSingleton<IMarketQuoteProvider, Mt5BridgeMarketQuoteProvider>();
 builder.Services.AddSingleton<IMarketProviderCapabilities, MarketProviderCapabilityService>();
 builder.Services.AddSingleton<Mt5BridgeServer>();
 builder.Services.AddSingleton<IMt5BridgeRequestClient>(provider => provider.GetRequiredService<Mt5BridgeServer>());
+builder.Services.AddSingleton<IMt5AccountReader, Mt5BridgeAccountReader>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

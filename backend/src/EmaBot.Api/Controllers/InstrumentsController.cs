@@ -12,7 +12,7 @@ public sealed class InstrumentsController(IInstrumentCatalogProvider catalog, IM
     public async Task<ActionResult<IReadOnlyList<InstrumentCatalogItem>>> GetAvailable(CancellationToken cancellationToken)
     {
         try { return Ok(await catalog.GetAvailableAsync(cancellationToken)); }
-        catch (MarketDataProviderException exception) when (exception.Kind == MarketDataErrorKind.Unavailable) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(exception.Message)); }
+        catch (MarketDataProviderException exception) when (exception.Kind is MarketDataErrorKind.Unavailable or MarketDataErrorKind.Timeout) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(exception.Message)); }
     }
 
     [HttpGet("{brokerSymbol}")]
@@ -20,7 +20,7 @@ public sealed class InstrumentsController(IInstrumentCatalogProvider catalog, IM
     {
         if (!IsValidBrokerSymbol(brokerSymbol)) return BadRequest(new ApiMessage("A valid broker symbol is required."));
         try { return await catalog.GetAsync(brokerSymbol, cancellationToken) is { } item ? Ok(item) : NotFound(new ApiMessage("Instrument not found.")); }
-        catch (MarketDataProviderException exception) when (exception.Kind == MarketDataErrorKind.Unavailable) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(exception.Message)); }
+        catch (MarketDataProviderException exception) when (exception.Kind is MarketDataErrorKind.Unavailable or MarketDataErrorKind.Timeout) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(exception.Message)); }
     }
 
     [HttpGet("{brokerSymbol}/quote")]
@@ -28,7 +28,7 @@ public sealed class InstrumentsController(IInstrumentCatalogProvider catalog, IM
     {
         if (!IsValidBrokerSymbol(brokerSymbol)) return BadRequest(new ApiMessage("A valid broker symbol is required."));
         try { return Ok(await quotes.GetQuoteAsync(brokerSymbol, cancellationToken)); }
-        catch (MarketDataProviderException exception) when (exception.Kind == MarketDataErrorKind.Unavailable) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(exception.Message)); }
+        catch (MarketDataProviderException exception) when (exception.Kind is MarketDataErrorKind.Unavailable or MarketDataErrorKind.Timeout) { return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage(exception.Message)); }
     }
 
     private static bool IsValidBrokerSymbol(string? brokerSymbol) => !string.IsNullOrWhiteSpace(brokerSymbol) && brokerSymbol.Length <= 128 && !brokerSymbol.Any(char.IsControl);
