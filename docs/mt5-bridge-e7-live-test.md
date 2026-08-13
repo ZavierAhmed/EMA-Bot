@@ -1,7 +1,8 @@
 # E7 manual MT5 Bridge validation
 
 This is a read-only manual procedure. It must not place, modify, or close an
-order.
+order. Ensure the E7.1 ISO-8601 timestamp compatibility correction is present
+before beginning this validation.
 
 1. Open MetaTrader 5, then choose **File -> Open Data Folder**.
 2. Open `MQL5\Experts\EmaBot` and copy

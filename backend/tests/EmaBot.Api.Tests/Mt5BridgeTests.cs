@@ -56,6 +56,35 @@ public sealed class Mt5BridgeFrameCodecTests
         await Assert.ThrowsAsync<Mt5BridgeProtocolException>(() => codec.ReadAsync(Frame([0xC3, 0x28]), CancellationToken.None));
     }
 
+    [Fact]
+    public void Mql5IsoHelloWireJson_DeserializesWithExactUtcTimestamp()
+    {
+        const string json = """{"protocolVersion":1,"kind":"Hello","operation":"Hello","requestId":null,"sentAtUtc":"2026-08-13T12:00:00Z","payload":{"secret":"<strong-secret>","clientVersion":"EMA-Bot-MT5-Bridge/1","terminalInstanceId":"mt5-ABC"}}""";
+
+        var envelope = JsonSerializer.Deserialize<Mt5BridgeEnvelope>(json, Mt5BridgeProtocol.JsonOptions);
+
+        Assert.NotNull(envelope); Assert.Equal(new DateTimeOffset(2026, 8, 13, 12, 0, 0, TimeSpan.Zero), envelope.SentAtUtc);
+    }
+
+    [Fact]
+    public void Mql5IsoQuoteWireJson_PreservesMilliseconds()
+    {
+        const string json = """{"protocolVersion":1,"kind":"Response","operation":"GetQuote","requestId":"11111111-1111-1111-1111-111111111111","sentAtUtc":"2026-08-13T12:00:10Z","payload":{"brokerSymbol":"terminal.symbol","timeUtc":"2026-08-13T12:00:10.123Z","bid":100.0,"ask":100.2,"last":null,"volume":null}}""";
+
+        var envelope = JsonSerializer.Deserialize<Mt5BridgeEnvelope>(json, Mt5BridgeProtocol.JsonOptions);
+        var quote = envelope!.DeserializePayload<Mt5QuotePayload>();
+
+        Assert.Equal(new DateTimeOffset(2026, 8, 13, 12, 0, 10, 123, TimeSpan.Zero), quote!.TimeUtc);
+    }
+
+    [Fact]
+    public void OldMql5DottedTimestamp_IsRejectedByProtocolJson()
+    {
+        const string json = """{"protocolVersion":1,"kind":"Hello","operation":"Hello","requestId":null,"sentAtUtc":"2026.08.13 12:00:00Z","payload":null}""";
+
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<Mt5BridgeEnvelope>(json, Mt5BridgeProtocol.JsonOptions));
+    }
+
     private static MemoryStream Frame(byte[] payload)
     {
         var frame = new byte[4 + payload.Length]; BinaryPrimitives.WriteUInt32LittleEndian(frame, checked((uint)payload.Length)); payload.CopyTo(frame, 4); return new MemoryStream(frame);

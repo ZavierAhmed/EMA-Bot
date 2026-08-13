@@ -262,8 +262,7 @@ void SendQuote(const string request_id,const string symbol)
    if(!SymbolInfoTick(symbol,tick) || tick.bid<=0.0 || tick.ask<=0.0 || tick.ask<tick.bid) { SendError("GetQuote",request_id,"SymbolUnavailable","A valid current quote is unavailable.",true); return; }
    const string last=tick.last>0.0 ? Number(tick.last) : "null";
    const string volume=tick.volume_real>0.0 ? Number(tick.volume_real) : "null";
-   const datetime quote_time=(datetime)(tick.time_msc/1000);
-   const string payload="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"timeUtc\":\""+UtcTime(quote_time)+"\",\"bid\":"+Number(tick.bid)+",\"ask\":"+Number(tick.ask)+",\"last\":"+last+",\"volume\":"+volume+"}";
+   const string payload="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"timeUtc\":\""+IsoUtcMilliseconds(tick.time_msc)+"\",\"bid\":"+Number(tick.bid)+",\"ask\":"+Number(tick.ask)+",\"last\":"+last+",\"volume\":"+volume+"}";
    SendResponse("GetQuote",request_id,payload);
 }
 
@@ -391,8 +390,21 @@ bool DecodeJsonString(const string raw,string &value)
 
 string Number(const double value) { return DoubleToString(value,10); }
 string OptionalNumber(const double value) { return value>0.0 ? Number(value) : "null"; }
-string UtcNow() { return UtcTime(TimeGMT()); }
-string UtcTime(const datetime value) { return TimeToString(value,TIME_DATE|TIME_SECONDS)+"Z"; }
+string UtcNow() { return IsoUtcSeconds(TimeGMT()); }
+string IsoUtcSeconds(const datetime value)
+{
+   MqlDateTime parts;
+   if(!TimeToStruct(value,parts)) return "";
+   return StringFormat("%04d-%02d-%02dT%02d:%02d:%02dZ",parts.year,parts.mon,parts.day,parts.hour,parts.min,parts.sec);
+}
+string IsoUtcMilliseconds(const long unix_milliseconds)
+{
+   const datetime seconds=(datetime)(unix_milliseconds/1000);
+   const long milliseconds=unix_milliseconds%1000;
+   MqlDateTime parts;
+   if(!TimeToStruct(seconds,parts)) return "";
+   return StringFormat("%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",parts.year,parts.mon,parts.day,parts.hour,parts.min,parts.sec,milliseconds);
+}
 string TerminalInstanceId()
 {
    string path=TerminalInfoString(TERMINAL_DATA_PATH); ulong hash=1469598103934665603;

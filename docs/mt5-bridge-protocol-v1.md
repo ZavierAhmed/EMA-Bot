@@ -100,6 +100,10 @@ terminating zero byte, and processes a bounded number of frames per timer tick.
 It reports only the selected instruments in Market Watch and never selects a
 symbol or submits a trade.
 
+MQL5 `TimeToString` output is not used directly on the wire. The EA explicitly
+formats every protocol timestamp as ISO-8601 UTC; quote timestamps preserve the
+three-digit millisecond component from `MqlTick.time_msc`.
+
 These synthetic examples are protocol-v1 compatibility fixtures; they contain
 no secret or real terminal/account value.
 
