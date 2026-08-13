@@ -21,3 +21,19 @@
 
 Paper uses observed-quote fills only: additional slippage and swap financing
 are not simulated.
+
+## API restart recovery
+
+If the API restarts while Paper is running, the session is intentionally marked
+`Interrupted`; it does not reconnect automatically. Return to the Paper page and
+confirm the restart reason plus the `Resume session` and `End session` actions.
+
+- Use **Resume session** only after MT5 is connected. It clears any pending entry
+  tied to the prior process, reconnects the live stream, and restores live
+  Bid/Ask without a browser refresh.
+- Use **End session** only when there is no open simulated position. It marks the
+  interrupted session stopped and returns to the start form/history.
+- If a simulated position is open, ending is rejected deliberately. Resume first,
+  then use the normal Stop action so Paper can obtain an executable Bid/Ask exit.
+
+No broker order is created in either recovery path.

@@ -116,6 +116,7 @@ export async function downloadOptimizerRegimeExcel(runId: number, candidateId: n
 export const getPaperSessions = () => request<PaperSessionSummary[]>('/api/paper-sessions')
 export const getActivePaperSession = () => request<PaperSession>('/api/paper-sessions/active')
 export const startPaperSession = (interval: string, symbols: string[]) => protectedRequest<PaperSession>('/api/paper-sessions', 'POST', { interval, symbols })
+export const resumePaperSession = (id: number) => protectedRequest<PaperSession>(`/api/paper-sessions/${id}/resume`, 'POST')
 export const stopPaperSession = (id: number) => protectedRequest<void>(`/api/paper-sessions/${id}/stop`, 'POST')
 export const getTrades = (filters: Record<string, string>) => request<TradeSummary[]>(`/api/trades?${new URLSearchParams(Object.entries(filters).filter(([, value]) => value)).toString()}`)
 export const getTrade = (source: string, id: number, signal?: AbortSignal) => request<TradeDetail>(`/api/trades/${source.toLowerCase()}/${id}`, { signal })

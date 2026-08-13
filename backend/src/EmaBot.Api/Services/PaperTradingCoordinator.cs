@@ -76,9 +76,27 @@ public sealed class PaperTradingCoordinator(
         await gate.WaitAsync(cancellationToken);
         try
         {
-            if (active is null || active.Session.Id != sessionId) throw new InvalidOperationException("That paper session is not running in this application.");
-            if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && (active.Session.MarketDataSource == MarketDataSource.Mt5Exness ? ExitExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) is null : !symbol.LatestPrice.HasValue))) throw new InvalidOperationException("An open paper position has no reliable executable market price and cannot be stopped safely.");
-            state = active; state.AcceptSignals = false; state.Cancellation.Cancel(); active = null;
+            if (active is not null)
+            {
+                if (active.Session.Id != sessionId) throw new InvalidOperationException("A different paper session is running in this application.");
+                if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && (active.Session.MarketDataSource == MarketDataSource.Mt5Exness ? ExitExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) is null : !symbol.LatestPrice.HasValue))) throw new InvalidOperationException("An open paper position has no reliable executable market price and cannot be stopped safely.");
+                state = active; state.AcceptSignals = false; state.Cancellation.Cancel(); active = null;
+            }
+            else
+            {
+                await using var scope = scopeFactory.CreateAsyncScope();
+                var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+                var session = await database.PaperSessions.Include(item => item.Trades).SingleOrDefaultAsync(item => item.Id == sessionId, cancellationToken) ?? throw new KeyNotFoundException("Paper session not found.");
+                if (session.Status != PaperSessionStatus.Interrupted) throw new InvalidOperationException($"Paper session is {session.Status} and cannot be ended without an active runtime.");
+                if (session.Trades.Any(trade => trade.Status == PaperTradeStatus.Open))
+                {
+                    if (session.MarketDataSource == MarketDataSource.LegacyBinance) throw new InvalidOperationException("This interrupted Legacy Binance Paper session contains an open simulated position and cannot be ended without its original live runtime.");
+                    throw new InvalidOperationException("This interrupted Paper session contains an open simulated position. Resume the session while MT5 is connected, then stop it so the position can be closed using an executable Bid/Ask quote.");
+                }
+                session.Status = PaperSessionStatus.Stopped;
+                session.StoppedAtUtc = DateTimeOffset.UtcNow;
+                await database.SaveChangesAsync(cancellationToken);
+            }
         }
         finally { gate.Release(); }
         if (state is not null) await StopAfterWorkerAsync(state, cancellationToken);
