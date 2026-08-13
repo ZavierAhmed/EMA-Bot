@@ -51,6 +51,16 @@ bars and execution remain false. No account, instrument, or quote is persisted
 and no trading operation exists. Manual live terminal validation remains
 pending.
 
+## E7/E7.1 Demo validation and E8 foundation
+
+Manual E7/E7.1 validation against an Exness MT5 Demo terminal passed for the
+authenticated bridge, heartbeat, Ping, sanitized account read, Market Watch
+catalog, XAUUSDm specification, and bid/ask comparison with Market Watch;
+quote millisecond timestamps also passed. No account login, password, or bridge
+secret is recorded here. E8 adds parallel read-only MT5 historical and snapshot
+bar providers, but Binance remains the active research history provider and the
+generic live stream remains unavailable. Manual E8 bar validation is pending.
+
 ## Scope and branch safety
 
 This is an architecture and dependency inventory only.  It was prepared on

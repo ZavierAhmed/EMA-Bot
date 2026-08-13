@@ -18,6 +18,8 @@ builder.Services.Configure<BootstrapAdminOptions>(builder.Configuration.GetSecti
 builder.Services.Configure<TradingDefaultsOptions>(builder.Configuration.GetSection(TradingDefaultsOptions.SectionName));
 builder.Services.AddOptions<Mt5BridgeOptions>().Bind(builder.Configuration.GetSection(Mt5BridgeOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<Mt5BridgeOptions>, Mt5BridgeOptionsValidator>();
+builder.Services.AddOptions<Mt5MarketDataOptions>().Bind(builder.Configuration.GetSection(Mt5MarketDataOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<Mt5MarketDataOptions>, Mt5MarketDataOptionsValidator>();
 
 // A real connection string is supplied through user-secrets or environment variables.
 // The credential-free fallback keeps the API startable so /api/health can report an unavailable database.
@@ -101,6 +103,8 @@ builder.Services.AddSingleton<IMarketProviderCapabilities, MarketProviderCapabil
 builder.Services.AddSingleton<Mt5BridgeServer>();
 builder.Services.AddSingleton<IMt5BridgeRequestClient>(provider => provider.GetRequiredService<Mt5BridgeServer>());
 builder.Services.AddSingleton<IMt5AccountReader, Mt5BridgeAccountReader>();
+builder.Services.AddSingleton<Mt5BridgeHistoricalMarketDataProvider>();
+builder.Services.AddSingleton<Mt5BridgeMarketBarStreamProvider>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

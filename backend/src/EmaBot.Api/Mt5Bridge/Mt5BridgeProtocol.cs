@@ -8,13 +8,13 @@ public static class Mt5BridgeProtocol
     public const int ProtocolVersion = 1;
     public static readonly IReadOnlySet<Mt5BridgeOperation> AllowedRequestOperations = new HashSet<Mt5BridgeOperation>
     {
-        Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote
+        Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote, Mt5BridgeOperation.GetLatestBars, Mt5BridgeOperation.GetBarsRange, Mt5BridgeOperation.GetBarSnapshot
     };
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
 }
 
 public enum Mt5BridgeFrameKind { Hello, HelloAck, Heartbeat, Request, Response, Error }
-public enum Mt5BridgeOperation { Hello, Heartbeat, Ping, GetAccount, GetInstruments, GetInstrument, GetQuote }
+public enum Mt5BridgeOperation { Hello, Heartbeat, Ping, GetAccount, GetInstruments, GetInstrument, GetQuote, GetLatestBars, GetBarsRange, GetBarSnapshot }
 
 public sealed record Mt5BridgeEnvelope(int ProtocolVersion, Mt5BridgeFrameKind Kind, Mt5BridgeOperation Operation, Guid? RequestId, DateTimeOffset SentAtUtc, JsonElement? Payload)
 {
@@ -33,6 +33,11 @@ public sealed record Mt5InstrumentSpecPayload(string BrokerSymbol, string Displa
 public sealed record Mt5InstrumentCatalogItemPayload(Mt5InstrumentSpecPayload Spec, string? Description, string? Path, bool IsSelected, bool IsVisible, string TradeMode);
 public sealed record Mt5GetInstrumentRequest(string BrokerSymbol);
 public sealed record Mt5QuotePayload(string BrokerSymbol, DateTimeOffset TimeUtc, decimal Bid, decimal Ask, decimal? Last, decimal? Volume);
+public sealed record Mt5GetLatestBarsRequest(string BrokerSymbol, string Timeframe, int Count);
+public sealed record Mt5GetBarsRangeRequest(string BrokerSymbol, string Timeframe, long StartUnixSeconds, long EndUnixSeconds);
+public sealed record Mt5GetBarSnapshotRequest(string BrokerSymbol, string Timeframe);
+public sealed record Mt5BarPayload(string BrokerSymbol, string Timeframe, DateTimeOffset OpenTimeUtc, decimal Open, decimal High, decimal Low, decimal Close, long TickVolume, long RealVolume, int SpreadPoints, bool IsCurrent);
+public sealed record Mt5BarSnapshotPayload(string BrokerSymbol, string Timeframe, DateTimeOffset EventTimeUtc, Mt5BarPayload PreviousClosed, Mt5BarPayload Current);
 
 public sealed class Mt5BridgeProtocolException(string message) : Exception(message);
 public sealed class Mt5BridgeUnavailableException(string message) : InvalidOperationException(message);

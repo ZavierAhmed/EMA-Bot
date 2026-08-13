@@ -113,9 +113,9 @@ public sealed class Mt5BridgeOptionsAndProtocolTests
     [Fact]
     public void OperationsAreExactlyTheApprovedReadOnlySet()
     {
-        var allowed = new[] { Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote };
+        var allowed = new[] { Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote, Mt5BridgeOperation.GetLatestBars, Mt5BridgeOperation.GetBarsRange, Mt5BridgeOperation.GetBarSnapshot };
         Assert.Equal(allowed, Mt5BridgeProtocol.AllowedRequestOperations.OrderBy(operation => operation));
-        Assert.Equal(new[] { Mt5BridgeOperation.Hello, Mt5BridgeOperation.Heartbeat, Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote }, Enum.GetValues<Mt5BridgeOperation>());
+        Assert.Equal(new[] { Mt5BridgeOperation.Hello, Mt5BridgeOperation.Heartbeat, Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote, Mt5BridgeOperation.GetLatestBars, Mt5BridgeOperation.GetBarsRange, Mt5BridgeOperation.GetBarSnapshot }, Enum.GetValues<Mt5BridgeOperation>());
     }
 
     [Fact]

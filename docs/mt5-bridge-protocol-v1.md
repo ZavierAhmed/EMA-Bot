@@ -68,6 +68,9 @@ The only server-initiated request operations in v1 are:
 - `GetInstruments`
 - `GetInstrument`
 - `GetQuote`
+- `GetLatestBars`
+- `GetBarsRange`
+- `GetBarSnapshot`
 
 Each request has a unique GUID request ID. Responses and errors must echo that
 same ID, so overlapping requests are correlated by ID rather than stream order.
@@ -78,6 +81,13 @@ their pending entry; a client disconnect fails every pending request promptly.
 Future account, instrument/spec/catalog, and bid/ask quote DTOs are present for
 E7 compatibility. Broker symbol spelling is preserved exactly. No account data
 is persisted or exposed through a public account API in E6.
+
+E8 adds only read-only bar requests. Range requests use Unix seconds and bar
+payloads retain actual MT5 open times, tick/real volume, spread points, and a
+current-bar flag. The .NET adapter derives a closed candle's close time from the
+next actual bar open time minus one millisecond, using real volume when present
+and tick volume otherwise. Canonical `3d` remains deliberately unsupported by
+the native MT5 adapter.
 
 The protocol deliberately contains no execution operation: no order placement,
 order sending, position modification, closing, buying, or selling is allowed.
