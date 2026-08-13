@@ -199,6 +199,32 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
     }
 
+    [Fact]
+    public async Task NoActionClosedCandle_PersistsCandleEvaluatedDecision()
+    {
+        var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
+        _factory.BinanceClient.Klines = Enumerable.Range(0, 200).Select(index =>
+        {
+            var time = DateTimeOffset.UnixEpoch.AddMinutes(index * 3);
+            return new Candle(time, time.AddMinutes(3).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true);
+        }).ToArray();
+        var session = await CreateSession(PaperSessionStatus.Running);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var open = _factory.BinanceClient.Klines[^1].CloseTimeUtc.AddMilliseconds(1);
+        await coordinator.ProcessUpdateForTestAsync(Kline(open, 100m, 100m, 100m, true));
+
+        var snapshot = coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"];
+        Assert.Equal("CandleEvaluated", snapshot.LastDecision!.Stage);
+        Assert.Equal(open.AddMinutes(3).AddMilliseconds(-1), snapshot.LastClosedCandleUtc);
+        Assert.Null(snapshot.PendingDirection);
+        Assert.Null(snapshot.OpenTrade);
+        using var scope = _factory.Services.CreateScope();
+        var decision = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperDecisionEvents.OrderByDescending(item => item.Id).FirstAsync(item => item.PaperSessionId == session.Id);
+        Assert.Equal("CandleEvaluated", decision.Stage);
+        Assert.Contains("No new actionable", decision.Message);
+        await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
+    }
+
     private async Task<PaperSession> CreateSession(PaperSessionStatus status, DateTimeOffset? pendingSignal = null, bool openTrade = false, SignalDirection direction = SignalDirection.Long, decimal entry = 100m, decimal? stop = null, decimal fee = .1m, bool trailing = false)
     {
         using var scope = _factory.Services.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();

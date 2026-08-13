@@ -60,6 +60,7 @@ public sealed class PaperSession
     public decimal TotalTradingCosts { get; set; }
     public List<PaperSessionSymbol> Symbols { get; set; } = [];
     public List<PaperTrade> Trades { get; set; } = [];
+    public List<PaperDecisionEvent> DecisionEvents { get; set; } = [];
 }
 
 public sealed class PaperSessionSymbol
@@ -104,6 +105,34 @@ public sealed class PaperSessionSymbol
     public InstrumentTradeMode? TradeMode { get; set; }
     public decimal? CommissionPerLotPerSide { get; set; }
     public List<PaperTrade> Trades { get; set; } = [];
+    public List<PaperDecisionEvent> DecisionEvents { get; set; } = [];
+}
+
+public sealed class PaperDecisionEvent
+{
+    public int Id { get; set; }
+    public int PaperSessionId { get; set; }
+    [JsonIgnore] public PaperSession? PaperSession { get; set; }
+    public int PaperSessionSymbolId { get; set; }
+    [JsonIgnore] public PaperSessionSymbol? PaperSessionSymbol { get; set; }
+    public DateTimeOffset TimeUtc { get; set; }
+    public DateTimeOffset? CandleCloseTimeUtc { get; set; }
+    public required string Stage { get; set; }
+    public SignalDirection? Direction { get; set; }
+    public required string Message { get; set; }
+    public decimal? Ema9 { get; set; }
+    public decimal? Ema15 { get; set; }
+    public decimal? Ema100 { get; set; }
+    public decimal? GapPercent { get; set; }
+    public GapState? GapState { get; set; }
+    public decimal? StopPrice { get; set; }
+    public StopSourceType? StopSource { get; set; }
+    public DateTimeOffset? ExpectedEntryOpenUtc { get; set; }
+    public decimal? Bid { get; set; }
+    public decimal? Ask { get; set; }
+    public decimal? EntryPrice { get; set; }
+    public decimal? Lots { get; set; }
+    public decimal? RequiredMargin { get; set; }
 }
 
 public sealed class PaperTrade

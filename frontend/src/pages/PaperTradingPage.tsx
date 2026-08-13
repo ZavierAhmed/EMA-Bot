@@ -8,7 +8,8 @@ const onOff = (value: boolean) => value ? 'On' : 'Off'
 type BusyAction = 'start' | 'stop' | 'resume' | 'end' | null
 
 function Section({ title, children }: { title: string; children: ReactNode }) { return <section className="rounded-lg border bg-white p-5"><h2 className="font-semibold">{title}</h2>{children}</section> }
-function Values({ values }: { values: Array<[string, ReactNode]> }) { return <dl className="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">{values.map(([label, value]) => <div key={label}><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt><dd className="mt-1 text-sm text-slate-900">{value}</dd></div>)}</dl> }
+function Values({ values }: { values: Array<[string, ReactNode]> }) { return <><dl className="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">{values.map(([label, value]) => <div key={label}><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label === 'Current balance' ? 'Current realized balance' : label}</dt><dd className="mt-1 text-sm text-slate-900">{value}</dd></div>)}</dl>{values.some(([label]) => label === 'Last closed candle') && <CadenceNote />}{values.some(([label]) => label === 'Current balance') && <p className="mt-3 text-xs text-slate-500">Open-position unrealized P/L is not included in this balance. Used margin remains fixed while position size is unchanged and releases on close.</p>}</> }
+function CadenceNote() { return <p className="mt-3 text-xs text-slate-500">LIVE values update continuously; EMA, trend, gap, and decision evaluation update at candle close. Entry values are fixed at entry. SL/TP, MFE, and MAE change only when their relevant management event occurs.</p> }
 
 export function PaperTradingPage() {
   const [active, setActive] = useState<PaperSession | null>(null)

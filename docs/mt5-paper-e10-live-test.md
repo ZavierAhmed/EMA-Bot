@@ -45,7 +45,15 @@ live market/EMA state, pending-entry details, and an open-position card. Trend
 (`EMA9 > EMA15` or `EMA9 < EMA15`) is not a signal to trade; the current
 decision explains what the latest closed candle actually did.
 
-Recent decisions are bounded, in-memory diagnostics (the latest 25 per symbol).
-They are not reconstructed after an API restart; persisted open-position and
-pending-entry details remain visible after restart. Confirm the warmup message,
-then wait for a new closed candle to see live decision history advance.
+Every processed live closed candle now writes a decision ledger event, including
+the no-action outcome. The active dashboard shows the latest 25 persisted
+decisions per symbol; the full Admin history is available from
+`GET /api/paper-sessions/{sessionId}/decisions` with optional symbol and paging.
+Decision history survives restart from E10.5 onward. History before this change
+cannot be reconstructed.
+
+The dashboard separates values by cadence: Bid/Ask and executable exit are
+live; EMA values, trend, gap, decision evaluation, and funnel totals update on
+candle close; entry values and margin are fixed at entry; SL/TP, MFE, and MAE
+change only when their relevant management event occurs. Current balance is
+realized only—open-position unrealized P/L is deliberately not estimated.

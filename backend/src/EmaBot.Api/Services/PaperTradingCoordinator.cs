@@ -122,7 +122,7 @@ public sealed class PaperTradingCoordinator(
             var candles = await historical.GetLatestAsync(runtime.Symbol.Symbol, state.Session.Interval, 200, token);
             runtime.Candles.AddRange(candles.Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).TakeLast(200));
             runtime.Indicator = strategy.Evaluate(runtime.Candles, Settings(state.Session)).Snapshots.LastOrDefault();
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(DateTimeOffset.UtcNow, null, "Warmup", null, "Warmup complete. Waiting for the next live closed candle.", runtime.Indicator?.Ema9, runtime.Indicator?.Ema15, runtime.Indicator?.Ema100, runtime.Indicator?.GapPercent, runtime.Indicator?.GapState));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(DateTimeOffset.UtcNow, null, "Warmup", null, "Warmup complete. Waiting for the next live closed candle.", runtime.Indicator?.Ema9, runtime.Indicator?.Ema15, runtime.Indicator?.Ema100, runtime.Indicator?.GapPercent, runtime.Indicator?.GapState), token);
         }
     }
 
@@ -197,7 +197,7 @@ public sealed class PaperTradingCoordinator(
             {
                 var expectedOpen = runtime.Pending.SignalTimeUtc.AddMilliseconds(1);
                 if (update.OpenTimeUtc == expectedOpen) await EnterPendingAsync(state, runtime, update, token);
-                else if (update.OpenTimeUtc > expectedOpen) { AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "EntryExpired", runtime.Pending.Direction, "The pending entry expired because the exact next-bar entry window was missed.")); runtime.Pending = null; await PersistRuntimeSymbolAsync(runtime, token); logger.LogInformation("Expired stale pending paper entry for {Symbol}.", runtime.Symbol.Symbol); }
+                else if (update.OpenTimeUtc > expectedOpen) { await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "EntryExpired", runtime.Pending.Direction, "The pending entry expired because the exact next-bar entry window was missed."), token); runtime.Pending = null; await PersistRuntimeSymbolAsync(runtime, token); logger.LogInformation("Expired stale pending paper entry for {Symbol}.", runtime.Symbol.Symbol); }
             }
             if (runtime.OpenTrade is not null && (!isMt5Paper || (!update.IsClosed && update.Bid is > 0 && update.Ask is > 0))) await ManageOpenTradeAsync(state, runtime, update, token);
             if (!update.IsClosed || runtime.LastClosedCandleUtc == update.CloseTimeUtc) return;
@@ -208,7 +208,16 @@ public sealed class PaperTradingCoordinator(
             if (runtime.Candles.Count > 200) runtime.Candles.RemoveRange(0, runtime.Candles.Count - 200);
             var evaluation = strategy.Evaluate(runtime.Candles, Settings(state.Session)); runtime.Indicator = evaluation.Snapshots.LastOrDefault();
             var events = evaluation.Events.Where(item => item.Time == update.CloseTimeUtc).ToArray();
-            foreach (var strategyEvent in events) AddStrategyDecision(runtime, strategyEvent);
+            if (events.Length == 0)
+            {
+                var position = runtime.OpenTrade is null ? "" : $" while a {runtime.OpenTrade.Direction} position is open";
+                await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, update.CloseTimeUtc, "CandleEvaluated", null, $"Closed candle evaluated{position}. No new actionable strategy event.", runtime.Indicator?.Ema9, runtime.Indicator?.Ema15, runtime.Indicator?.Ema100, runtime.Indicator?.GapPercent, runtime.Indicator?.GapState), token);
+            }
+            else
+            {
+                await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, update.CloseTimeUtc, "CandleEvaluated", null, "Closed candle evaluated.", runtime.Indicator?.Ema9, runtime.Indicator?.Ema15, runtime.Indicator?.Ema100, runtime.Indicator?.GapPercent, runtime.Indicator?.GapState), token);
+                foreach (var strategyEvent in events) await AddStrategyDecisionAsync(state, runtime, strategyEvent, token);
+            }
             foreach (var crossover in events.Where(item => item.Status is SignalStatus.BullishCrossover or SignalStatus.BearishCrossover)) { runtime.TrendRegimeDirection = crossover.Direction; runtime.TrendRegimeCrossoverTimeUtc = crossover.Time; runtime.ReentryEligible = false; runtime.ReentryConsumed = false; }
             await RecordClosedCandleAsync(state.Session.Id, runtime, events, token);
             if (!state.AcceptSignals) return;
@@ -220,11 +229,11 @@ public sealed class PaperTradingCoordinator(
 
     private async Task ScheduleSignalAsync(RuntimeSession state, RuntimeSymbol runtime, IReadOnlyList<StrategyEvent> events, StrategyEvent signal, CancellationToken token)
     {
-        if (runtime.OpenTrade is not null || runtime.Pending is not null) { AddDecision(runtime, new PaperDecisionRuntimeEvent(signal.Time, signal.Time, "SkippedWhileOpen", signal.Direction, "Valid signal skipped because a position or pending entry already exists.")); await UpdateSessionAsync(state.Session.Id, session => session.SkippedWhilePositionOpen++); return; }
+        if (runtime.OpenTrade is not null || runtime.Pending is not null) { await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(signal.Time, signal.Time, "SkippedWhileOpen", signal.Direction, "Valid signal skipped because a position or pending entry already exists."), token); await UpdateSessionAsync(state.Session.Id, session => session.SkippedWhilePositionOpen++); return; }
         var crossover = events.LastOrDefault(item => item.Time <= signal.Time && item.Direction == signal.Direction && (item.Status is SignalStatus.BullishCrossover or SignalStatus.BearishCrossover));
         var index = runtime.Candles.FindIndex(candle => candle.CloseTimeUtc == crossover?.Time); if (index < 1) return;
         var stop = SwingStopRules.Find(runtime.Candles, index, signal.Direction); runtime.Pending = new PendingEntry(signal.Direction, crossover!.Time, signal.Time, stop.Price, stop.Source, stop.Time, signal.Snapshot, false, null);
-        AddDecision(runtime, PendingDecision(runtime.Pending));
+        await AddDecisionAsync(state, runtime, PendingDecision(runtime.Pending), token);
         await PersistRuntimeSymbolAsync(runtime, token);
         logger.LogInformation("Paper signal {Direction} scheduled for {Symbol}.", signal.Direction, runtime.Symbol.Symbol);
     }
@@ -236,8 +245,8 @@ public sealed class PaperTradingCoordinator(
         runtime.ReentryConsumed = true;
         runtime.ReentryEligible = false;
         runtime.Pending = new PendingEntry(direction, regimeTime, snapshot.Time, stop.Price, stop.Source, stop.Time, snapshot, true, regimeTime);
-        AddDecision(runtime, new PaperDecisionRuntimeEvent(snapshot.Time, snapshot.Time, "ReentryConsumed", direction, "Re-entry eligibility consumed by a continuation setup.", snapshot.Ema9, snapshot.Ema15, snapshot.Ema100, snapshot.GapPercent, snapshot.GapState));
-        AddDecision(runtime, new PaperDecisionRuntimeEvent(snapshot.Time, snapshot.Time, "ReentryScheduled", direction, "Re-entry signal scheduled for the next executable bar.", snapshot.Ema9, snapshot.Ema15, snapshot.Ema100, snapshot.GapPercent, snapshot.GapState, stop.Price, stop.Source, snapshot.Time.AddMilliseconds(1)));
+        await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(snapshot.Time, snapshot.Time, "ReentryConsumed", direction, "Re-entry eligibility consumed by a continuation setup.", snapshot.Ema9, snapshot.Ema15, snapshot.Ema100, snapshot.GapPercent, snapshot.GapState), token);
+        await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(snapshot.Time, snapshot.Time, "ReentryScheduled", direction, "Re-entry signal scheduled for the next executable bar.", snapshot.Ema9, snapshot.Ema15, snapshot.Ema100, snapshot.GapPercent, snapshot.GapState, stop.Price, stop.Source, snapshot.Time.AddMilliseconds(1)), token);
         await PersistRuntimeSymbolAsync(runtime, token);
         logger.LogInformation("Paper re-entry {Direction} scheduled for {Symbol}.", direction, runtime.Symbol.Symbol);
     }
@@ -273,7 +282,7 @@ public sealed class PaperTradingCoordinator(
         var entry = EntryExecutablePrice(pending.Direction, update.Bid, update.Ask);
         if (entry is null || runtime.Symbol.ContractSize is not > 0m || runtime.Symbol.CommissionPerLotPerSide is null)
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "MissingBrokerEconomics", pending.Direction, "Entry rejected because an executable quote or broker economics snapshot is unavailable.", Bid: update.Bid, Ask: update.Ask));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "MissingBrokerEconomics", pending.Direction, "Entry rejected because an executable quote or broker economics snapshot is unavailable.", Bid: update.Bid, Ask: update.Ask), token);
             await FaultSessionAsync(state, "MT5 Paper entry is missing an executable quote or broker economics snapshot.", token);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
@@ -281,21 +290,21 @@ public sealed class PaperTradingCoordinator(
 
         if (!AllowsDirection(runtime.Symbol.TradeMode, pending.Direction))
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "TradeModeRejected", pending.Direction, $"{pending.Direction} setup rejected because the MT5 instrument trade mode does not allow this entry."));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "TradeModeRejected", pending.Direction, $"{pending.Direction} setup rejected because the MT5 instrument trade mode does not allow this entry."), token);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
         }
 
         if ((pending.Direction == SignalDirection.Long && pending.Stop >= entry.Value) || (pending.Direction == SignalDirection.Short && pending.Stop <= entry.Value))
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "InvalidStopLoss", pending.Direction, $"{pending.Direction} setup rejected: structural stop {pending.Stop} is invalid for executable entry {entry.Value}.", StopPrice: pending.Stop, EntryPrice: entry.Value));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "InvalidStopLoss", pending.Direction, $"{pending.Direction} setup rejected: structural stop {pending.Stop} is invalid for executable entry {entry.Value}.", StopPrice: pending.Stop, EntryPrice: entry.Value), token);
             await UpdateSessionAsync(state.Session.Id, session => session.InvalidStopLoss++);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
         }
         if (state.Session.MaxStopDistancePercent > 0 && TradeMath.StopDistancePercent(entry.Value, pending.Stop) > state.Session.MaxStopDistancePercent)
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "StopDistanceRejected", pending.Direction, $"Setup rejected because stop distance {TradeMath.StopDistancePercent(entry.Value, pending.Stop):F4}% exceeds configured maximum {state.Session.MaxStopDistancePercent:F4}%.", StopPrice: pending.Stop, EntryPrice: entry.Value));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "StopDistanceRejected", pending.Direction, $"Setup rejected because stop distance {TradeMath.StopDistancePercent(entry.Value, pending.Stop):F4}% exceeds configured maximum {state.Session.MaxStopDistancePercent:F4}%.", StopPrice: pending.Stop, EntryPrice: entry.Value), token);
             await UpdateSessionAsync(state.Session.Id, session => session.RejectedByStopDistance++);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
@@ -304,7 +313,7 @@ public sealed class PaperTradingCoordinator(
         var target = TradeMath.InitialTarget(entry.Value, pending.Stop, pending.Direction, state.Session.RiskReward);
         if (!StopsAreValid(runtime.Symbol, pending.Direction, entry.Value, pending.Stop, target))
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "BrokerStopsLevelRejected", pending.Direction, "Setup rejected because the broker stop-level requirements are not satisfied.", StopPrice: pending.Stop, EntryPrice: entry.Value));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "BrokerStopsLevelRejected", pending.Direction, "Setup rejected because the broker stop-level requirements are not satisfied.", StopPrice: pending.Stop, EntryPrice: entry.Value), token);
             await UpdateSessionAsync(state.Session.Id, session => session.InvalidStopLoss++);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
@@ -314,14 +323,14 @@ public sealed class PaperTradingCoordinator(
         try { size = await SizeMt5PositionAsync(state, runtime.Symbol, pending.Direction, entry.Value, token); }
         catch (InvalidOperationException)
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "InsufficientMargin", pending.Direction, "Entry rejected because simulated free margin cannot support the requested broker volume.", EntryPrice: entry.Value));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "InsufficientMargin", pending.Direction, "Entry rejected because simulated free margin cannot support the requested broker volume.", EntryPrice: entry.Value), token);
             await UpdateSessionAsync(state.Session.Id, session => session.RejectedByInsufficientMargin++);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
         }
         catch (Exception)
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "MarginCalculationUnavailable", pending.Direction, "Entry rejected because MT5 margin calculation is unavailable.", EntryPrice: entry.Value));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "MarginCalculationUnavailable", pending.Direction, "Entry rejected because MT5 margin calculation is unavailable.", EntryPrice: entry.Value), token);
             await FaultSessionAsync(state, "MT5 margin calculation is unavailable; no Paper trade was created.", token);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
@@ -330,7 +339,7 @@ public sealed class PaperTradingCoordinator(
         var commission = 2m * size.Lots * runtime.Symbol.CommissionPerLotPerSide.Value;
         if (commission > 0m && (runtime.Symbol.TickSize is not > 0m || runtime.Symbol.TickValueProfit is not > 0m))
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "TradingCostRejected", pending.Direction, "Entry rejected because trading-cost validation requires broker tick economics.", EntryPrice: entry.Value, Lots: size.Lots));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "TradingCostRejected", pending.Direction, "Entry rejected because trading-cost validation requires broker tick economics.", EntryPrice: entry.Value, Lots: size.Lots), token);
             await UpdateSessionAsync(state.Session.Id, session => session.RejectedByTradingCosts++);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
@@ -340,7 +349,7 @@ public sealed class PaperTradingCoordinator(
             var expected = await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol, pending.Direction.ToString(), size.Lots, entry.Value, target), token);
             if (expected.Profit - commission <= 0m)
             {
-                AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "TradingCostRejected", pending.Direction, "Entry rejected because expected net profit at the original target is not positive after configured trading costs.", EntryPrice: entry.Value, Lots: size.Lots, RequiredMargin: size.RequiredMargin));
+                await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "TradingCostRejected", pending.Direction, "Entry rejected because expected net profit at the original target is not positive after configured trading costs.", EntryPrice: entry.Value, Lots: size.Lots, RequiredMargin: size.RequiredMargin), token);
                 await UpdateSessionAsync(state.Session.Id, session => session.RejectedByTradingCosts++);
                 await PersistRuntimeSymbolAsync(runtime, token);
                 return;
@@ -348,7 +357,7 @@ public sealed class PaperTradingCoordinator(
         }
         catch (Exception)
         {
-            AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "ProfitCalculationUnavailable", pending.Direction, "Entry rejected because MT5 profit calculation is unavailable.", EntryPrice: entry.Value, Lots: size.Lots));
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "ProfitCalculationUnavailable", pending.Direction, "Entry rejected because MT5 profit calculation is unavailable.", EntryPrice: entry.Value, Lots: size.Lots), token);
             await FaultSessionAsync(state, "MT5 profit calculation is unavailable; no Paper trade was created.", token);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
@@ -368,7 +377,7 @@ public sealed class PaperTradingCoordinator(
             AccountEquityAtEntry = state.Session.CurrentBalance, RoundTripCommission = commission, GrossPnl = 0m, NetPnl = -commission
         };
         runtime.OpenTrade = trade;
-        AddDecision(runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "Entered", pending.Direction, $"{pending.Direction} Paper trade entered at executable {(pending.Direction == SignalDirection.Long ? "Ask" : "Bid")} {entry.Value}.", pending.Snapshot.Ema9, pending.Snapshot.Ema15, pending.Snapshot.Ema100, pending.Snapshot.GapPercent, pending.Snapshot.GapState, pending.Stop, pending.StopSource, null, update.Bid, update.Ask, entry.Value, size.Lots, size.RequiredMargin));
+        await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "Entered", pending.Direction, $"{pending.Direction} Paper trade entered at executable {(pending.Direction == SignalDirection.Long ? "Ask" : "Bid")} {entry.Value}.", pending.Snapshot.Ema9, pending.Snapshot.Ema15, pending.Snapshot.Ema100, pending.Snapshot.GapPercent, pending.Snapshot.GapState, pending.Stop, pending.StopSource, null, update.Bid, update.Ask, entry.Value, size.Lots, size.RequiredMargin), token);
         await using var scope = scopeFactory.CreateAsyncScope();
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         database.PaperTrades.Add(trade);
@@ -468,7 +477,7 @@ public sealed class PaperTradingCoordinator(
 
         var trade = runtime.OpenTrade!; trade.Status = PaperTradeStatus.Closed; trade.ExitPrice = exit; trade.ExitTimeUtc = at; trade.FinalStopLoss = trade.CurrentStopLoss; trade.FinalTakeProfit = trade.CurrentTakeProfit; trade.ExitReason = reason; trade.ExitFeeUsdt = TradeMath.Fee(exit, trade.Quantity, state.Session.FeePercentPerSide); trade.TotalFeesUsdt = trade.EntryFeeUsdt + trade.ExitFeeUsdt.Value; trade.GrossPnlUsdt = TradeMath.GrossPnl(trade.EntryPrice, exit, trade.Quantity, trade.Direction); trade.NetPnlUsdt = trade.GrossPnlUsdt - trade.TotalFeesUsdt; trade.NetPnlPercent = trade.NetPnlUsdt / trade.EntryNotionalUsdt * 100m;
         runtime.ReentryEligible = (reason is PaperExitReason.InitialStopLoss or PaperExitReason.TrailingStop) && !trade.IsReentry;
-        if (runtime.ReentryEligible) AddDecision(runtime, new PaperDecisionRuntimeEvent(at, null, "ReentryEligible", trade.Direction, "Position exit made one continuation re-entry eligible."));
+        if (runtime.ReentryEligible) await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(at, null, "ReentryEligible", trade.Direction, "Position exit made one continuation re-entry eligible."), token);
         if (runtime.ReentryEligible) { runtime.TrendRegimeDirection = trade.Direction; runtime.TrendRegimeCrossoverTimeUtc = trade.TrendRegimeCrossoverTimeUtc ?? trade.CrossoverTimeUtc; }
         await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = at, Type = PaperTradeEventType.Exit, MarketPrice = exit }, token);
         if (state.Session.PositionSizingMode == PositionSizingMode.MarginPercent) { state.Session.CurrentBalanceUsdt += trade.NetPnlUsdt; state.Session.UsedMarginUsdt = Math.Max(0m, state.Session.UsedMarginUsdt - (trade.MarginUsedUsdt ?? 0m)); }
@@ -487,7 +496,7 @@ public sealed class PaperTradingCoordinator(
         trade.GrossPnl = profit.Profit; trade.NetPnl = profit.Profit - (trade.RoundTripCommission ?? 0m);
         trade.NetPnlPercent = trade.AccountEquityAtEntry is > 0m ? trade.NetPnl.Value / trade.AccountEquityAtEntry.Value * 100m : 0m;
         runtime.ReentryEligible = (reason is PaperExitReason.InitialStopLoss or PaperExitReason.TrailingStop) && !trade.IsReentry;
-        if (runtime.ReentryEligible) AddDecision(runtime, new PaperDecisionRuntimeEvent(at, null, "ReentryEligible", trade.Direction, "Position exit made one continuation re-entry eligible."));
+        if (runtime.ReentryEligible) await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(at, null, "ReentryEligible", trade.Direction, "Position exit made one continuation re-entry eligible."), token);
         if (runtime.ReentryEligible) { runtime.TrendRegimeDirection = trade.Direction; runtime.TrendRegimeCrossoverTimeUtc = trade.TrendRegimeCrossoverTimeUtc ?? trade.CrossoverTimeUtc; }
         await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = at, Type = PaperTradeEventType.Exit, MarketPrice = exit }, token);
         state.Session.CurrentBalance += profit.Profit;
@@ -509,8 +518,23 @@ public sealed class PaperTradingCoordinator(
     private async Task UpdateSessionAsync(int id, Action<PaperSession> change) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var session = await database.PaperSessions.SingleAsync(item => item.Id == id); change(session); await database.SaveChangesAsync(); }
     private static PaperPendingEntryRuntimeSnapshot? PendingSnapshot(PendingEntry? pending) => pending is null ? null : new(pending.Direction, pending.CrossoverTimeUtc, pending.SignalTimeUtc, pending.SignalTimeUtc.AddMilliseconds(1), pending.Stop, pending.StopSource, pending.StopTimeUtc, pending.Snapshot, pending.IsReentry);
     private static PaperDecisionRuntimeEvent PendingDecision(PendingEntry pending) => new(pending.SignalTimeUtc, pending.SignalTimeUtc, "PendingEntry", pending.Direction, $"Valid {pending.Direction} signal. Waiting for the first executable {(pending.Direction == SignalDirection.Long ? "Ask" : "Bid")} quote on the next bar.", pending.Snapshot.Ema9, pending.Snapshot.Ema15, pending.Snapshot.Ema100, pending.Snapshot.GapPercent, pending.Snapshot.GapState, pending.Stop, pending.StopSource, pending.SignalTimeUtc.AddMilliseconds(1));
-    private static void AddDecision(RuntimeSymbol runtime, PaperDecisionRuntimeEvent decision) { runtime.RecentDecisions.Add(decision); if (runtime.RecentDecisions.Count > 25) runtime.RecentDecisions.RemoveAt(0); }
-    private static void AddStrategyDecision(RuntimeSymbol runtime, StrategyEvent strategyEvent)
+    private async Task AddDecisionAsync(RuntimeSession state, RuntimeSymbol runtime, PaperDecisionRuntimeEvent decision, CancellationToken token)
+    {
+        runtime.RecentDecisions.Add(decision);
+        if (runtime.RecentDecisions.Count > 25) runtime.RecentDecisions.RemoveAt(0);
+        try
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            database.PaperDecisionEvents.Add(new PaperDecisionEvent { PaperSessionId = state.Session.Id, PaperSessionSymbolId = runtime.Symbol.Id, TimeUtc = decision.TimeUtc, CandleCloseTimeUtc = decision.CandleCloseTimeUtc, Stage = decision.Stage, Direction = decision.Direction, Message = decision.Message, Ema9 = decision.Ema9, Ema15 = decision.Ema15, Ema100 = decision.Ema100, GapPercent = decision.GapPercent, GapState = decision.GapState, StopPrice = decision.StopPrice, StopSource = decision.StopSource, ExpectedEntryOpenUtc = decision.ExpectedEntryOpenUtc, Bid = decision.Bid, Ask = decision.Ask, EntryPrice = decision.EntryPrice, Lots = decision.Lots, RequiredMargin = decision.RequiredMargin });
+            await database.SaveChangesAsync(token);
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Paper decision persistence failed for session {SessionId}, symbol {Symbol}, stage {Stage}. Trading processing continues.", state.Session.Id, runtime.Symbol.Symbol, decision.Stage);
+        }
+    }
+    private async Task AddStrategyDecisionAsync(RuntimeSession state, RuntimeSymbol runtime, StrategyEvent strategyEvent, CancellationToken token)
     {
         var message = strategyEvent.Status switch
         {
@@ -523,7 +547,7 @@ public sealed class PaperTradingCoordinator(
             SignalStatus.LongSignal or SignalStatus.ShortSignal => $"Valid {strategyEvent.Direction} signal accepted.",
             _ => $"{strategyEvent.Status} evaluated."
         };
-        AddDecision(runtime, new PaperDecisionRuntimeEvent(strategyEvent.Time, strategyEvent.Time, strategyEvent.Status.ToString(), strategyEvent.Direction, message, strategyEvent.Snapshot.Ema9, strategyEvent.Snapshot.Ema15, strategyEvent.Snapshot.Ema100, strategyEvent.Snapshot.GapPercent, strategyEvent.Snapshot.GapState));
+        await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(strategyEvent.Time, strategyEvent.Time, strategyEvent.Status.ToString(), strategyEvent.Direction, message, strategyEvent.Snapshot.Ema9, strategyEvent.Snapshot.Ema15, strategyEvent.Snapshot.Ema100, strategyEvent.Snapshot.GapPercent, strategyEvent.Snapshot.GapState), token);
     }
     private EmaBot.Api.Mt5Bridge.IMt5TradeCalculator Calculator() => calculator ?? throw new InvalidOperationException("MT5 trade calculation is not configured.");
     internal static decimal? EntryExecutablePrice(SignalDirection direction, decimal? bid, decimal? ask) => direction switch { SignalDirection.Long when ask is > 0m => ask, SignalDirection.Short when bid is > 0m => bid, _ => null };

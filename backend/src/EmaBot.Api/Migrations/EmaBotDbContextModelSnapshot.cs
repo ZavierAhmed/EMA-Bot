@@ -533,6 +533,36 @@ namespace EmaBot.Api.Migrations
                     b.ToTable("MonitoredSymbols");
                 });
 
+            modelBuilder.Entity("EmaBot.Api.Models.PaperDecisionEvent", b =>
+                {
+                    b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("int");
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    b.Property<decimal?>("Ask").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("Bid").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<DateTimeOffset?>("CandleCloseTimeUtc").HasColumnType("datetime(6)");
+                    b.Property<int?>("Direction").HasColumnType("int");
+                    b.Property<decimal?>("Ema100").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("Ema15").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("Ema9").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("EntryPrice").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<DateTimeOffset?>("ExpectedEntryOpenUtc").HasColumnType("datetime(6)");
+                    b.Property<decimal?>("GapPercent").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<int?>("GapState").HasColumnType("int");
+                    b.Property<decimal?>("Lots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("Message").IsRequired().HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<int>("PaperSessionId").HasColumnType("int");
+                    b.Property<int>("PaperSessionSymbolId").HasColumnType("int");
+                    b.Property<decimal?>("RequiredMargin").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("Stage").IsRequired().HasMaxLength(64).HasColumnType("varchar(64)");
+                    b.Property<decimal?>("StopPrice").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<int?>("StopSource").HasColumnType("int");
+                    b.Property<DateTimeOffset>("TimeUtc").HasColumnType("datetime(6)");
+                    b.HasKey("Id");
+                    b.HasIndex("PaperSessionId", "TimeUtc");
+                    b.HasIndex("PaperSessionSymbolId", "TimeUtc");
+                    b.ToTable("PaperDecisionEvents");
+                });
+
             modelBuilder.Entity("EmaBot.Api.Models.PaperSession", b =>
                 {
                     b.Property<int>("Id")
@@ -709,6 +739,22 @@ namespace EmaBot.Api.Migrations
                     b.HasIndex("Status");
 
                     b.ToTable("PaperSessions");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.PaperDecisionEvent", b =>
+                {
+                    b.HasOne("EmaBot.Api.Models.PaperSession", "PaperSession")
+                        .WithMany("DecisionEvents")
+                        .HasForeignKey("PaperSessionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                    b.HasOne("EmaBot.Api.Models.PaperSessionSymbol", "PaperSessionSymbol")
+                        .WithMany("DecisionEvents")
+                        .HasForeignKey("PaperSessionSymbolId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                    b.Navigation("PaperSession");
+                    b.Navigation("PaperSessionSymbol");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperSessionSymbol", b =>
@@ -1769,6 +1815,7 @@ namespace EmaBot.Api.Migrations
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperSession", b =>
                 {
+                    b.Navigation("DecisionEvents");
                     b.Navigation("Symbols");
 
                     b.Navigation("Trades");
@@ -1776,6 +1823,7 @@ namespace EmaBot.Api.Migrations
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperSessionSymbol", b =>
                 {
+                    b.Navigation("DecisionEvents");
                     b.Navigation("Trades");
                 });
 

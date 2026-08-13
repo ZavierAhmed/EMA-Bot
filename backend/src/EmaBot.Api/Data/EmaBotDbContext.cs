@@ -19,6 +19,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<PaperSessionSymbol> PaperSessionSymbols => Set<PaperSessionSymbol>();
     public DbSet<PaperTrade> PaperTrades => Set<PaperTrade>();
     public DbSet<PaperTradeEvent> PaperTradeEvents => Set<PaperTradeEvent>();
+    public DbSet<PaperDecisionEvent> PaperDecisionEvents => Set<PaperDecisionEvent>();
     public DbSet<StrategyOptimizationRun> StrategyOptimizationRuns => Set<StrategyOptimizationRun>();
     public DbSet<StrategyOptimizationCandidate> StrategyOptimizationCandidates => Set<StrategyOptimizationCandidate>();
     public DbSet<StrategyOptimizationMarketResult> StrategyOptimizationMarketResults => Set<StrategyOptimizationMarketResult>();
@@ -87,6 +88,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(session => session.Status);
             entity.HasMany(session => session.Symbols).WithOne(symbol => symbol.PaperSession!).HasForeignKey(symbol => symbol.PaperSessionId).OnDelete(DeleteBehavior.Cascade);
             entity.HasMany(session => session.Trades).WithOne(trade => trade.PaperSession!).HasForeignKey(trade => trade.PaperSessionId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(session => session.DecisionEvents).WithOne(item => item.PaperSession!).HasForeignKey(item => item.PaperSessionId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<PaperSessionSymbol>(entity =>
         {
@@ -104,6 +106,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(symbol => symbol.CommissionPerLotPerSide).HasPrecision(18, 8);
             entity.HasIndex(symbol => new { symbol.PaperSessionId, symbol.Symbol }).IsUnique();
             entity.HasMany(symbol => symbol.Trades).WithOne(trade => trade.PaperSessionSymbol!).HasForeignKey(trade => trade.PaperSessionSymbolId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasMany(symbol => symbol.DecisionEvents).WithOne(item => item.PaperSessionSymbol!).HasForeignKey(item => item.PaperSessionSymbolId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<PaperTrade>(entity =>
         {
@@ -128,6 +131,23 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(trade => trade.MarginUsed).HasPrecision(18, 8);
             entity.HasIndex(trade => new { trade.PaperSessionSymbolId, trade.Status });
             entity.HasMany(trade => trade.Events).WithOne(item => item.PaperTrade!).HasForeignKey(item => item.PaperTradeId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<PaperDecisionEvent>(entity =>
+        {
+            entity.Property(item => item.Stage).HasMaxLength(64);
+            entity.Property(item => item.Message).HasMaxLength(1024);
+            entity.Property(item => item.Ema9).HasPrecision(18, 8);
+            entity.Property(item => item.Ema15).HasPrecision(18, 8);
+            entity.Property(item => item.Ema100).HasPrecision(18, 8);
+            entity.Property(item => item.GapPercent).HasPrecision(18, 8);
+            entity.Property(item => item.StopPrice).HasPrecision(18, 8);
+            entity.Property(item => item.Bid).HasPrecision(18, 8);
+            entity.Property(item => item.Ask).HasPrecision(18, 8);
+            entity.Property(item => item.EntryPrice).HasPrecision(18, 8);
+            entity.Property(item => item.Lots).HasPrecision(18, 8);
+            entity.Property(item => item.RequiredMargin).HasPrecision(18, 8);
+            entity.HasIndex(item => new { item.PaperSessionId, item.TimeUtc });
+            entity.HasIndex(item => new { item.PaperSessionSymbolId, item.TimeUtc });
         });
         builder.Entity<StrategyOptimizationRun>(entity =>
         {
