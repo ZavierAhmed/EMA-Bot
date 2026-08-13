@@ -452,8 +452,7 @@ public sealed class PaperTradingCoordinator(
             await CloseTradeAsync(state, runtime, exit.Value, PaperExitReason.TakeProfit, update.EventTimeUtc, token);
             return;
         }
-        await UpdateLivePnlAsync(runtime, exit.Value, update.EventTimeUtc, token);
-        if (!state.Session.TrailingStopEnabled) return;
+        if (!state.Session.TrailingStopEnabled) { QueueLivePnl(runtime, exit.Value, update.EventTimeUtc); return; }
         var lockPercent = TradeMath.LockPercent(progress);
         if (lockPercent == 0m) return;
         var normal = TradeMath.TrailingStop(trade.EntryPrice, trade.OriginalTakeProfit, direction, lockPercent);
@@ -472,24 +471,32 @@ public sealed class PaperTradingCoordinator(
             trade.CurrentStopLoss = next;
             await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = update.EventTimeUtc, Type = PaperTradeEventType.TrailingStopMoved, MarketPrice = exit.Value, OldStop = old, NewStop = next, ProgressPercent = progress }, token);
         }
+        QueueLivePnl(runtime, exit.Value, update.EventTimeUtc);
     }
 
-    private async Task UpdateLivePnlAsync(RuntimeSymbol runtime, decimal exit, DateTimeOffset observedAt, CancellationToken token)
+    private void QueueLivePnl(RuntimeSymbol runtime, decimal exit, DateTimeOffset observedAt)
     {
-        if (runtime.LastPnlCalculationUtc is { } last && observedAt - last < TimeSpan.FromSeconds(1)) return;
+        if (runtime.PnlCalculationInProgress || runtime.LastPnlCalculationUtc is { } last && observedAt - last < TimeSpan.FromSeconds(1)) return;
         runtime.LastPnlCalculationUtc = observedAt;
+        runtime.PnlCalculationInProgress = true;
         var trade = runtime.OpenTrade!;
+        var symbol = runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol; var direction = trade.Direction.ToString(); var lots = trade.Lots ?? 0m; var entry = trade.EntryPrice; var commission = trade.RoundTripCommission ?? 0m; var margin = trade.MarginUsed;
+        _ = CalculateLivePnlAsync(runtime, symbol, direction, lots, entry, exit, commission, margin, observedAt);
+    }
+    private async Task CalculateLivePnlAsync(RuntimeSymbol runtime, string symbol, string direction, decimal lots, decimal entry, decimal exit, decimal commission, decimal? margin, DateTimeOffset observedAt)
+    {
         try
         {
-            var gross = (await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol, trade.Direction.ToString(), trade.Lots ?? 0m, trade.EntryPrice, exit), token)).Profit;
-            var net = gross - (trade.RoundTripCommission ?? 0m);
-            runtime.CurrentGrossPnl = gross; runtime.CurrentNetPnl = net; runtime.CurrentPnlPercent = trade.MarginUsed is > 0m ? net / trade.MarginUsed.Value * 100m : null; runtime.CurrentPnlCalculatedAtUtc = observedAt; runtime.CurrentPnlAvailable = true;
+            var gross = (await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(symbol, direction, lots, entry, exit), CancellationToken.None)).Profit;
+            var net = gross - commission;
+            runtime.CurrentGrossPnl = gross; runtime.CurrentNetPnl = net; runtime.CurrentPnlPercent = margin is > 0m ? net / margin.Value * 100m : null; runtime.CurrentPnlCalculatedAtUtc = observedAt; runtime.CurrentPnlAvailable = true;
         }
         catch (Exception exception)
         {
             runtime.CurrentPnlAvailable = false;
             logger.LogWarning(exception, "Live Paper P/L valuation failed for {Symbol}; trade management continues.", runtime.Symbol.Symbol);
         }
+        finally { runtime.PnlCalculationInProgress = false; }
     }
 
     private async Task CloseTradeAsync(RuntimeSession state, RuntimeSymbol runtime, decimal exit, PaperExitReason reason, DateTimeOffset at, CancellationToken token)
@@ -649,7 +656,7 @@ public sealed class PaperTradingCoordinator(
     private static void ApplyPending(PaperSessionSymbol symbol, PendingEntry? pending) { ClearPending(symbol); if (pending is null) return; symbol.PendingDirection = pending.Direction; symbol.PendingCrossoverTimeUtc = pending.CrossoverTimeUtc; symbol.PendingSignalTimeUtc = pending.SignalTimeUtc; symbol.PendingStopPrice = pending.Stop; symbol.PendingStopSourceType = pending.StopSource; symbol.PendingStopSourceTimeUtc = pending.StopTimeUtc; symbol.PendingSignalOpen = pending.Snapshot.Open; symbol.PendingSignalClose = pending.Snapshot.Close; symbol.PendingSignalEma9 = pending.Snapshot.Ema9; symbol.PendingSignalEma15 = pending.Snapshot.Ema15; symbol.PendingSignalEma100 = pending.Snapshot.Ema100; symbol.PendingSignalGapPercent = pending.Snapshot.GapPercent; symbol.PendingSignalGapState = pending.Snapshot.GapState; symbol.PendingIsReentry = pending.IsReentry; symbol.PendingTrendRegimeCrossoverTimeUtc = pending.TrendRegimeCrossoverTimeUtc; }
 
     private sealed class RuntimeSession(PaperSession session, CancellationTokenSource cancellation) { public PaperSession Session { get; } = session; public CancellationTokenSource Cancellation { get; } = cancellation; public Dictionary<string, RuntimeSymbol> Symbols { get; } = new(StringComparer.Ordinal); public string ConnectionState { get; set; } = "Connecting"; public DateTimeOffset? LastUpdateUtc { get; set; } public bool AcceptSignals { get; set; } = true; public Task? Worker { get; set; } }
-    private sealed class RuntimeSymbol(PaperSessionSymbol symbol, PaperTrade? openTrade) { public PaperSessionSymbol Symbol { get; } = symbol; public List<Candle> Candles { get; } = []; public List<PaperDecisionRuntimeEvent> RecentDecisions { get; } = []; public PaperTrade? OpenTrade { get; set; } = openTrade; public PendingEntry? Pending { get; set; } = symbol.PendingDirection is { } direction && symbol.PendingCrossoverTimeUtc is { } crossover && symbol.PendingSignalTimeUtc is { } signal && symbol.PendingStopPrice is { } stop && symbol.PendingStopSourceType is { } source && symbol.PendingStopSourceTimeUtc is { } stopTime ? new PendingEntry(direction, crossover, signal, stop, source, stopTime, new IndicatorSnapshot(signal, symbol.PendingSignalClose ?? 0m, symbol.PendingSignalEma9, symbol.PendingSignalEma15, symbol.PendingSignalEma100, symbol.PendingSignalGapPercent, symbol.PendingSignalGapState ?? GapState.Unchanged, TrendDirection.Neutral, symbol.PendingSignalOpen ?? 0m), symbol.PendingIsReentry, symbol.PendingTrendRegimeCrossoverTimeUtc) : null; public SignalDirection? TrendRegimeDirection { get; set; } = symbol.TrendRegimeDirection; public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; } = symbol.TrendRegimeCrossoverTimeUtc; public bool ReentryEligible { get; set; } = symbol.ReentryEligible; public bool ReentryConsumed { get; set; } = symbol.ReentryConsumed; public decimal? LatestPrice { get; set; } = symbol.LastKnownPrice; public decimal? LatestBid { get; set; } public decimal? LatestAsk { get; set; } public DateTimeOffset? LastMarketEventUtc { get; set; } = symbol.LastMarketEventUtc; public DateTimeOffset? LastClosedCandleUtc { get; set; } = symbol.LastProcessedClosedCandleUtc; public IndicatorSnapshot? Indicator { get; set; } public DateTimeOffset? LastPnlCalculationUtc { get; set; } public decimal? CurrentGrossPnl { get; set; } public decimal? CurrentNetPnl { get; set; } public decimal? CurrentPnlPercent { get; set; } public DateTimeOffset? CurrentPnlCalculatedAtUtc { get; set; } public bool CurrentPnlAvailable { get; set; } }
+    private sealed class RuntimeSymbol(PaperSessionSymbol symbol, PaperTrade? openTrade) { public PaperSessionSymbol Symbol { get; } = symbol; public List<Candle> Candles { get; } = []; public List<PaperDecisionRuntimeEvent> RecentDecisions { get; } = []; public PaperTrade? OpenTrade { get; set; } = openTrade; public PendingEntry? Pending { get; set; } = symbol.PendingDirection is { } direction && symbol.PendingCrossoverTimeUtc is { } crossover && symbol.PendingSignalTimeUtc is { } signal && symbol.PendingStopPrice is { } stop && symbol.PendingStopSourceType is { } source && symbol.PendingStopSourceTimeUtc is { } stopTime ? new PendingEntry(direction, crossover, signal, stop, source, stopTime, new IndicatorSnapshot(signal, symbol.PendingSignalClose ?? 0m, symbol.PendingSignalEma9, symbol.PendingSignalEma15, symbol.PendingSignalEma100, symbol.PendingSignalGapPercent, symbol.PendingSignalGapState ?? GapState.Unchanged, TrendDirection.Neutral, symbol.PendingSignalOpen ?? 0m), symbol.PendingIsReentry, symbol.PendingTrendRegimeCrossoverTimeUtc) : null; public SignalDirection? TrendRegimeDirection { get; set; } = symbol.TrendRegimeDirection; public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; } = symbol.TrendRegimeCrossoverTimeUtc; public bool ReentryEligible { get; set; } = symbol.ReentryEligible; public bool ReentryConsumed { get; set; } = symbol.ReentryConsumed; public decimal? LatestPrice { get; set; } = symbol.LastKnownPrice; public decimal? LatestBid { get; set; } public decimal? LatestAsk { get; set; } public DateTimeOffset? LastMarketEventUtc { get; set; } = symbol.LastMarketEventUtc; public DateTimeOffset? LastClosedCandleUtc { get; set; } = symbol.LastProcessedClosedCandleUtc; public IndicatorSnapshot? Indicator { get; set; } public DateTimeOffset? LastPnlCalculationUtc { get; set; } public bool PnlCalculationInProgress { get; set; } public decimal? CurrentGrossPnl { get; set; } public decimal? CurrentNetPnl { get; set; } public decimal? CurrentPnlPercent { get; set; } public DateTimeOffset? CurrentPnlCalculatedAtUtc { get; set; } public bool CurrentPnlAvailable { get; set; } }
     private sealed record PendingEntry(SignalDirection Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, decimal Stop, StopSourceType StopSource, DateTimeOffset StopTimeUtc, IndicatorSnapshot Snapshot, bool IsReentry, DateTimeOffset? TrendRegimeCrossoverTimeUtc);
     private sealed record Mt5PaperSize(decimal Lots, decimal RequiredMargin);
 }

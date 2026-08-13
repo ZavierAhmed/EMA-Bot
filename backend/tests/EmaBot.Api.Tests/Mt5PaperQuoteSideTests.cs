@@ -45,6 +45,25 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         await coordinator.StopAsync(CancellationToken.None);
     }
 
+    [Fact]
+    public async Task OpenLongLivePnl_UsesBidAndIsThrottled()
+    {
+        var calculator = new TestCalculator { Profit = 20m };
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var at = DateTimeOffset.UnixEpoch.AddHours(2);
+        await coordinator.ProcessUpdateForTestAsync(Update(at, 100.8m, 101m));
+        await coordinator.ProcessUpdateForTestAsync(Update(at.AddMilliseconds(500), 100.9m, 101.1m));
+        await coordinator.ProcessUpdateForTestAsync(Update(at.AddSeconds(1), 101m, 101.2m));
+
+        Assert.Equal(2, calculator.ProfitRequests.Count);
+        Assert.Equal("Long", calculator.ProfitRequests.Last().Direction);
+        Assert.Equal(101m, calculator.ProfitRequests.Last().ClosePrice);
+        Assert.NotNull(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
     [Theory]
     [InlineData(SignalDirection.Long)]
     [InlineData(SignalDirection.Short)]

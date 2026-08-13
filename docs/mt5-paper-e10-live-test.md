@@ -79,3 +79,8 @@ The Position Chart uses MT5/Exness historical closed candles plus EMA lines and
 live Entry, SL, TP, and executable-current price levels. Chart history refreshes
 only for a trade change or a newly closed candle, while the current level moves
 with the normal Paper poll.
+
+Before starting, Paper lists all supported MT5-native intervals and requires a
+commission setting for every selected instrument. The pre-start display shows
+the complete settings snapshot that will be captured. Running-session polling is
+single-flight and keeps the selected workspace tab stable through refreshes.
