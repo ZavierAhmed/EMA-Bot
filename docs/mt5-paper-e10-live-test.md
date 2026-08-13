@@ -52,6 +52,10 @@ decisions per symbol; the full Admin history is available from
 Decision history survives restart from E10.5 onward. History before this change
 cannot be reconstructed.
 
+The active dashboard reads its bounded runtime decision cache while Paper is
+running. On resume it seeds the latest persisted 25 decisions before adding the
+new warmup entry; interrupted sessions use bounded persisted reads instead.
+
 The dashboard separates values by cadence: Bid/Ask and executable exit are
 live; EMA values, trend, gap, decision evaluation, and funnel totals update on
 candle close; entry values and margin are fixed at entry; SL/TP, MFE, and MAE

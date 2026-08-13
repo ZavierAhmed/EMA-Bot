@@ -55,7 +55,13 @@ public sealed class PaperTradingCoordinator(
                 await database.SaveChangesAsync(cancellationToken);
             }
             var proposed = new RuntimeSession(session, CancellationTokenSource.CreateLinkedTokenSource(cancellationToken));
-            foreach (var symbol in session.Symbols) proposed.Symbols[symbol.Symbol] = new RuntimeSymbol(symbol, session.Trades.SingleOrDefault(trade => trade.PaperSessionSymbolId == symbol.Id && trade.Status == PaperTradeStatus.Open));
+            foreach (var symbol in session.Symbols)
+            {
+                var runtime = new RuntimeSymbol(symbol, session.Trades.SingleOrDefault(trade => trade.PaperSessionSymbolId == symbol.Id && trade.Status == PaperTradeStatus.Open));
+                var recent = await database.PaperDecisionEvents.AsNoTracking().Where(item => item.PaperSessionSymbolId == symbol.Id).OrderByDescending(item => item.TimeUtc).ThenByDescending(item => item.Id).Take(25).ToListAsync(cancellationToken);
+                runtime.RecentDecisions.AddRange(recent.AsEnumerable().Reverse().Select(ToRuntimeDecision));
+                proposed.Symbols[symbol.Symbol] = runtime;
+            }
             try { await WarmupAsync(proposed, cancellationToken); }
             catch
             {
@@ -518,6 +524,7 @@ public sealed class PaperTradingCoordinator(
     private async Task UpdateSessionAsync(int id, Action<PaperSession> change) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var session = await database.PaperSessions.SingleAsync(item => item.Id == id); change(session); await database.SaveChangesAsync(); }
     private static PaperPendingEntryRuntimeSnapshot? PendingSnapshot(PendingEntry? pending) => pending is null ? null : new(pending.Direction, pending.CrossoverTimeUtc, pending.SignalTimeUtc, pending.SignalTimeUtc.AddMilliseconds(1), pending.Stop, pending.StopSource, pending.StopTimeUtc, pending.Snapshot, pending.IsReentry);
     private static PaperDecisionRuntimeEvent PendingDecision(PendingEntry pending) => new(pending.SignalTimeUtc, pending.SignalTimeUtc, "PendingEntry", pending.Direction, $"Valid {pending.Direction} signal. Waiting for the first executable {(pending.Direction == SignalDirection.Long ? "Ask" : "Bid")} quote on the next bar.", pending.Snapshot.Ema9, pending.Snapshot.Ema15, pending.Snapshot.Ema100, pending.Snapshot.GapPercent, pending.Snapshot.GapState, pending.Stop, pending.StopSource, pending.SignalTimeUtc.AddMilliseconds(1));
+    private static PaperDecisionRuntimeEvent ToRuntimeDecision(PaperDecisionEvent item) => new(item.TimeUtc, item.CandleCloseTimeUtc, item.Stage, item.Direction, item.Message, item.Ema9, item.Ema15, item.Ema100, item.GapPercent, item.GapState, item.StopPrice, item.StopSource, item.ExpectedEntryOpenUtc, item.Bid, item.Ask, item.EntryPrice, item.Lots, item.RequiredMargin);
     private async Task AddDecisionAsync(RuntimeSession state, RuntimeSymbol runtime, PaperDecisionRuntimeEvent decision, CancellationToken token)
     {
         runtime.RecentDecisions.Add(decision);

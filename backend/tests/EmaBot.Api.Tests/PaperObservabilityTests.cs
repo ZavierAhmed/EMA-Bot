@@ -63,7 +63,83 @@ public sealed class PaperObservabilityTests : IClassFixture<EmaBotApiFactory>
         Assert.Equal(8, detail.ShortSignals);
     }
 
+    [Fact]
+    public async Task ResumeSeedsBoundedPersistedHistoryBeforeAppendingWarmup()
+    {
+        var session = await PersistAsync(PaperSessionStatus.Interrupted);
+        await AddDecisionsAsync(session.Symbols.Single().Id, 30);
+        var coordinator = Coordinator();
+
+        await coordinator.StartSessionAsync(session.Id, true, CancellationToken.None);
+
+        var decisions = coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].RecentDecisions;
+        Assert.Equal(25, decisions.Count);
+        Assert.Equal("Warmup", decisions.First().Stage);
+        Assert.Equal("Event7", decisions.Last().Stage);
+        await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task InterruptedActiveResponseUsesOnlyLatestTwentyFivePersistedDecisions()
+    {
+        var session = await PersistAsync(PaperSessionStatus.Interrupted);
+        await AddDecisionsAsync(session.Symbols.Single().Id, 30);
+        var controller = Controller(Coordinator());
+
+        var detail = Assert.IsType<PaperSessionDetailResponse>(Assert.IsType<OkObjectResult>(await controller.Active(CancellationToken.None)).Value);
+        var decisions = detail.Symbols.Single().RecentDecisions;
+        Assert.Equal(25, decisions.Count);
+        Assert.Equal("Event30", detail.Symbols.Single().LastDecision!.Stage);
+        Assert.Equal("Event30", decisions.First().Stage);
+        Assert.Equal("Event6", decisions.Last().Stage);
+    }
+
+    [Fact]
+    public async Task DecisionHistoryPaginatesAndFiltersExactBrokerSymbol()
+    {
+        var session = await PersistAsync(PaperSessionStatus.Interrupted);
+        var first = session.Symbols.Single();
+        var second = new PaperSessionSymbol { PaperSessionId = session.Id, Symbol = "BTCUSDm", BrokerSymbol = "BTCUSDm" };
+        using (var scope = factory.Services.CreateScope()) { var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); database.PaperSessionSymbols.Add(second); await database.SaveChangesAsync(); }
+        await AddDecisionsAsync(first.Id, 65);
+        await AddDecisionsAsync(second.Id, 3);
+        var controller = Controller(Coordinator());
+
+        var firstPage = Assert.IsType<PaperDecisionHistoryResponse>(Assert.IsType<OkObjectResult>(await controller.Decisions(session.Id, null, 1, 20)).Value);
+        var secondPage = Assert.IsType<PaperDecisionHistoryResponse>(Assert.IsType<OkObjectResult>(await controller.Decisions(session.Id, null, 2, 20)).Value);
+        var filtered = Assert.IsType<PaperDecisionHistoryResponse>(Assert.IsType<OkObjectResult>(await controller.Decisions(session.Id, "XAUUSDm", 1, 200)).Value);
+        var wrongCase = Assert.IsType<PaperDecisionHistoryResponse>(Assert.IsType<OkObjectResult>(await controller.Decisions(session.Id, "XAUUSDM", 1, 200)).Value);
+        Assert.Equal(68, firstPage.Total); Assert.Equal(20, firstPage.Items.Count); Assert.Equal(20, secondPage.Items.Count);
+        Assert.Empty(firstPage.Items.Select(item => item.Id).Intersect(secondPage.Items.Select(item => item.Id)));
+        Assert.Equal(65, filtered.Total); Assert.Empty(wrongCase.Items);
+    }
+
+    [Theory]
+    [InlineData(0, 50)]
+    [InlineData(1, 0)]
+    [InlineData(1, 201)]
+    public async Task DecisionHistoryRejectsInvalidPageLimits(int page, int pageSize)
+    {
+        var session = await PersistAsync(PaperSessionStatus.Interrupted);
+        var result = await Controller(Coordinator()).Decisions(session.Id, null, page, pageSize);
+        Assert.IsType<BadRequestObjectResult>(result);
+    }
+
     private PaperTradingCoordinator Coordinator() => new(factory.Services.GetRequiredService<IServiceScopeFactory>(), new FixedResolver(factory.Services.GetRequiredService<IHistoricalMarketDataProvider>()), factory.StreamClient, factory.Services.GetRequiredService<EmaSignalEngine>(), NullLogger<PaperTradingCoordinator>.Instance);
+    private PaperSessionsController Controller(PaperTradingCoordinator coordinator)
+    {
+        var scope = factory.Services.CreateScope();
+        var services = scope.ServiceProvider;
+        return new PaperSessionsController(services.GetRequiredService<EmaBotDbContext>(), services.GetRequiredService<TradingSettingsService>(), coordinator, factory.StreamClient, TestMarketProviderCapabilities.WithLiveBars(true), services.GetRequiredService<IInstrumentCatalogProvider>(), services.GetRequiredService<EmaBot.Api.Mt5Bridge.IMt5AccountReader>());
+    }
+    private async Task AddDecisionsAsync(int symbolId, int count)
+    {
+        using var scope = factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var sessionId = await database.PaperSessionSymbols.Where(item => item.Id == symbolId).Select(item => item.PaperSessionId).SingleAsync();
+        database.PaperDecisionEvents.AddRange(Enumerable.Range(1, count).Select(index => new PaperDecisionEvent { PaperSessionId = sessionId, PaperSessionSymbolId = symbolId, TimeUtc = DateTimeOffset.UnixEpoch.AddMinutes(index), Stage = $"Event{index}", Message = $"Decision {index}" }));
+        await database.SaveChangesAsync();
+    }
 
     private async Task<PaperSession> PersistAsync(PaperSessionStatus status, bool pending = false, bool counters = false)
     {

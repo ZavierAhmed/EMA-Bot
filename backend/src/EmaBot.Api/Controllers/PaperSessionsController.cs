@@ -29,11 +29,11 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
     public async Task<IActionResult> Active(CancellationToken token)
     {
         var session = await DetailQuery().SingleOrDefaultAsync(item => item.Status == PaperSessionStatus.Running || item.Status == PaperSessionStatus.Interrupted, token);
-        return session is null ? NotFound(new ApiMessage("No active paper session.")) : Ok(ToDetail(session, coordinator.GetRuntimeSnapshot()));
+        return session is null ? NotFound(new ApiMessage("No active paper session.")) : Ok(await ToDetailAsync(session, token));
     }
 
     [HttpGet("{id:int}")]
-    public async Task<IActionResult> Get(int id, CancellationToken token) => await DetailQuery().SingleOrDefaultAsync(item => item.Id == id, token) is { } session ? Ok(ToDetail(session, coordinator.GetRuntimeSnapshot())) : NotFound(new ApiMessage("Paper session not found."));
+    public async Task<IActionResult> Get(int id, CancellationToken token) => await DetailQuery().SingleOrDefaultAsync(item => item.Id == id, token) is { } session ? Ok(await ToDetailAsync(session, token)) : NotFound(new ApiMessage("Paper session not found."));
 
     [HttpGet("{id:int}/decisions")]
     public async Task<IActionResult> Decisions(int id, [FromQuery] string? symbol, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken token = default)
@@ -41,7 +41,13 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
         if (page < 1 || pageSize < 1 || pageSize > 200) return BadRequest(new ApiMessage("page must be at least 1 and pageSize must be from 1 through 200."));
         if (!await database.PaperSessions.AnyAsync(item => item.Id == id, token)) return NotFound(new ApiMessage("Paper session not found."));
         var query = database.PaperDecisionEvents.AsNoTracking().Where(item => item.PaperSessionId == id);
-        if (!string.IsNullOrWhiteSpace(symbol)) query = query.Where(item => item.PaperSessionSymbol!.Symbol == symbol.Trim());
+        if (!string.IsNullOrWhiteSpace(symbol))
+        {
+            var exactSymbol = symbol.Trim();
+            query = database.Database.ProviderName == "Pomelo.EntityFrameworkCore.MySql"
+                ? query.Where(item => EF.Functions.Collate(item.PaperSessionSymbol!.Symbol, "utf8mb4_bin") == exactSymbol)
+                : query.Where(item => item.PaperSessionSymbol!.Symbol == exactSymbol);
+        }
         var total = await query.CountAsync(token);
         var items = await query.OrderByDescending(item => item.TimeUtc).ThenByDescending(item => item.Id).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(token);
         return Ok(new PaperDecisionHistoryResponse(total, items.Select(ToDecision).ToArray()));
@@ -80,7 +86,7 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
         database.PaperSessions.Add(session); await database.SaveChangesAsync(token);
         try { await coordinator.StartSessionAsync(session.Id, false, token); }
         catch (MarketDataProviderException) { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Historical warmup data is unavailable."; await database.SaveChangesAsync(token); return StatusCode(502, new ApiMessage("Historical market data is currently unavailable.")); }
-        return CreatedAtAction(nameof(Get), new { id = session.Id }, ToDetail(session, coordinator.GetRuntimeSnapshot()));
+        return CreatedAtAction(nameof(Get), new { id = session.Id }, await ToDetailAsync(session, token));
     }
 
     [HttpPost("{id:int}/stop")]
@@ -97,14 +103,31 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
         if (!capabilities.Current.LiveBarProviderConfigured || !marketBarStream.IsConfigured) return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage("The MT5 live-bar bridge must be connected before resuming Paper."));
         var existing = await database.PaperSessions.AsNoTracking().SingleOrDefaultAsync(session => session.Id == id, token);
         if (existing?.MarketDataSource == MarketDataSource.LegacyBinance) return BadRequest(new ApiMessage("Legacy Binance Paper sessions cannot be resumed through MT5."));
-        try { await coordinator.StartSessionAsync(id, true, token); var session = await DetailQuery().SingleAsync(item => item.Id == id, token); return Ok(ToDetail(session, coordinator.GetRuntimeSnapshot())); }
+        try { await coordinator.StartSessionAsync(id, true, token); var session = await DetailQuery().SingleAsync(item => item.Id == id, token); return Ok(await ToDetailAsync(session, token)); }
         catch (KeyNotFoundException) { return NotFound(new ApiMessage("Paper session not found.")); }
         catch (InvalidOperationException exception) { return Conflict(new ApiMessage(exception.Message)); }
         catch (MarketDataProviderException) { return StatusCode(502, new ApiMessage("Historical market data is currently unavailable.")); }
     }
 
-    private IQueryable<PaperSession> DetailQuery() => database.PaperSessions.AsNoTracking().Include(session => session.Symbols).ThenInclude(symbol => symbol.DecisionEvents).Include(session => session.Trades).ThenInclude(trade => trade.Events);
-    private static PaperSessionDetailResponse ToDetail(PaperSession session, PaperRuntimeSnapshot? runtime)
+    private IQueryable<PaperSession> DetailQuery() => database.PaperSessions.AsNoTracking().Include(session => session.Symbols).Include(session => session.Trades);
+    private async Task<PaperSessionDetailResponse> ToDetailAsync(PaperSession session, CancellationToken token)
+    {
+        var runtime = coordinator.GetRuntimeSnapshot();
+        var snapshot = runtime?.SessionId == session.Id ? runtime : null;
+        var persisted = snapshot is null ? await RecentPersistedDecisionsAsync(session, token) : new Dictionary<int, IReadOnlyList<PaperDecisionResponse>>();
+        return ToDetail(session, runtime, persisted);
+    }
+    private async Task<IReadOnlyDictionary<int, IReadOnlyList<PaperDecisionResponse>>> RecentPersistedDecisionsAsync(PaperSession session, CancellationToken token)
+    {
+        var result = new Dictionary<int, IReadOnlyList<PaperDecisionResponse>>();
+        foreach (var symbol in session.Symbols)
+        {
+            var rows = await database.PaperDecisionEvents.AsNoTracking().Where(item => item.PaperSessionSymbolId == symbol.Id).OrderByDescending(item => item.TimeUtc).ThenByDescending(item => item.Id).Take(25).ToListAsync(token);
+            result[symbol.Id] = rows.Select(ToDecision).ToArray();
+        }
+        return result;
+    }
+    private static PaperSessionDetailResponse ToDetail(PaperSession session, PaperRuntimeSnapshot? runtime, IReadOnlyDictionary<int, IReadOnlyList<PaperDecisionResponse>> persistedRecent)
     {
         var snapshot = runtime?.SessionId == session.Id ? runtime : null;
         var symbols = session.Symbols.Select(symbol =>
@@ -114,9 +137,8 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
             var open = live?.OpenTrade ?? session.Trades.SingleOrDefault(trade => trade.PaperSessionSymbolId == symbol.Id && trade.Status == PaperTradeStatus.Open);
             var pending = live?.PendingEntry ?? PersistedPending(symbol);
             var executableExit = open is null ? null : open.Direction == SignalDirection.Long ? bid : ask;
-            var persisted = symbol.DecisionEvents.OrderByDescending(item => item.TimeUtc).ThenByDescending(item => item.Id).Take(25).Select(ToDecision).ToArray();
-            var recent = persisted.Length > 0 ? persisted : live?.RecentDecisions.Select(ToDecision).ToArray() ?? [];
-            return new PaperSymbolResponse(symbol.Symbol, live?.LatestPrice ?? symbol.LastKnownPrice, bid, ask, bid is not null && ask is not null ? ask - bid : null, live?.LastMarketEventUtc ?? symbol.LastMarketEventUtc, live?.LastClosedCandleUtc ?? symbol.LastProcessedClosedCandleUtc, live?.LastClosedCandleUtc ?? symbol.LastProcessedClosedCandleUtc, live?.Indicator?.TrendDirection.ToString(), live?.Indicator?.Ema9, live?.Indicator?.Ema15, live?.Indicator?.Ema100, live?.Indicator?.GapPercent, live?.Indicator?.GapState.ToString(), pending?.Direction, open is null ? null : ToTrade(open), pending is null ? null : ToPending(pending), live?.TrendRegimeDirection ?? symbol.TrendRegimeDirection, live?.TrendRegimeCrossoverTimeUtc ?? symbol.TrendRegimeCrossoverTimeUtc, live?.ReentryEligible ?? symbol.ReentryEligible, live?.ReentryConsumed ?? symbol.ReentryConsumed, executableExit, recent.FirstOrDefault(), recent, persisted.Length > 0 || live is not null);
+            var recent = live is not null ? live.RecentDecisions.Select(ToDecision).ToArray() : persistedRecent.GetValueOrDefault(symbol.Id, []);
+            return new PaperSymbolResponse(symbol.Symbol, live?.LatestPrice ?? symbol.LastKnownPrice, bid, ask, bid is not null && ask is not null ? ask - bid : null, live?.LastMarketEventUtc ?? symbol.LastMarketEventUtc, live?.LastClosedCandleUtc ?? symbol.LastProcessedClosedCandleUtc, live?.LastClosedCandleUtc ?? symbol.LastProcessedClosedCandleUtc, live?.Indicator?.TrendDirection.ToString(), live?.Indicator?.Ema9, live?.Indicator?.Ema15, live?.Indicator?.Ema100, live?.Indicator?.GapPercent, live?.Indicator?.GapState.ToString(), pending?.Direction, open is null ? null : ToTrade(open), pending is null ? null : ToPending(pending), live?.TrendRegimeDirection ?? symbol.TrendRegimeDirection, live?.TrendRegimeCrossoverTimeUtc ?? symbol.TrendRegimeCrossoverTimeUtc, live?.ReentryEligible ?? symbol.ReentryEligible, live?.ReentryConsumed ?? symbol.ReentryConsumed, executableExit, recent.FirstOrDefault(), recent, recent.Count > 0 || live is not null);
         }).ToArray();
         return new PaperSessionDetailResponse(session.Id, session.Interval, session.Status, session.StartedAtUtc, session.StoppedAtUtc, session.InterruptedAtUtc, session.FailureMessage, session.RiskReward, session.FixedOrderSizeUsdt, session.WaitForConfirmationCandle, session.UseEma100Filter, session.TrailingStopEnabled, session.FeePercentPerSide, session.TotalCrossovers, session.LongSignals, session.ShortSignals, session.RejectedByEma100, session.ConfirmationFailed, session.InvalidStopLoss, session.SkippedWhilePositionOpen, session.CompletedTrades, session.NetPnlUsdt, session.TotalFeesUsdt, snapshot?.ConnectionState ?? (session.Status == PaperSessionStatus.Interrupted ? "Disconnected" : "Persisted"), snapshot?.LastUpdateUtc, symbols, session.Trades.OrderByDescending(trade => trade.ExitTimeUtc ?? trade.EntryTimeUtc).Take(20).Select(ToTrade).ToArray(), session.MarketDataSource, session.AccountCurrency, session.PaperPositionSizingMode.ToString(), session.PaperFixedLots, session.PaperMarginPerTradePercent, session.StartingBalance, session.CurrentBalance, session.UsedMargin, session.NetPnl, session.TotalTradingCosts, session.MinEmaGapPercent, session.MaxStopDistancePercent, session.RejectedByEmaGap, session.RejectedByStopDistance, session.RejectedByFees, session.RejectedByTradingCosts, session.RejectedByInsufficientMargin);
     }
