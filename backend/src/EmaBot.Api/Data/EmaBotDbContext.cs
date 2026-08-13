@@ -35,8 +35,10 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
 
         builder.Entity<MonitoredSymbol>(entity =>
         {
-            entity.HasIndex(symbol => symbol.Symbol).IsUnique();
-            entity.Property(symbol => symbol.Symbol).HasMaxLength(32);
+            entity.HasIndex(symbol => new { symbol.Source, symbol.Symbol }).IsUnique();
+            entity.Property(symbol => symbol.Source).HasConversion<string>().HasMaxLength(32).HasDefaultValue(MarketDataSource.LegacyBinance);
+            entity.Property(symbol => symbol.Symbol).HasMaxLength(64).UseCollation("utf8mb4_bin");
+            entity.Property(symbol => symbol.DisplayName).HasMaxLength(256);
             entity.Property(symbol => symbol.BaseAsset).HasMaxLength(32);
             entity.Property(symbol => symbol.QuoteAsset).HasMaxLength(16);
         });
@@ -55,11 +57,12 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(settings => settings.Leverage).HasPrecision(8, 4);
             entity.Property(settings => settings.FeePercentPerSide).HasPrecision(8, 4);
         });
-        builder.Entity<BacktestRun>(entity => { entity.Property(run => run.Symbol).HasMaxLength(32); entity.Property(run => run.Interval).HasMaxLength(8); entity.Property(run => run.MinEmaGapPercent).HasPrecision(8, 4); entity.Property(run => run.MaxStopDistancePercent).HasPrecision(8, 4); entity.Property(run => run.StartingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.EndingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.MarginPerTradePercent).HasPrecision(8, 4); entity.Property(run => run.Leverage).HasPrecision(8, 4); entity.HasMany(run => run.Trades).WithOne(trade => trade.BacktestRun!).HasForeignKey(trade => trade.BacktestRunId).OnDelete(DeleteBehavior.Cascade); });
+        builder.Entity<BacktestRun>(entity => { entity.Property(run => run.MarketDataSource).HasConversion<string>().HasMaxLength(32).HasDefaultValue(MarketDataSource.LegacyBinance); entity.Property(run => run.Symbol).HasMaxLength(64); entity.Property(run => run.Interval).HasMaxLength(8); entity.Property(run => run.MinEmaGapPercent).HasPrecision(8, 4); entity.Property(run => run.MaxStopDistancePercent).HasPrecision(8, 4); entity.Property(run => run.StartingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.EndingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.MarginPerTradePercent).HasPrecision(8, 4); entity.Property(run => run.Leverage).HasPrecision(8, 4); entity.HasMany(run => run.Trades).WithOne(trade => trade.BacktestRun!).HasForeignKey(trade => trade.BacktestRunId).OnDelete(DeleteBehavior.Cascade); });
         builder.Entity<BacktestTrade>(entity => { entity.Property(trade => trade.AccountEquityAtEntryUsdt).HasPrecision(18, 8); entity.Property(trade => trade.MarginUsedUsdt).HasPrecision(18, 8); entity.Property(trade => trade.Leverage).HasPrecision(8, 4); entity.Property(trade => trade.SignalOpen).HasPrecision(18, 8); entity.HasIndex(trade => trade.BacktestRunId); entity.HasMany(trade => trade.Events).WithOne(item => item.BacktestTrade!).HasForeignKey(item => item.BacktestTradeId).OnDelete(DeleteBehavior.Cascade); });
         builder.Entity<BacktestTradeEvent>(entity => entity.HasIndex(item => item.BacktestTradeId));
         builder.Entity<PaperSession>(entity =>
         {
+            entity.Property(session => session.MarketDataSource).HasConversion<string>().HasMaxLength(32).HasDefaultValue(MarketDataSource.LegacyBinance);
             entity.Property(session => session.Interval).HasMaxLength(8);
             entity.Property(session => session.FeePercentPerSide).HasPrecision(8, 4);
             entity.Property(session => session.MinEmaGapPercent).HasPrecision(8, 4);
@@ -92,6 +95,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
         });
         builder.Entity<StrategyOptimizationRun>(entity =>
         {
+            entity.Property(run => run.MarketDataSource).HasConversion<string>().HasMaxLength(32).HasDefaultValue(MarketDataSource.LegacyBinance);
             entity.Property(run => run.SymbolsJson).HasColumnType("longtext"); entity.Property(run => run.TimeframesJson).HasColumnType("longtext"); entity.Property(run => run.GridJson).HasColumnType("longtext"); entity.Property(run => run.BaselineSettingsJson).HasColumnType("longtext");
             entity.HasIndex(run => run.Status); entity.HasMany(run => run.Candidates).WithOne(candidate => candidate.StrategyOptimizationRun!).HasForeignKey(candidate => candidate.StrategyOptimizationRunId).OnDelete(DeleteBehavior.Cascade);
             entity.HasMany(run => run.Trades).WithOne().HasForeignKey(trade => trade.StrategyOptimizationRunId).OnDelete(DeleteBehavior.Cascade);
@@ -107,11 +111,11 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
         builder.Entity<StrategyOptimizationMarketResult>(entity =>
         {
             entity.HasIndex(result => new { result.StrategyOptimizationCandidateId, result.Symbol, result.Timeframe }).IsUnique();
-            entity.Property(result => result.Symbol).HasMaxLength(32); entity.Property(result => result.Timeframe).HasMaxLength(8);
+            entity.Property(result => result.Symbol).HasMaxLength(64); entity.Property(result => result.Timeframe).HasMaxLength(8);
             entity.Property(result => result.Full).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
             entity.Property(result => result.Development).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
             entity.Property(result => result.Validation).HasConversion(value => JsonSerializer.Serialize(value, (JsonSerializerOptions?)null), value => JsonSerializer.Deserialize<OptimizationMetrics>(value, (JsonSerializerOptions?)null) ?? new()).HasColumnType("longtext");
         });
-        builder.Entity<StrategyOptimizationTrade>(entity => { entity.Property(trade => trade.Symbol).HasMaxLength(32); entity.Property(trade => trade.Timeframe).HasMaxLength(8); entity.HasIndex(trade => new { trade.StrategyOptimizationRunId, trade.StrategyOptimizationCandidateId }); });
+        builder.Entity<StrategyOptimizationTrade>(entity => { entity.Property(trade => trade.Symbol).HasMaxLength(64); entity.Property(trade => trade.Timeframe).HasMaxLength(8); entity.HasIndex(trade => new { trade.StrategyOptimizationRunId, trade.StrategyOptimizationCandidateId }); });
     }
 }

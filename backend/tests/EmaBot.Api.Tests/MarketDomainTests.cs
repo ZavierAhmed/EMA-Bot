@@ -1,5 +1,6 @@
 using EmaBot.Api.Binance;
 using EmaBot.Api.Models;
+using EmaBot.Api.Mt5Bridge;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
 using Microsoft.Extensions.DependencyInjection;

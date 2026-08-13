@@ -18,7 +18,7 @@ public sealed record TradeChartPointResponse(DateTimeOffset TimeUtc, decimal? Va
 public sealed record TradeChartResponse(string Symbol, string Interval, IReadOnlyList<TradeChartCandleResponse> Candles, IReadOnlyList<TradeChartPointResponse> Ema9, IReadOnlyList<TradeChartPointResponse> Ema15, IReadOnlyList<TradeChartPointResponse> Ema100);
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/trades")]
-public sealed class TradesController(EmaBotDbContext database, IHistoricalMarketDataProvider historical) : ControllerBase
+public sealed class TradesController(EmaBotDbContext database, IHistoricalMarketDataProviderResolver historicalProviders) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<TradeSummaryResponse>>> List([FromQuery] string? source, [FromQuery] string? symbol, [FromQuery] string? interval, [FromQuery] string? direction, [FromQuery] string? status, [FromQuery] string? outcome, [FromQuery] int? limit, CancellationToken token)
@@ -27,7 +27,7 @@ public sealed class TradesController(EmaBotDbContext database, IHistoricalMarket
         if (!TryDirection(direction, out var requestedDirection)) return BadRequest(new ApiMessage("Direction must be Long or Short."));
         if (!IsOneOf(status, "All", "Open", "Closed")) return BadRequest(new ApiMessage("Status must be All, Open, or Closed."));
         if (!IsOneOf(outcome, "All", "Win", "Loss", "BreakEven", "Open")) return BadRequest(new ApiMessage("Outcome must be All, Win, Loss, BreakEven, or Open."));
-        var take = Math.Clamp(limit ?? 100, 1, 250); var normalized = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim().ToUpperInvariant();
+        var take = Math.Clamp(limit ?? 100, 1, 250); var normalized = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim();
         var results = new List<TradeSummaryResponse>();
         if (requestedSource is null or TradeSource.Backtest)
         {
@@ -69,8 +69,8 @@ public sealed class TradesController(EmaBotDbContext database, IHistoricalMarket
     {
         if (!TrySource(source, out var requested) || requested is null) return BadRequest(new ApiMessage("Source must be backtest or paper."));
         var identity = requested == TradeSource.Backtest
-            ? await database.BacktestTrades.AsNoTracking().Include(item => item.BacktestRun).Where(item => item.Id == id).Select(item => new ChartIdentity(item.BacktestRun!.Symbol, item.BacktestRun.Interval, item.CrossoverTimeUtc, item.ExitTimeUtc)).SingleOrDefaultAsync(token)
-            : await database.PaperTrades.AsNoTracking().Include(item => item.PaperSession).Where(item => item.Id == id).Select(item => new ChartIdentity(item.Symbol, item.Interval, item.CrossoverTimeUtc, item.ExitTimeUtc)).SingleOrDefaultAsync(token);
+            ? await database.BacktestTrades.AsNoTracking().Include(item => item.BacktestRun).Where(item => item.Id == id).Select(item => new ChartIdentity(item.BacktestRun!.Symbol, item.BacktestRun.Interval, item.CrossoverTimeUtc, item.ExitTimeUtc, item.BacktestRun.MarketDataSource)).SingleOrDefaultAsync(token)
+            : await database.PaperTrades.AsNoTracking().Include(item => item.PaperSession).Where(item => item.Id == id).Select(item => new ChartIdentity(item.Symbol, item.Interval, item.CrossoverTimeUtc, item.ExitTimeUtc, item.PaperSession!.MarketDataSource)).SingleOrDefaultAsync(token);
         if (identity is null) return NotFound(new ApiMessage("Trade not found."));
         var visibleStart = StrategyTimeframes.Shift(identity.CrossoverTimeUtc, identity.Interval, -120);
         var warmupStart = StrategyTimeframes.Shift(visibleStart, identity.Interval, -120);
@@ -78,6 +78,7 @@ public sealed class TradesController(EmaBotDbContext database, IHistoricalMarket
         if (visibleEnd <= warmupStart) return BadRequest(new ApiMessage("Trade chart window is invalid."));
         try
         {
+            var historical = historicalProviders.Resolve(identity.MarketDataSource);
             var candles = (await historical.GetRangeAsync(identity.Symbol, identity.Interval, warmupStart, visibleEnd, token)).Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).ToArray();
             var visible = candles.Where(candle => candle.OpenTimeUtc >= visibleStart).ToArray();
             if (visible.Length > 5000) return BadRequest(new ApiMessage("The requested trade chart exceeds 5,000 candles."));
@@ -90,7 +91,7 @@ public sealed class TradesController(EmaBotDbContext database, IHistoricalMarket
         catch (MarketDataProviderException) { return StatusCode(502, new ApiMessage("Chart data is currently unavailable.")); }
     }
 
-    private sealed record ChartIdentity(string Symbol, string Interval, DateTimeOffset CrossoverTimeUtc, DateTimeOffset? ExitTimeUtc);
+    private sealed record ChartIdentity(string Symbol, string Interval, DateTimeOffset CrossoverTimeUtc, DateTimeOffset? ExitTimeUtc, MarketDataSource MarketDataSource);
     private static bool TrySource(string? value, out TradeSource? source) { source = null; if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "All", StringComparison.OrdinalIgnoreCase)) return true; if (string.Equals(value, "Backtest", StringComparison.OrdinalIgnoreCase)) { source = TradeSource.Backtest; return true; } if (string.Equals(value, "Paper", StringComparison.OrdinalIgnoreCase)) { source = TradeSource.Paper; return true; } return false; }
     private static bool TryDirection(string? value, out SignalDirection? direction) { direction = null; if (string.IsNullOrWhiteSpace(value) || string.Equals(value, "All", StringComparison.OrdinalIgnoreCase)) return true; if (string.Equals(value, "Long", StringComparison.OrdinalIgnoreCase)) { direction = SignalDirection.Long; return true; } if (string.Equals(value, "Short", StringComparison.OrdinalIgnoreCase)) { direction = SignalDirection.Short; return true; } return false; }
     private static bool IsOneOf(string? value, params string[] allowed) => string.IsNullOrWhiteSpace(value) || allowed.Any(item => string.Equals(item, value, StringComparison.OrdinalIgnoreCase));

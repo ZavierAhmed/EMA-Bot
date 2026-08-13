@@ -96,7 +96,7 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
         var token = await GetAntiforgeryToken(client);
         Assert.Equal(HttpStatusCode.NoContent, (await PostLogin(client, token, "admin", "A-strong-password-123!")).StatusCode);
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await PostJson(client, "/api/symbols", "BTCUSDT")).StatusCode);
     }
 
     [Fact]
@@ -105,8 +105,8 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         using (var setupScope = _factory.Services.CreateScope())
         {
             var setupDatabase = setupScope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-            if (!await setupDatabase.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) setupDatabase.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
-            if (!await setupDatabase.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "ETHUSDT")) setupDatabase.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "ETHUSDT", BaseAsset = "ETH", QuoteAsset = "USDT", IsEnabled = true });
+            if (!await setupDatabase.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) setupDatabase.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
+            if (!await setupDatabase.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "ETHUSDT")) setupDatabase.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "ETHUSDT", BaseAsset = "ETH", QuoteAsset = "USDT", IsEnabled = true });
             await setupDatabase.SaveChangesAsync();
         }
         using var scope = _factory.Services.CreateScope();
@@ -161,7 +161,7 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         using (var setupScope = _factory.Services.CreateScope())
         {
             var database = setupScope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-            if (!await database.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
+            if (!await database.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) database.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true });
             await database.SaveChangesAsync();
         }
         using var client = _factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true });
@@ -219,6 +219,8 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
             services.AddDataProtection().UseEphemeralDataProtectionProvider();
             services.RemoveAll<IBinanceHistoricalKlineClient>();
             services.AddSingleton<IBinanceHistoricalKlineClient>(BinanceClient);
+            services.RemoveAll<IHistoricalMarketDataProvider>();
+            services.AddSingleton<IHistoricalMarketDataProvider>(provider => provider.GetRequiredService<BinanceHistoricalMarketDataProvider>());
             services.RemoveAll<IMarketBarStreamProvider>();
             services.AddSingleton<IMarketBarStreamProvider>(StreamClient);
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));

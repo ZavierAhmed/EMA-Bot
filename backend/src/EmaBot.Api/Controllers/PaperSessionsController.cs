@@ -19,7 +19,7 @@ public sealed record PaperSessionDetailResponse(int Id, string Interval, PaperSe
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/paper-sessions")]
 public sealed class PaperSessionsController(EmaBotDbContext database, TradingSettingsService settingsService, PaperTradingCoordinator coordinator, IMarketBarStreamProvider marketBarStream, IMarketProviderCapabilities capabilities) : ControllerBase
 {
-    private const string LiveUnavailableMessage = "Live market data is temporarily unavailable while the MT5 provider is being implemented.";
+    private const string LiveUnavailableMessage = "Paper Trading remains unavailable until broker-aware Exness sizing and trading costs are enabled.";
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken token) => Ok((await database.PaperSessions.AsNoTracking().Include(session => session.Symbols).OrderByDescending(session => session.CreatedAtUtc).Take(30).ToListAsync(token)).Select(session => new PaperSessionSummaryResponse(session.Id, session.Interval, session.Status, session.StartedAtUtc, session.Symbols.Count, session.CompletedTrades, session.NetPnlUsdt, session.TotalFeesUsdt)));
 

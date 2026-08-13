@@ -33,7 +33,7 @@ public sealed class TradeExportsController(EmaBotDbContext database) : Controlle
 
     private async Task<List<TradeExportRow>> RowsAsync(string? source, string? symbol, string? interval, string? direction, string? outcome, CancellationToken token)
     {
-        var rows = new List<TradeExportRow>(); var requested = source?.Trim(); var all = string.IsNullOrWhiteSpace(requested) || string.Equals(requested, "All", StringComparison.OrdinalIgnoreCase); var normalized = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim().ToUpperInvariant();
+        var rows = new List<TradeExportRow>(); var requested = source?.Trim(); var all = string.IsNullOrWhiteSpace(requested) || string.Equals(requested, "All", StringComparison.OrdinalIgnoreCase); var normalized = string.IsNullOrWhiteSpace(symbol) ? null : symbol.Trim();
         if (all || string.Equals(requested, "Backtest", StringComparison.OrdinalIgnoreCase))
         {
             var query = database.BacktestTrades.AsNoTracking().Include(item => item.BacktestRun).Include(item => item.Events).AsQueryable();

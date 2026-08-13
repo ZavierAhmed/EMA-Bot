@@ -95,7 +95,8 @@ builder.Services.AddHttpClient<IBinanceHistoricalKlineClient, BinanceHistoricalK
     client.Timeout = TimeSpan.FromSeconds(30);
     client.DefaultRequestHeaders.UserAgent.ParseAdd("EMA-Bot/1.0");
 });
-builder.Services.AddSingleton<IHistoricalMarketDataProvider, BinanceHistoricalMarketDataProvider>();
+// Binance history remains available only for reproducing persisted legacy artifacts.
+builder.Services.AddSingleton<BinanceHistoricalMarketDataProvider>();
 builder.Services.AddSingleton<IMarketBarStreamProvider, UnavailableMarketBarStreamProvider>();
 builder.Services.AddSingleton<IInstrumentCatalogProvider, Mt5BridgeInstrumentCatalogProvider>();
 builder.Services.AddSingleton<IMarketQuoteProvider, Mt5BridgeMarketQuoteProvider>();
@@ -105,6 +106,8 @@ builder.Services.AddSingleton<IMt5BridgeRequestClient>(provider => provider.GetR
 builder.Services.AddSingleton<IMt5AccountReader, Mt5BridgeAccountReader>();
 builder.Services.AddSingleton<Mt5BridgeHistoricalMarketDataProvider>();
 builder.Services.AddSingleton<Mt5BridgeMarketBarStreamProvider>();
+builder.Services.AddSingleton<IHistoricalMarketDataProvider>(provider => provider.GetRequiredService<Mt5BridgeHistoricalMarketDataProvider>());
+builder.Services.AddSingleton<IHistoricalMarketDataProviderResolver, HistoricalMarketDataProviderResolver>();
 builder.Services.AddControllersWithViews(options => options.Filters.Add(new AutoValidateAntiforgeryTokenAttribute())).AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

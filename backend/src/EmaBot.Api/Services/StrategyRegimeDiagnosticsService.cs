@@ -14,7 +14,7 @@ namespace EmaBot.Api.Services;
 public sealed record RegimeTradeDiagnostic(string Symbol, string Timeframe, BacktestTrade Trade, decimal? Ema9Slope5Percent, decimal? Ema15Slope5Percent, decimal? Ema100Slope5Percent, decimal? Ema100Slope20Percent, decimal? DistanceFromEma100Percent, decimal? PriceReturn20Percent, decimal? Atr14Percent, decimal? TrendEfficiency20, bool? Ema100Slope5Aligned, bool? Ema100Slope20Aligned, bool? PriceVsEma100Aligned, HigherTimeframeDiagnostic HigherTimeframe);
 public sealed record RegimeExportData(StrategyOptimizationRun Run, StrategyOptimizationCandidate Candidate, IReadOnlyList<RegimeTradeDiagnostic> Trades);
 
-public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, IHistoricalMarketDataProvider historical, BacktestEngine engine, ILogger<StrategyRegimeDiagnosticsService>? logger = null)
+public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, IHistoricalMarketDataProviderResolver historicalProviders, BacktestEngine engine, ILogger<StrategyRegimeDiagnosticsService>? logger = null)
 {
     public async Task<RegimeExportData?> CreateAsync(int runId, int candidateId, CancellationToken token)
     {
@@ -37,6 +37,7 @@ public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, I
     private async Task<Candle[]> CandlesAsync(string symbol, string frame, StrategyOptimizationRun run, IDictionary<(string Symbol, string Frame), Candle[]> cache, CancellationToken token)
     {
         if (cache.TryGetValue((symbol, frame), out var values)) return values;
+        var historical = historicalProviders.Resolve(run.MarketDataSource);
         values = (await historical.GetRangeAsync(symbol, frame, run.RequestedStartUtc - Warmup(frame), run.RequestedEndUtc, token)).Where(candle => candle.IsClosed).OrderBy(candle => candle.CloseTimeUtc).ToArray(); cache[(symbol, frame)] = values; return values;
     }
 

@@ -60,7 +60,7 @@ public sealed class MarketProviderContractsTests
     {
         var capabilities = new MarketProviderCapabilityService().Current;
 
-        Assert.Equal("Legacy Binance", capabilities.HistoricalProvider); Assert.True(capabilities.HistoricalResearchConfigured);
+        Assert.Equal("MT5 / Exness", capabilities.HistoricalProvider); Assert.False(capabilities.HistoricalResearchConfigured);
         Assert.Equal("MetaTrader 5", capabilities.TargetTerminal); Assert.Equal("Exness", capabilities.TargetBroker);
         Assert.False(capabilities.InstrumentCatalogConfigured); Assert.False(capabilities.QuoteProviderConfigured); Assert.False(capabilities.LiveBarProviderConfigured); Assert.False(capabilities.ExecutionProviderConfigured);
         Assert.Contains("1M", capabilities.NativeTargetTimeframes); Assert.DoesNotContain("3d", capabilities.NativeTargetTimeframes);
@@ -90,7 +90,7 @@ public sealed class MarketProviderApiTests : IClassFixture<EmaBotApiFactory>
         var capabilities = await response.Content.ReadFromJsonAsync<MarketProviderCapabilities>();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode); Assert.NotNull(capabilities);
-        Assert.Equal("Legacy Binance", capabilities.HistoricalProvider); Assert.True(capabilities.HistoricalResearchConfigured);
+        Assert.Equal("MT5 / Exness", capabilities.HistoricalProvider); Assert.False(capabilities.HistoricalResearchConfigured);
         Assert.Equal("MetaTrader 5", capabilities.TargetTerminal); Assert.Equal("Exness", capabilities.TargetBroker);
         Assert.False(capabilities.InstrumentCatalogConfigured); Assert.False(capabilities.QuoteProviderConfigured); Assert.False(capabilities.LiveBarProviderConfigured); Assert.False(capabilities.ExecutionProviderConfigured);
         Assert.Contains("1M", capabilities.NativeTargetTimeframes); Assert.DoesNotContain("3d", capabilities.NativeTargetTimeframes);

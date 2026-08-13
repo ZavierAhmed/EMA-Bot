@@ -86,7 +86,7 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
-    public void ActiveDiRemainsLegacyWhileConcreteMt5ProvidersResolve()
+    public void TestHostUsesDeterministicHistoricalOverrideWhileConcreteMt5ProvidersResolve()
     {
         using var scope = _factory.Services.CreateScope(); var services = scope.ServiceProvider;
         Assert.IsType<BinanceHistoricalMarketDataProvider>(services.GetRequiredService<IHistoricalMarketDataProvider>());

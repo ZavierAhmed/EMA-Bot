@@ -1,4 +1,4 @@
-# E8 manual MT5 bar validation
+# E8 manual MT5 bar validation — passed
 
 This is read-only validation; do not start Paper, place an order, or execute a trade.
 
@@ -12,3 +12,11 @@ This is read-only validation; do not start Paper, place an order, or execute a t
 8. Call a `3d` diagnostic and confirm the adapter rejects it clearly.
 
 Stop here. E8 does not enable Paper, orders, or trades.
+
+## Manual Exness Demo result
+
+E8/E8.1 read-only validation passed against Exness Demo for `XAUUSDm`.
+Latest closed bars matched MT5, the snapshot matched the current MT5 M3 bar,
+and event timestamps advanced. Three-minute rollover behavior passed, including
+`closeTime + 1ms == next open`. The native-MT5 adapter correctly rejected
+canonical `3d`. No account login, password, or bridge secret is recorded.

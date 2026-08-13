@@ -1,5 +1,27 @@
 # Exness shift migration inventory (E0)
 
+## Phase E9 completed
+
+E8/E8.1 manual Exness Demo validation is recorded as passed: the bridge,
+heartbeat, Ping, catalog, XAUUSDm specification, bid/ask, historical M3 bars,
+snapshot, timestamp advance, rollover, exact closed-bar boundary, and native
+`3d` rejection were verified without recording credentials or secrets.
+
+MT5 / Exness is now the active historical research provider for new preview,
+backtest, and optimizer research. New research uses exact selected Market Watch
+symbols and native MT5 timeframes; canonical `3d` remains readable for legacy
+EMA-Bot records but is not offered for new MT5 research. Every monitored
+instrument and stored backtest, paper session, and optimizer run has explicit
+market-data provenance. Legacy Binance history remains backend-only for
+reproducing stored legacy charts and optimizer diagnostics.
+
+Paper Trading remains deliberately blocked. Its current quote-notional sizing,
+USDT-oriented persistence, percentage-fee model, and missing bid/ask, spread,
+commission, and lot-size integration are not Exness-realistic. The read-only
+live bar adapter is validated but is not product-activated; execution remains
+impossible. E10 is responsible for broker-aware Paper economics and live-bar
+activation.
+
 ## Phase E3 completed
 
 The application core uses neutral market contracts. Historical research is

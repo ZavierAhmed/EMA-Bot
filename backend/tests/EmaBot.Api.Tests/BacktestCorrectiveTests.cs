@@ -324,7 +324,7 @@ public sealed class BacktestApiCorrectiveTests : IClassFixture<EmaBotApiFactory>
     private async Task EnsureEnabledSymbol()
     {
         using var scope = _factory.Services.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-        if (!await db.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) { db.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true }); await db.SaveChangesAsync(); }
+        if (!await db.MonitoredSymbols.AnyAsync(symbol => symbol.Symbol == "BTCUSDT")) { db.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "BTCUSDT", BaseAsset = "BTC", QuoteAsset = "USDT", IsEnabled = true }); await db.SaveChangesAsync(); }
     }
     private static async Task Login(HttpClient client)
     { var token = await client.GetFromJsonAsync<AntiforgeryResponse>("/api/auth/antiforgery"); using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login") { Content = JsonContent.Create(new LoginRequest("admin", "A-strong-password-123!")) }; request.Headers.Add("X-CSRF-TOKEN", token!.Token); Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(request)).StatusCode); }

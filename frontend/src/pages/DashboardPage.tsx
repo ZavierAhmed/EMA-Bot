@@ -23,7 +23,8 @@ export function DashboardPage() {
         <StatusCard label="Target broker" value={capabilities?.targetBroker ?? 'Checking...'} />
         <StatusCard label="Instrument catalog" value={capabilities?.instrumentCatalogConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
         <StatusCard label="Quotes" value={capabilities?.quoteProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
-        <StatusCard label="Live market data" value={capabilities?.liveBarProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
+        <StatusCard label="Live bar adapter" value={capabilities?.liveBarProviderConfigured ? 'Activated' : capabilities ? 'Available / not activated for Paper' : 'Checking...'} />
+        <StatusCard label="Paper simulation" value="Blocked pending broker-aware economics" />
         <StatusCard label="Execution" value={capabilities?.executionProviderConfigured ? 'Configured' : capabilities ? 'Not configured' : 'Checking...'} />
         <StatusCard label="MT5 Bridge configured" value={bridge?.enabled ? 'Configured' : bridge ? 'Not configured' : 'Checking...'} />
         <StatusCard label="MT5 Bridge connection" value={bridge?.connectionState ?? 'Checking...'} />

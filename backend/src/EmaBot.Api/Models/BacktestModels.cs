@@ -11,6 +11,7 @@ public enum BacktestTradeEventType { Entry, TrailingStopMoved, TakeProfitExtende
 public sealed class BacktestRun
 {
     public int Id { get; set; }
+    public MarketDataSource MarketDataSource { get; set; }
     public required string Symbol { get; set; }
     public required string Interval { get; set; }
     public DateTimeOffset RequestedStartUtc { get; set; }

@@ -5,7 +5,7 @@ namespace EmaBot.Api.Controllers;
 
 // Public contracts deliberately contain scalar data only; EF entities remain internal to the API.
 public sealed record BacktestRunSummaryResponse(
-    int Id, string Symbol, string Interval, DateTimeOffset RequestedStartUtc, DateTimeOffset RequestedEndUtc,
+    int Id, string Symbol, MarketDataSource MarketDataSource, string MarketDataSourceLabel, string Interval, DateTimeOffset RequestedStartUtc, DateTimeOffset RequestedEndUtc,
     DateTimeOffset? ActualStartUtc, DateTimeOffset? ActualEndUtc, DateTimeOffset CreatedAtUtc,
     DateTimeOffset? CompletedAtUtc, int CandleCount, decimal RiskReward, decimal FixedOrderSizeUsdt,
     bool WaitForConfirmationCandle, bool UseEma100Filter, bool UseHtfRegimeFilter, bool TrailingStopEnabled, decimal FeePercentPerSide,
@@ -16,7 +16,7 @@ public sealed record BacktestRunSummaryResponse(
     int SkippedWhilePositionOpen, int NoEntryCandle, BacktestRunStatus Status, string? FailureMessage);
 
 public sealed record BacktestRunDetailResponse(
-    int Id, string Symbol, string Interval, DateTimeOffset RequestedStartUtc, DateTimeOffset RequestedEndUtc,
+    int Id, string Symbol, MarketDataSource MarketDataSource, string MarketDataSourceLabel, string Interval, DateTimeOffset RequestedStartUtc, DateTimeOffset RequestedEndUtc,
     DateTimeOffset? ActualStartUtc, DateTimeOffset? ActualEndUtc, DateTimeOffset CreatedAtUtc,
     DateTimeOffset? CompletedAtUtc, int CandleCount, decimal RiskReward, decimal FixedOrderSizeUsdt,
     bool WaitForConfirmationCandle, bool UseEma100Filter, bool UseHtfRegimeFilter, bool TrailingStopEnabled, decimal FeePercentPerSide,
@@ -41,7 +41,7 @@ public sealed record BacktestTradeResponse(
 public static class BacktestResponseMapper
 {
     public static BacktestRunSummaryResponse ToSummary(BacktestRun run) => new(
-        run.Id, run.Symbol, run.Interval, run.RequestedStartUtc, run.RequestedEndUtc, run.ActualStartUtc, run.ActualEndUtc,
+        run.Id, run.Symbol, run.MarketDataSource, MarketDataSourceLabels.For(run.MarketDataSource), run.Interval, run.RequestedStartUtc, run.RequestedEndUtc, run.ActualStartUtc, run.ActualEndUtc,
         run.CreatedAtUtc, run.CompletedAtUtc, run.CandleCount, run.RiskReward, run.FixedOrderSizeUsdt,
         run.WaitForConfirmationCandle, run.UseEma100Filter, run.UseHtfRegimeFilter, run.TrailingStopEnabled, run.FeePercentPerSide,
         run.TotalTrades, run.WinningTrades, run.LosingTrades, run.BreakEvenTrades, run.LongTrades, run.ShortTrades,
@@ -53,7 +53,7 @@ public static class BacktestResponseMapper
     public static BacktestRunDetailResponse ToDetail(BacktestRun run)
     {
         var summary = ToSummary(run);
-        return new(summary.Id, summary.Symbol, summary.Interval, summary.RequestedStartUtc, summary.RequestedEndUtc,
+        return new(summary.Id, summary.Symbol, summary.MarketDataSource, summary.MarketDataSourceLabel, summary.Interval, summary.RequestedStartUtc, summary.RequestedEndUtc,
             summary.ActualStartUtc, summary.ActualEndUtc, summary.CreatedAtUtc, summary.CompletedAtUtc, summary.CandleCount,
             summary.RiskReward, summary.FixedOrderSizeUsdt, summary.WaitForConfirmationCandle, summary.UseEma100Filter, summary.UseHtfRegimeFilter,
             summary.TrailingStopEnabled, summary.FeePercentPerSide, summary.TotalTrades, summary.WinningTrades,

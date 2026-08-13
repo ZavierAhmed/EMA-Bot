@@ -81,7 +81,7 @@ public sealed class StrategyRegimeDiagnosticsTests
         await using var database = new EmaBot.Api.Data.EmaBotDbContext(options); await database.Database.EnsureCreatedAsync();
         var run = new StrategyOptimizationRun { Status = StrategyOptimizationStatus.Completed, RequestedStartUtc = DateTimeOffset.UnixEpoch, RequestedEndUtc = DateTimeOffset.UnixEpoch.AddDays(30), SymbolsJson = "[\"BTCUSDT\",\"ETHUSDT\"]", TimeframesJson = "[\"3m\",\"5m\"]", SimulatedAccountBalanceUsdt = 1000m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = .05m }; var candidate = new StrategyOptimizationCandidate { StrategyOptimizationRun = run, RiskReward = 1.1m };
         database.StrategyOptimizationRuns.Add(run); database.StrategyOptimizationCandidates.Add(candidate); await database.SaveChangesAsync(); var historical = new CountingHistorical(Candles(140, 3));
-        var data = await new StrategyRegimeDiagnosticsService(database, historical, new BacktestEngine(new EmaSignalEngine())).CreateAsync(run.Id, candidate.Id, CancellationToken.None);
+        var data = await new StrategyRegimeDiagnosticsService(database, new TestResolver(historical), new BacktestEngine(new EmaSignalEngine())).CreateAsync(run.Id, candidate.Id, CancellationToken.None);
 
         Assert.NotNull(data); foreach (var symbol in new[] { "BTCUSDT", "ETHUSDT" }) foreach (var timeframe in new[] { "3m", "5m", "15m", "30m" }) Assert.Equal(1, historical.Count(symbol, timeframe));
     }
@@ -103,4 +103,5 @@ public sealed class StrategyRegimeDiagnosticsTests
     private static Candle[] Candles() => Candles(140, 3);
     private static Candle[] Candles(int count, int minutes) => Enumerable.Range(0, count).Select(index => { var time = DateTimeOffset.UnixEpoch.AddMinutes(index * minutes); var close = 100m + index; return new Candle(time, time.AddMinutes(minutes).AddMilliseconds(-1), close - .5m, close + 1m, close - 1m, close, 1m, true); }).ToArray();
     private sealed class CountingHistorical(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider { private readonly Dictionary<(string Symbol,string Frame),int> requests = []; public int Count(string symbol,string frame) => requests.GetValueOrDefault((symbol,frame)); public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol,string interval,DateTimeOffset startUtc,DateTimeOffset endUtc,CancellationToken token){requests[(symbol,interval)]=Count(symbol,interval)+1;return Task.FromResult(candles);} }
+    private sealed class TestResolver(IHistoricalMarketDataProvider historical) : IHistoricalMarketDataProviderResolver { public IHistoricalMarketDataProvider Resolve(MarketDataSource source) => historical; }
 }

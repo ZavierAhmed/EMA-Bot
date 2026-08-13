@@ -11,6 +11,7 @@ public enum PaperTradeEventType { Entry, TrailingStopMoved, TakeProfitExtended, 
 public sealed class PaperSession
 {
     public int Id { get; set; }
+    public MarketDataSource MarketDataSource { get; set; }
     public required string Interval { get; set; }
     public PaperSessionStatus Status { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }

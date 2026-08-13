@@ -7,6 +7,7 @@ public enum StrategyOptimizationStatus { Queued, Running, Completed, Cancelled, 
 public sealed class StrategyOptimizationRun
 {
     public int Id { get; set; }
+    public MarketDataSource MarketDataSource { get; set; }
     public StrategyOptimizationStatus Status { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? StartedAtUtc { get; set; }

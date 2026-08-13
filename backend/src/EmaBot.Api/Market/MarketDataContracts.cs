@@ -36,7 +36,7 @@ public interface IMarketBarStreamProvider
 
 public sealed class UnavailableMarketBarStreamProvider : IMarketBarStreamProvider
 {
-    public const string Message = "Live market-bar streaming is unavailable until the MT5 provider is configured.";
+    public const string Message = "Paper Trading remains unavailable until broker-aware Exness sizing and trading costs are enabled.";
 
     public bool IsConfigured => false;
     public Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, Action<string>? onStateChange, CancellationToken cancellationToken)

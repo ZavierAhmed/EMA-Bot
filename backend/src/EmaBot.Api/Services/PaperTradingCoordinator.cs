@@ -11,7 +11,7 @@ public sealed record PaperSymbolRuntimeSnapshot(decimal? LatestPrice, DateTimeOf
 
 public sealed class PaperTradingCoordinator(
     IServiceScopeFactory scopeFactory,
-    IHistoricalMarketDataProvider historical,
+    IHistoricalMarketDataProviderResolver historicalProviders,
     IMarketBarStreamProvider stream,
     EmaSignalEngine strategy,
     ILogger<PaperTradingCoordinator> logger) : IHostedService
@@ -92,6 +92,7 @@ public sealed class PaperTradingCoordinator(
 
     private async Task WarmupAsync(RuntimeSession state, CancellationToken token)
     {
+        var historical = historicalProviders.Resolve(state.Session.MarketDataSource);
         foreach (var runtime in state.Symbols.Values)
         {
             var candles = await historical.GetLatestAsync(runtime.Symbol.Symbol, state.Session.Interval, 200, token);
@@ -101,6 +102,7 @@ public sealed class PaperTradingCoordinator(
 
     private async Task ResyncCandlesAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate current, CancellationToken token)
     {
+        var historical = historicalProviders.Resolve(state.Session.MarketDataSource);
         var candles = await historical.GetLatestAsync(runtime.Symbol.Symbol, state.Session.Interval, 200, token);
         runtime.Candles.Clear();
         runtime.Candles.AddRange(candles.Where(candle => candle.IsClosed).OrderBy(candle => candle.OpenTimeUtc).TakeLast(200));
