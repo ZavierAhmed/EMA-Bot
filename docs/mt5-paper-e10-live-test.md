@@ -37,3 +37,15 @@ confirm the restart reason plus the `Resume session` and `End session` actions.
   then use the normal Stop action so Paper can obtain an executable Bid/Ask exit.
 
 No broker order is created in either recovery path.
+
+## Decision observability validation
+
+The active Paper dashboard shows the session settings snapshot, decision funnel,
+live market/EMA state, pending-entry details, and an open-position card. Trend
+(`EMA9 > EMA15` or `EMA9 < EMA15`) is not a signal to trade; the current
+decision explains what the latest closed candle actually did.
+
+Recent decisions are bounded, in-memory diagnostics (the latest 25 per symbol).
+They are not reconstructed after an API restart; persisted open-position and
+pending-entry details remain visible after restart. Confirm the warmup message,
+then wait for a new closed candle to see live decision history advance.

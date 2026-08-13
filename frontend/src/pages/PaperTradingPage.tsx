@@ -1,123 +1,76 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { ApiError, getActivePaperSession, getMarketProviderCapabilities, getMonitoredSymbols, getPaperSessions, resumePaperSession, startPaperSession, stopPaperSession, type MarketProviderCapabilities, type MonitoredSymbol, type PaperSession, type PaperSessionSummary } from '../api'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { ApiError, getActivePaperSession, getMarketProviderCapabilities, getMonitoredSymbols, getPaperSessions, getTradingSettings, resumePaperSession, startPaperSession, stopPaperSession, type MarketProviderCapabilities, type MonitoredSymbol, type PaperDecision, type PaperSession, type PaperSessionSummary, type PaperSymbol, type PaperTrade, type TradingSettings } from '../api'
 
-const price = (value: number | null | undefined) => value === null || value === undefined ? '—' : value.toFixed(4)
 const pollIntervalMs = 1000
+const price = (value: number | null | undefined) => value === null || value === undefined ? '—' : value.toFixed(4)
+const time = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '—'
+const onOff = (value: boolean) => value ? 'On' : 'Off'
 type BusyAction = 'start' | 'stop' | 'resume' | 'end' | null
+
+function Section({ title, children }: { title: string; children: ReactNode }) { return <section className="rounded-lg border bg-white p-5"><h2 className="font-semibold">{title}</h2>{children}</section> }
+function Values({ values }: { values: Array<[string, ReactNode]> }) { return <dl className="mt-3 grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">{values.map(([label, value]) => <div key={label}><dt className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</dt><dd className="mt-1 text-sm text-slate-900">{value}</dd></div>)}</dl> }
 
 export function PaperTradingPage() {
   const [active, setActive] = useState<PaperSession | null>(null)
   const [history, setHistory] = useState<PaperSessionSummary[]>([])
   const [symbols, setSymbols] = useState<MonitoredSymbol[]>([])
   const [caps, setCaps] = useState<MarketProviderCapabilities | null>(null)
+  const [settings, setSettings] = useState<TradingSettings | null>(null)
   const [interval, setInterval] = useState('3m')
   const [selected, setSelected] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [liveWarning, setLiveWarning] = useState<string | null>(null)
   const [busyAction, setBusyAction] = useState<BusyAction>(null)
-  const mounted = useRef(false)
-  const pollGeneration = useRef(0)
-  const pollFailures = useRef(0)
+  const mounted = useRef(false); const pollGeneration = useRef(0); const pollFailures = useRef(0)
 
   const refresh = useCallback(async () => {
-    const [sessions, monitored, capabilities, current] = await Promise.all([
-      getPaperSessions(), getMonitoredSymbols(), getMarketProviderCapabilities(),
-      getActivePaperSession().catch(error => {
-        if (error instanceof ApiError && error.status === 404) return null
-        throw error
-      })
+    const [sessions, monitored, capabilities, snapshotSettings, current] = await Promise.all([
+      getPaperSessions(), getMonitoredSymbols(), getMarketProviderCapabilities(), getTradingSettings(),
+      getActivePaperSession().catch(error => { if (error instanceof ApiError && error.status === 404) return null; throw error })
     ])
     if (!mounted.current) return
-    setHistory(sessions)
-    setSymbols(monitored.filter(symbol => symbol.source === 'Mt5Exness' && symbol.isEnabled))
-    setCaps(capabilities)
-    setActive(current)
+    setHistory(sessions); setSymbols(monitored.filter(symbol => symbol.source === 'Mt5Exness' && symbol.isEnabled)); setCaps(capabilities); setSettings(snapshotSettings); setActive(current)
   }, [])
 
+  useEffect(() => { mounted.current = true; void refresh().catch(error => { if (mounted.current) setError(error instanceof Error ? error.message : 'Could not load Paper.') }); return () => { mounted.current = false } }, [refresh])
+  const sessionId = active?.id; const running = active?.status === 'Running'
   useEffect(() => {
-    mounted.current = true
-    void refresh().catch(error => { if (mounted.current) setError(error instanceof Error ? error.message : 'Could not load Paper.') })
-    return () => { mounted.current = false }
-  }, [refresh])
-
-  const activeSessionId = active?.id
-  const activeIsRunning = active?.status === 'Running'
-  useEffect(() => {
-    if (activeSessionId === undefined || !activeIsRunning) return
-    const sessionId = activeSessionId
-    const generation = ++pollGeneration.current
-    let cancelled = false
-    let timer: number | undefined
-    const isCurrent = () => !cancelled && mounted.current && pollGeneration.current === generation
-    const schedule = () => { if (isCurrent()) timer = window.setTimeout(() => void poll(), pollIntervalMs) }
+    if (sessionId === undefined || !running) return
+    const generation = ++pollGeneration.current; let cancelled = false; let timer: number | undefined
+    const current = () => !cancelled && mounted.current && pollGeneration.current === generation
+    const schedule = () => { if (current()) timer = window.setTimeout(() => void poll(), pollIntervalMs) }
     const poll = async () => {
-      try {
-        const next = await getActivePaperSession()
-        if (!isCurrent()) return
-        if (next.id !== sessionId) { pollFailures.current = 0; setActive(next); return }
-        pollFailures.current = 0
-        setActive(next)
-        setLiveWarning(null)
-      } catch (error) {
-        if (!isCurrent()) return
-        if (error instanceof ApiError && error.status === 404) {
-          pollGeneration.current++
-          setActive(current => current?.id === sessionId ? null : current)
-          void refresh().catch(refreshError => { if (mounted.current) setError(refreshError instanceof Error ? refreshError.message : 'Could not refresh Paper history.') })
-          return
-        }
-        pollFailures.current++
-        if (pollFailures.current >= 2) setLiveWarning('Live Paper refresh is temporarily unavailable.')
+      try { const next = await getActivePaperSession(); if (!current()) return; pollFailures.current = 0; setActive(next); setLiveWarning(null) }
+      catch (error) {
+        if (!current()) return
+        if (error instanceof ApiError && error.status === 404) { pollGeneration.current++; setActive(null); void refresh().catch(refreshError => { if (mounted.current) setError(refreshError instanceof Error ? refreshError.message : 'Could not refresh Paper history.') }); return }
+        pollFailures.current++; if (pollFailures.current >= 2) setLiveWarning('Live Paper refresh is temporarily unavailable.')
       }
       schedule()
     }
     timer = window.setTimeout(() => void poll(), 0)
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer) }
-  }, [activeIsRunning, activeSessionId, refresh])
+  }, [running, sessionId, refresh])
 
-  const start = async () => {
-    setBusyAction('start'); setError(null); setLiveWarning(null); pollFailures.current = 0; pollGeneration.current++
-    try { await startPaperSession(interval, selected); await refresh() }
-    catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : 'Could not start Paper.') }
-    finally { if (mounted.current) setBusyAction(null) }
-  }
+  const start = async () => { setBusyAction('start'); setError(null); pollGeneration.current++; try { await startPaperSession(interval, selected); await refresh() } catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : 'Could not start Paper.') } finally { if (mounted.current) setBusyAction(null) } }
+  const resume = async () => { if (!active) return; setBusyAction('resume'); setError(null); pollGeneration.current++; try { const resumed = await resumePaperSession(active.id); if (mounted.current) setActive(resumed) } catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : 'Could not resume Paper.') } finally { if (mounted.current) setBusyAction(null) } }
+  const stop = async (end = false) => { if (!active) return; const id = active.id; setBusyAction(end ? 'end' : 'stop'); setError(null); pollGeneration.current++; try { await stopPaperSession(id); if (mounted.current) setActive(null); await refresh() } catch (error) { if (mounted.current) setError(error instanceof Error ? error.message : 'Could not end Paper session.') } finally { if (mounted.current) setBusyAction(null) } }
 
-  const resume = async () => {
-    if (!active) return
-    const sessionId = active.id
-    setBusyAction('resume'); setError(null); setLiveWarning(null); pollFailures.current = 0; pollGeneration.current++
-    try {
-      const resumed = await resumePaperSession(sessionId)
-      if (mounted.current) setActive(current => current?.id === sessionId ? resumed : current)
-    } catch (error) {
-      if (mounted.current) setError(error instanceof Error ? error.message : 'Could not resume Paper.')
-    } finally { if (mounted.current) setBusyAction(null) }
-  }
-
-  const stop = async (endingInterrupted = false) => {
-    if (!active) return
-    const sessionId = active.id
-    setBusyAction(endingInterrupted ? 'end' : 'stop'); setError(null); setLiveWarning(null); pollFailures.current = 0; pollGeneration.current++
-    try {
-      await stopPaperSession(sessionId)
-      if (mounted.current) setActive(current => current?.id === sessionId ? null : current)
-      await refresh()
-    } catch (error) {
-      if (mounted.current) setError(error instanceof Error ? error.message : endingInterrupted ? 'Could not end Paper session.' : 'Could not stop Paper.')
-    } finally { if (mounted.current) setBusyAction(null) }
-  }
-
-  if (active) return <Active session={active} busyAction={busyAction} stop={stop} resume={resume} error={error} liveWarning={liveWarning} />
+  if (active) return <Active session={active} busyAction={busyAction} error={error} liveWarning={liveWarning} resume={resume} stop={stop} />
   const ready = caps?.liveBarProviderConfigured && selected.length > 0 && selected.every(name => symbols.find(symbol => symbol.symbol === name)?.paperCommissionPerLotPerSide !== null)
-  return <div className="space-y-7"><div><p className="text-sm font-medium text-amber-700">PAPER MODE</p><h1 className="mt-2 text-3xl font-semibold">MT5 broker-aware Paper simulation</h1><p className="mt-2 text-slate-600">Observed Bid/Ask fills, MT5 lots/contracts, MT5 margin and profit calculation, and explicit per-lot commission. Additional slippage and swap financing are not simulated. No broker orders are sent.</p></div>{error && <p className="text-sm text-red-700">{error}</p>}<section className="rounded-lg border bg-white p-5"><p className="text-sm">Broker: Exness / MT5 · Live data: {caps?.liveBarProviderConfigured ? 'Configured' : 'Not configured'} · Execution: Not configured</p><div className="mt-4 grid gap-3"><label>Timeframe<select value={interval} onChange={event => setInterval(event.target.value)} className="ml-2 rounded border p-2">{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select></label>{symbols.map(symbol => <label key={symbol.id} className="flex gap-2"><input type="checkbox" checked={selected.includes(symbol.symbol)} onChange={event => setSelected(event.target.checked ? [...selected, symbol.symbol] : selected.filter(value => value !== symbol.symbol))} />{symbol.symbol} · {symbol.paperCommissionPerLotPerSide === null ? 'Commission not configured' : symbol.paperCommissionPerLotPerSide === 0 ? 'Commission-free' : `Commission ${symbol.paperCommissionPerLotPerSide}/lot/side`}</label>)}</div><button disabled={!ready || busyAction !== null} onClick={() => void start()} className="mt-5 rounded bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyAction === 'start' ? 'Starting…' : 'Start Paper'}</button></section><History rows={history} /></div>
+  return <div className="space-y-6"><div><p className="text-sm font-medium text-amber-700">PAPER MODE</p><h1 className="mt-2 text-3xl font-semibold">MT5 broker-aware Paper simulation</h1><p className="mt-2 text-slate-600">No broker orders are sent. These settings are snapshotted when the session starts.</p></div>{error && <p className="text-sm text-red-700">{error}</p>}<Section title="Settings that will be snapshotted"><Values values={settings ? [['Risk / reward', settings.riskReward], ['Confirmation', onOff(settings.waitForConfirmationCandle)], ['EMA100 filter', onOff(settings.useEma100Filter)], ['Minimum EMA gap', settings.minEmaGapPercent === 0 ? 'Disabled' : `${settings.minEmaGapPercent}%`], ['Maximum stop distance', settings.maxStopDistancePercent === 0 ? 'Disabled' : `${settings.maxStopDistancePercent}%`], ['Trailing stop', onOff(settings.trailingStopEnabled)], ['Paper sizing', settings.paperPositionSizingMode], ['Starting balance', settings.paperStartingBalance]] : []} /></Section><Section title="Start Paper"><p className="text-sm text-slate-600">Broker: Exness / MT5 · Live data: {caps?.liveBarProviderConfigured ? 'Configured' : 'Not configured'} · Execution: Not configured</p><div className="mt-4 grid gap-3"><label>Timeframe<select value={interval} onChange={event => setInterval(event.target.value)} className="ml-2 rounded border p-2">{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select></label>{symbols.map(symbol => <label key={symbol.id} className="flex gap-2"><input type="checkbox" checked={selected.includes(symbol.symbol)} onChange={event => setSelected(event.target.checked ? [...selected, symbol.symbol] : selected.filter(value => value !== symbol.symbol))} />{symbol.symbol} · {symbol.paperCommissionPerLotPerSide === null ? 'Commission not configured' : symbol.paperCommissionPerLotPerSide === 0 ? 'Commission-free' : `Commission ${symbol.paperCommissionPerLotPerSide}/lot/side`}</label>)}</div><button disabled={!ready || busyAction !== null} onClick={() => void start()} className="mt-5 rounded bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyAction === 'start' ? 'Starting…' : 'Start Paper'}</button></Section><History rows={history} /></div>
 }
 
-function Active({ session, busyAction, stop, resume, error, liveWarning }: { session: PaperSession; busyAction: BusyAction; stop: (endingInterrupted?: boolean) => Promise<void>; resume: () => Promise<void>; error: string | null; liveWarning: string | null }) {
-  const lastUpdate = session.lastUpdateUtc ? new Date(session.lastUpdateUtc).toLocaleTimeString() : 'Waiting for first market update…'
-  const stale = session.connectionState === 'Connected' && session.lastUpdateUtc !== null && Date.now() - new Date(session.lastUpdateUtc).getTime() > 5000
-  const interrupted = session.status === 'Interrupted'
-  const hasOpenTrade = session.symbols.some(symbol => symbol.openTrade !== null)
-  return <div className="space-y-6"><div><p className="text-sm font-medium text-amber-700">MT5 BROKER-AWARE PAPER</p><h1 className="mt-2 text-3xl font-semibold">{session.status} · {session.interval}</h1><p className="mt-2 text-slate-600">Connection: {session.connectionState} · Last market update: {lastUpdate} · Account currency: {session.accountCurrency} · Starting balance: {session.startingBalance} · Used margin: {session.usedMargin}</p></div>{(interrupted || session.status === 'Faulted') && session.failureMessage && <p className="text-sm text-amber-700">{session.failureMessage}</p>}{error && <p className="text-sm text-red-700">{error}</p>}{liveWarning && <p className="text-sm text-amber-700">{liveWarning}</p>}{stale && <p className="text-sm text-amber-700">Market updates appear stale.</p>}{interrupted ? <section className="rounded-lg border border-amber-300 bg-amber-50 p-5"><h2 className="font-semibold">Paper session interrupted</h2><p className="mt-2 text-sm text-slate-700">The API restarted while this Paper session was running. No live market stream is attached until you resume it. Resume reconnects MT5; end closes this session without resuming it.</p>{hasOpenTrade && <p className="mt-2 text-sm text-amber-800">An open simulated position exists. Resume the session before ending it so an executable MT5 exit price can be obtained.</p>}<div className="mt-4 flex gap-3"><button disabled={busyAction !== null} onClick={() => void resume()} className="rounded bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyAction === 'resume' ? 'Resuming…' : 'Resume session'}</button><button disabled={busyAction !== null} onClick={() => void stop(true)} className="rounded border border-slate-400 px-4 py-2 text-sm font-medium text-slate-800 disabled:opacity-50">{busyAction === 'end' ? 'Ending…' : 'End session'}</button></div></section> : <button disabled={busyAction !== null} onClick={() => void stop()} className="rounded bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{busyAction === 'stop' ? 'Stopping…' : 'Stop session'}</button>}<section className="overflow-x-auto rounded-lg border bg-white p-5"><h2 className="font-semibold">Live symbols</h2><table className="mt-3 w-full text-left text-sm"><thead><tr><th>Symbol</th><th>Bid</th><th>Ask</th><th>Spread</th><th>Trend</th><th>Position</th></tr></thead><tbody>{session.symbols.map(symbol => <tr key={symbol.symbol} className="border-t"><td className="py-3">{symbol.symbol}</td><td>{price(symbol.latestBid)}</td><td>{price(symbol.latestAsk)}</td><td>{price(symbol.latestSpread)}</td><td>{symbol.trend ?? '—'}</td><td>{symbol.openTrade ? `${symbol.openTrade.direction} ${symbol.openTrade.lots ?? '—'} lots · entry ${price(symbol.openTrade.entryPrice)} · SL ${price(symbol.openTrade.currentStopLoss)} · TP ${price(symbol.openTrade.currentTakeProfit)} · margin ${symbol.openTrade.requiredMargin ?? '—'} · commission ${symbol.openTrade.roundTripCommission ?? '—'}` : '—'}</td></tr>)}</tbody></table></section><section className="rounded-lg border bg-white p-5"><h2 className="font-semibold">Completed trades</h2>{session.recentTrades.filter(trade => trade.status === 'Closed').map(trade => <p key={trade.id} className="mt-2 text-sm">{trade.symbol} {trade.direction} · Gross {trade.grossPnl ?? '—'} · Net {trade.netPnl ?? '—'} {session.accountCurrency}</p>)}</section></div>
+function Active({ session, busyAction, error, liveWarning, resume, stop }: { session: PaperSession; busyAction: BusyAction; error: string | null; liveWarning: string | null; resume: () => Promise<void>; stop: (end?: boolean) => Promise<void> }) {
+  const interrupted = session.status === 'Interrupted'; const freeMargin = session.currentBalance - session.usedMargin
+  return <div className="space-y-6"><div><p className="text-sm font-medium text-amber-700">MT5 BROKER-AWARE PAPER</p><h1 className="mt-2 text-3xl font-semibold">{session.status} · {session.interval} · Exness / MT5</h1><p className="mt-2 text-slate-600">Connection: {session.connectionState} · Last market update: {session.lastUpdateUtc ? new Date(session.lastUpdateUtc).toLocaleTimeString() : 'Waiting for first market update…'}</p></div>{session.failureMessage && (interrupted || session.status === 'Faulted') && <p className="text-sm text-amber-700">{session.failureMessage}</p>}{error && <p className="text-sm text-red-700">{error}</p>}{liveWarning && <p className="text-sm text-amber-700">{liveWarning}</p>}{interrupted ? <Section title="Paper session interrupted"><p className="text-sm text-slate-700">No live stream is attached. Resume reconnects MT5; end closes this session only when no simulated position is open.</p><div className="mt-4 flex gap-3"><button disabled={busyAction !== null} onClick={() => void resume()} className="rounded bg-slate-950 px-4 py-2 text-sm text-white disabled:opacity-50">{busyAction === 'resume' ? 'Resuming…' : 'Resume session'}</button><button disabled={busyAction !== null} onClick={() => void stop(true)} className="rounded border px-4 py-2 text-sm disabled:opacity-50">{busyAction === 'end' ? 'Ending…' : 'End session'}</button></div></Section> : <button disabled={busyAction !== null} onClick={() => void stop()} className="rounded bg-slate-950 px-4 py-2 text-sm text-white disabled:opacity-50">{busyAction === 'stop' ? 'Stopping…' : 'Stop session'}</button>}<section className="grid gap-5 lg:grid-cols-2"><Section title="Session account"><Values values={[['Starting balance', `${session.startingBalance} ${session.accountCurrency}`], ['Current balance', `${session.currentBalance} ${session.accountCurrency}`], ['Used margin', `${session.usedMargin} ${session.accountCurrency}`], ['Free simulated margin', `${freeMargin} ${session.accountCurrency}`], ['Realized net P/L', `${session.netPnl} ${session.accountCurrency}`], ['Trading costs', `${session.totalTradingCosts} ${session.accountCurrency}`]]} /></Section><Section title="Strategy settings (session snapshot)"><Values values={[['Risk / reward', session.riskReward], ['Confirmation', onOff(session.waitForConfirmationCandle)], ['EMA100 filter', onOff(session.useEma100Filter)], ['Minimum EMA gap', session.minEmaGapPercent === 0 ? 'Disabled' : `${session.minEmaGapPercent}%`], ['Maximum stop distance', session.maxStopDistancePercent === 0 ? 'Disabled' : `${session.maxStopDistancePercent}%`], ['Trailing stop', onOff(session.trailingStopEnabled)], ['Paper sizing', session.paperPositionSizingMode], ['Fixed lots / margin', session.paperPositionSizingMode === 'FixedLots' ? session.paperFixedLots : `${session.paperMarginPerTradePercent}%`]]} /></Section></section><Section title="Decision funnel"><p className="text-sm text-slate-600">A zero means this condition has not occurred during this Paper session.</p><Values values={funnel(session)} /></Section>{session.symbols.map(symbol => <SymbolCard key={symbol.symbol} symbol={symbol} currency={session.accountCurrency} />)}<CompletedTrades trades={session.recentTrades} currency={session.accountCurrency} /></div>
 }
 
-function History({ rows }: { rows: PaperSessionSummary[] }) { return <section className="rounded-lg border bg-white p-5"><h2 className="font-semibold">Paper session history</h2>{rows.map(row => <p className="mt-2 text-sm" key={row.id}>{new Date(row.startedAtUtc).toLocaleString()} · {row.interval} · {row.status} · {row.completedTrades} trades · {row.netPnl} {row.accountCurrency} net</p>)}</section> }
+function funnel(session: PaperSession): Array<[string, ReactNode]> { return [['Crossovers detected', session.totalCrossovers], ['Valid Long signals', session.longSignals], ['Valid Short signals', session.shortSignals], ['Confirmation failures', session.confirmationFailed], ['EMA100 filter rejections', session.rejectedByEma100], ['EMA gap rejections', session.rejectedByEmaGap], ['Stop-distance rejections', session.rejectedByStopDistance], ['Invalid structural stop', session.invalidStopLoss], ['Trading-cost rejections', session.rejectedByTradingCosts], ['Insufficient-margin rejections', session.rejectedByInsufficientMargin], ['Legacy fee rejection', session.rejectedByFees], ['Skipped because position open', session.skippedWhilePositionOpen], ['Completed trades', session.completedTrades]] }
+function SymbolCard({ symbol, currency }: { symbol: PaperSymbol; currency: string }) { return <section className="rounded-lg border bg-slate-50 p-5"><h2 className="text-lg font-semibold">{symbol.symbol}</h2><div className="mt-4 grid gap-5 lg:grid-cols-2"><Section title="Market"><Values values={[['Bid', price(symbol.latestBid)], ['Ask', price(symbol.latestAsk)], ['Spread', price(symbol.latestSpread)], ['Last market event', time(symbol.lastMarketEventUtc)], ['Last closed candle', time(symbol.lastClosedCandleUtc)]]} /></Section><Section title="Strategy state"><Values values={[['Trend', <>{symbol.trend ?? 'Neutral'} <span className="text-slate-500">(EMA9 {symbol.trend === 'Up' ? '>' : symbol.trend === 'Down' ? '<' : '≈'} EMA15)</span></>], ['EMA9', price(symbol.ema9)], ['EMA15', price(symbol.ema15)], ['EMA100', price(symbol.ema100)], ['Gap', symbol.gapPercent === null ? '—' : `${symbol.gapPercent.toFixed(4)}%`], ['Gap state', symbol.gapState ?? '—'], ['Re-entry state', symbol.reentryEligible ? 'Eligible' : symbol.reentryConsumed ? 'Consumed' : 'None']]}/><p className="mt-3 text-xs text-slate-500">Trend is not a trade signal. Decisions are made only on live closed candles.</p></Section></div><Section title="Current decision"><p className="mt-2 text-sm">{symbol.lastDecision?.message ?? (symbol.runtimeDecisionHistoryAvailable ? 'Waiting for the next live closed candle.' : 'Runtime decision history is unavailable after restart.')}</p>{symbol.pendingEntry && <PendingCard pending={symbol.pendingEntry} />}</Section>{symbol.openTrade && <OpenTradeCard trade={symbol.openTrade} symbol={symbol} currency={currency} />}<DecisionLog symbol={symbol} /></section> }
+function PendingCard({ pending }: { pending: NonNullable<PaperSymbol['pendingEntry']> }) { return <div className="mt-4 rounded border border-amber-300 bg-amber-50 p-4"><p className="text-xs font-semibold text-amber-800">WAITING FOR NEXT BAR</p><Values values={[['Direction', pending.direction], ['Entry side', pending.direction === 'Long' ? 'Ask' : 'Bid'], ['Crossover time', time(pending.crossoverTimeUtc)], ['Signal time', time(pending.signalTimeUtc)], ['Expected entry bar', time(pending.expectedEntryOpenUtc)], ['Structural stop', price(pending.stopPrice)], ['Stop source', pending.stopSource], ['Signal EMA9 / EMA15', `${price(pending.signalEma9)} / ${price(pending.signalEma15)}`], ['Signal EMA100', price(pending.signalEma100)], ['Signal gap', pending.signalGapPercent === null ? '—' : `${pending.signalGapPercent}%`]]} /></div> }
+function OpenTradeCard({ trade, symbol, currency }: { trade: PaperTrade; symbol: PaperSymbol; currency: string }) { const exit = symbol.currentExecutableExitPrice; const slDistance = exit === null ? null : trade.direction === 'Long' ? exit - trade.currentStopLoss : trade.currentStopLoss - exit; const tpDistance = exit === null ? null : trade.direction === 'Long' ? trade.currentTakeProfit - exit : exit - trade.currentTakeProfit; return <Section title={`OPEN ${trade.direction.toUpperCase()} · ${trade.symbol}`}><p className="text-sm font-medium text-emerald-700">OPEN · {trade.lots ?? '—'} lots</p><div className="mt-4 grid gap-5 lg:grid-cols-3"><Values values={[['Entry time', time(trade.entryTimeUtc)], ['Entry price', price(trade.entryPrice)], ['Entry Bid / Ask', `${price(trade.entryBid)} / ${price(trade.entryAsk)}`], ['Entry spread', price(trade.entrySpread)], ['Lots', trade.lots ?? '—'], ['Quantity / exposure', trade.quantity], ['Required margin', `${trade.requiredMargin ?? '—'} ${currency}`], ['Account equity at entry', `${trade.accountEquityAtEntry ?? '—'} ${currency}`], ['Commission', `${trade.roundTripCommission ?? '—'} ${currency}`]]}/><Values values={[['Initial SL', price(trade.initialStopLoss)], ['Current SL', price(trade.currentStopLoss)], ['Stop source', trade.stopSourceType], ['Original TP', price(trade.originalTakeProfit)], ['Current TP', price(trade.currentTakeProfit)], ['TP extended', onOff(trade.takeProfitExtended)], ['Current executable exit', price(exit)], ['Distance to SL', price(slDistance)], ['Distance to TP', price(tpDistance)], ['Best favorable progress', `${trade.bestFavorableProgressPercent.toFixed(2)}%`], ['MFE', price(trade.mfePrice)], ['MAE', price(trade.maePrice)]]}/><Values values={[['Crossover time', time(trade.crossoverTimeUtc)], ['Signal time', time(trade.signalTimeUtc)], ['Signal EMA9', price(trade.signalEma9)], ['Signal EMA15', price(trade.signalEma15)], ['Signal EMA100', price(trade.signalEma100)], ['Signal gap', trade.signalGapPercent === null ? '—' : `${trade.signalGapPercent}%`], ['Signal gap state', trade.signalGapState], ['Re-entry', onOff(trade.isReentry)]]}/></div></Section> }
+function DecisionLog({ symbol }: { symbol: PaperSymbol }) { return <Section title="Recent decisions">{!symbol.runtimeDecisionHistoryAvailable ? <p className="mt-2 text-sm text-slate-600">Runtime decision history is unavailable after restart.</p> : symbol.recentDecisions.length === 0 ? <p className="mt-2 text-sm text-slate-600">Waiting for live decision events.</p> : <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Time</th><th>Stage</th><th>Direction</th><th>Decision / reason</th></tr></thead><tbody>{symbol.recentDecisions.slice(0, 10).map(decision => <DecisionRow key={`${decision.timeUtc}-${decision.stage}`} decision={decision} />)}</tbody></table></div>}</Section> }
+function DecisionRow({ decision }: { decision: PaperDecision }) { const color = /Entered|Signal/.test(decision.stage) ? 'text-emerald-700' : /Rejected|Failed|Expired/.test(decision.stage) ? 'text-red-700' : /Pending|Warmup|Awaiting/.test(decision.stage) ? 'text-amber-700' : 'text-slate-700'; return <tr className="border-t"><td className="py-2 pr-3">{time(decision.timeUtc)}</td><td className={`py-2 pr-3 font-medium ${color}`}>{decision.stage}</td><td className="py-2 pr-3">{decision.direction ?? '—'}</td><td className="py-2">{decision.message}</td></tr> }
+function CompletedTrades({ trades, currency }: { trades: PaperTrade[]; currency: string }) { const completed = trades.filter(trade => trade.status === 'Closed'); return <Section title="Completed trades">{completed.length === 0 ? <p className="mt-2 text-sm text-slate-600">No completed trades yet.</p> : <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th>Symbol</th><th>Direction</th><th>Entry</th><th>Exit</th><th>Lots</th><th>Exit reason</th><th>Gross P/L</th><th>Commission</th><th>Net P/L</th></tr></thead><tbody>{completed.map(trade => <tr className="border-t" key={trade.id}><td className="py-2">{trade.symbol}</td><td>{trade.direction}</td><td>{price(trade.entryPrice)}</td><td>{price(trade.exitPrice)}</td><td>{trade.lots ?? '—'}</td><td>{trade.exitReason ?? '—'}</td><td>{trade.grossPnl ?? '—'} {currency}</td><td>{trade.roundTripCommission ?? '—'} {currency}</td><td>{trade.netPnl ?? '—'} {currency}</td></tr>)}</tbody></table></div>}</Section> }
+function History({ rows }: { rows: PaperSessionSummary[] }) { return <Section title="Paper session history">{rows.map(row => <p className="mt-2 text-sm" key={row.id}>{new Date(row.startedAtUtc).toLocaleString()} · {row.interval} · {row.status} · {row.completedTrades} trades · {row.netPnl} {row.accountCurrency} net</p>)}</Section> }
