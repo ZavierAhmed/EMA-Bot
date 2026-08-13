@@ -2,6 +2,12 @@
 
 ## Phase E9 completed
 
+E9 runtime validation passed against the local MySQL database and Exness MT5
+Demo: normal API startup applied the migration, the MT5 catalog added
+`XAUUSDm`, and an `XAUUSDm` / `3m` historical backtest completed successfully.
+E9.1 corrected the bridge shutdown lifecycle defect identified during that
+validation.
+
 E8/E8.1 manual Exness Demo validation is recorded as passed: the bridge,
 heartbeat, Ping, catalog, XAUUSDm specification, bid/ask, historical M3 bars,
 snapshot, timestamp advance, rollover, exact closed-bar boundary, and native

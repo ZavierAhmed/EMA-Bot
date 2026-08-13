@@ -129,6 +129,20 @@ public sealed class Mt5BridgeOptionsAndProtocolTests
         Assert.Equal(Mt5BridgeConnectionState.Disabled, status.ConnectionState); Assert.False(server.IsConnected); Assert.DoesNotContain("secret", serialized, StringComparison.OrdinalIgnoreCase); Assert.DoesNotContain("login", serialized, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task DisabledServerCanBeStoppedAndDisposedRepeatedly()
+    {
+        var server = CreateServer(new Mt5BridgeOptions());
+
+        await server.StartAsync(CancellationToken.None);
+        await server.StopAsync(CancellationToken.None);
+        await server.DisposeAsync();
+        await server.StopAsync(CancellationToken.None);
+        await server.DisposeAsync();
+
+        Assert.Equal(Mt5BridgeConnectionState.Disabled, server.GetStatus().ConnectionState);
+    }
+
     private static Mt5BridgeServer CreateServer(Mt5BridgeOptions options) => new(Options.Create(options), TimeProvider.System, NullLogger<Mt5BridgeServer>.Instance);
 }
 
@@ -257,6 +271,50 @@ public sealed class Mt5BridgeServerTests
         using var timeout = new CancellationTokenSource(250);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second.ConnectAsync(timeout.Token));
         Assert.Equal(sessionId, harness.Server.GetStatus().SessionId); Assert.True(harness.Server.IsConnected);
+    }
+
+    [Fact]
+    public async Task StopAndDisposeAreIdempotentAfterStart()
+    {
+        await using var harness = await BridgeHarness.StartAsync();
+
+        await harness.Server.StopAsync(CancellationToken.None);
+        await harness.Server.DisposeAsync();
+        await harness.Server.StopAsync(CancellationToken.None);
+        await harness.Server.DisposeAsync();
+
+        Assert.False(harness.Server.IsConnected);
+        Assert.Equal(0, harness.Server.PendingRequestCount);
+    }
+
+    [Fact]
+    public async Task ConcurrentStopsAndSubsequentDisposeAreSafe()
+    {
+        await using var harness = await BridgeHarness.StartAsync();
+
+        await Task.WhenAll(
+            harness.Server.StopAsync(CancellationToken.None),
+            harness.Server.StopAsync(CancellationToken.None));
+        await harness.Server.DisposeAsync();
+
+        Assert.False(harness.Server.IsConnected);
+        Assert.Equal(0, harness.Server.PendingRequestCount);
+    }
+
+    [Fact]
+    public async Task ConnectedBridgeStopsAndDisposesWithoutLeavingPendingRequests()
+    {
+        await using var harness = await BridgeHarness.StartAsync();
+        await using var client = await harness.ConnectAsync();
+        await harness.HelloAsync(client);
+        Assert.True(harness.Server.IsConnected);
+
+        await harness.Server.StopAsync(CancellationToken.None);
+        await harness.Server.DisposeAsync();
+        await harness.Server.DisposeAsync();
+
+        Assert.False(harness.Server.IsConnected);
+        Assert.Equal(0, harness.Server.PendingRequestCount);
     }
 
     private sealed class BridgeHarness : IAsyncDisposable

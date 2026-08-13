@@ -12,6 +12,7 @@ public sealed class Mt5BridgeServer : IHostedService, IMt5BridgeRequestClient, I
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<Mt5BridgeServer> _logger;
     private readonly object _sync = new();
+    private readonly object _lifecycleSync = new();
     private readonly Mt5BridgeFrameCodec _codec;
     private readonly Mt5BridgeStatus _initialStatus;
     private CancellationTokenSource? _stopping;
@@ -39,22 +40,47 @@ public sealed class Mt5BridgeServer : IHostedService, IMt5BridgeRequestClient, I
         var errors = Mt5BridgeOptions.Validate(_options);
         if (errors.Count != 0) throw new OptionsValidationException(Mt5BridgeOptions.SectionName, typeof(Mt5BridgeOptions), errors);
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("The enabled MT5 bridge requires Windows local pipe security.");
-        _stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var stopping = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        lock (_lifecycleSync)
+        {
+            if (_stopping is not null || _acceptLoop is not null)
+            {
+                stopping.Dispose();
+                return Task.CompletedTask;
+            }
+
+            _stopping = stopping;
+            _acceptLoop = Task.Run(() => AcceptLoopAsync(stopping.Token), CancellationToken.None);
+        }
         SetStatus(NewStatus(Mt5BridgeConnectionState.WaitingForClient));
-        _acceptLoop = Task.Run(() => AcceptLoopAsync(_stopping.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        _stopping?.Cancel();
+        CancellationTokenSource? stopping;
+        Task? acceptLoop;
+        lock (_lifecycleSync)
+        {
+            stopping = _stopping;
+            acceptLoop = _acceptLoop;
+            _stopping = null;
+            _acceptLoop = null;
+        }
+
+        if (stopping is null && acceptLoop is null) return;
+
         Mt5BridgeSession? session;
         lock (_sync) session = _session;
-        session?.Disconnect();
-        if (_acceptLoop is not null)
+        try
         {
-            try { await _acceptLoop.WaitAsync(cancellationToken); }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            stopping?.Cancel();
+            session?.Disconnect();
+            if (acceptLoop is not null) await acceptLoop;
+        }
+        finally
+        {
+            stopping?.Dispose();
         }
     }
 
@@ -189,9 +215,5 @@ public sealed class Mt5BridgeServer : IHostedService, IMt5BridgeRequestClient, I
         return CryptographicOperations.FixedTimeEquals(expectedHash, receivedHash);
     }
 
-    public async ValueTask DisposeAsync()
-    {
-        await StopAsync(CancellationToken.None);
-        _stopping?.Dispose();
-    }
+    public ValueTask DisposeAsync() => new(StopAsync(CancellationToken.None));
 }
