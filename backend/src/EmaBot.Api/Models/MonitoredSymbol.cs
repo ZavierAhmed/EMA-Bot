@@ -9,6 +9,8 @@ public sealed class MonitoredSymbol
     public string? DisplayName { get; set; }
     public string? BaseAsset { get; set; }
     public string? QuoteAsset { get; set; }
+    // Null means intentionally not configured; zero is an explicit commission-free confirmation.
+    public decimal? PaperCommissionPerLotPerSide { get; set; }
     public bool IsEnabled { get; set; } = true;
     public DateTimeOffset CreatedAtUtc { get; set; }
 }

@@ -76,12 +76,12 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
     {
         var state = new Mt5BridgeMarketBarStreamProvider.StreamState(); var updates = new List<MarketBarUpdate>();
         var a = Bar(12, 0, false); var b = Bar(12, 3, true); var c = Bar(12, 6, true, close: 103m);
-        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 3, 1), a, b), state, Add, CancellationToken.None);
-        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 3, 2), a, b with { Close = 102m }), state, Add, CancellationToken.None);
-        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 6, 1), b with { IsCurrent = false }, c), state, Add, CancellationToken.None);
-        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 6, 1), b with { IsCurrent = false }, c), state, Add, CancellationToken.None);
+        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 3, 1), a, b, 100m, 100.2m), state, Add, CancellationToken.None);
+        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 3, 2), a, b with { Close = 102m }, 100.1m, 100.3m), state, Add, CancellationToken.None);
+        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 6, 1), b with { IsCurrent = false }, c, 102m, 102.2m), state, Add, CancellationToken.None);
+        await Mt5BridgeMarketBarStreamProvider.EmitAsync(new("XAUUSDm", "3m", Time(12, 6, 1), b with { IsCurrent = false }, c, 102m, 102.2m), state, Add, CancellationToken.None);
 
-        Assert.Equal(4, updates.Count); Assert.False(updates[0].IsClosed); Assert.Equal(101m, updates[0].Close); Assert.Equal(102m, updates[1].Close); Assert.True(updates[2].IsClosed); Assert.False(updates[3].IsClosed); Assert.Equal(updates[2].CloseTimeUtc.AddMilliseconds(1), updates[3].OpenTimeUtc); Assert.Equal(103m, updates[3].Close);
+        Assert.Equal(4, updates.Count); Assert.False(updates[0].IsClosed); Assert.Equal(100m, updates[0].Bid); Assert.Equal(100.2m, updates[0].Ask); Assert.Equal(101m, updates[0].Close); Assert.Equal(102m, updates[1].Close); Assert.True(updates[2].IsClosed); Assert.Null(updates[2].Bid); Assert.False(updates[3].IsClosed); Assert.Equal(updates[2].CloseTimeUtc.AddMilliseconds(1), updates[3].OpenTimeUtc); Assert.Equal(103m, updates[3].Close);
         Task Add(MarketBarUpdate update, CancellationToken _) { updates.Add(update); return Task.CompletedTask; }
     }
 

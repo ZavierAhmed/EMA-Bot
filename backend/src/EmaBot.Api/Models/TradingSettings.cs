@@ -2,6 +2,8 @@ using EmaBot.Api.Strategy;
 
 namespace EmaBot.Api.Models;
 
+public enum PaperPositionSizingMode { FixedLots, MarginPercent }
+
 public sealed class TradingSettings
 {
     public const int GlobalId = 1;
@@ -19,5 +21,9 @@ public sealed class TradingSettings
     public bool UseHtfRegimeFilter { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public decimal FeePercentPerSide { get; set; } = 0.05m;
+    public PaperPositionSizingMode PaperPositionSizingMode { get; set; } = PaperPositionSizingMode.FixedLots;
+    public decimal PaperFixedLots { get; set; } = .01m;
+    public decimal PaperMarginPerTradePercent { get; set; } = 10m;
+    public decimal PaperStartingBalance { get; set; } = 1000m;
     public DateTimeOffset UpdatedAtUtc { get; set; }
 }

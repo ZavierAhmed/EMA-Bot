@@ -55,6 +55,18 @@ public sealed class SymbolsController(EmaBotDbContext database, IInstrumentCatal
         return Ok(ToResponse(symbol));
     }
 
+    [HttpPatch("{id:int}/paper-costs")]
+    public async Task<ActionResult<MonitoredSymbolResponse>> SetPaperCosts(int id, SetPaperCostsRequest request, CancellationToken cancellationToken)
+    {
+        if (request.CommissionPerLotPerSide < 0) return BadRequest(new ApiMessage("Paper commission per lot per side must be zero or greater."));
+        var symbol = await database.MonitoredSymbols.FindAsync([id], cancellationToken);
+        if (symbol is null) return NotFound(new ApiMessage("Monitored symbol not found."));
+        if (symbol.Source != MarketDataSource.Mt5Exness) return BadRequest(new ApiMessage("Paper costs can be configured only for MT5 Exness instruments."));
+        symbol.PaperCommissionPerLotPerSide = request.CommissionPerLotPerSide;
+        await database.SaveChangesAsync(cancellationToken);
+        return Ok(ToResponse(symbol));
+    }
+
     [HttpDelete("{id:int}")]
     public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
     {
@@ -65,9 +77,10 @@ public sealed class SymbolsController(EmaBotDbContext database, IInstrumentCatal
         return NoContent();
     }
 
-    private static MonitoredSymbolResponse ToResponse(MonitoredSymbol symbol) => new(symbol.Id, symbol.Source, MarketDataSourceLabels.For(symbol.Source), symbol.Symbol, symbol.DisplayName, symbol.BaseAsset, symbol.QuoteAsset, symbol.IsEnabled);
+    private static MonitoredSymbolResponse ToResponse(MonitoredSymbol symbol) => new(symbol.Id, symbol.Source, MarketDataSourceLabels.For(symbol.Source), symbol.Symbol, symbol.DisplayName, symbol.BaseAsset, symbol.QuoteAsset, symbol.IsEnabled, symbol.PaperCommissionPerLotPerSide);
 }
 
 public sealed record AddMonitoredSymbolRequest(string BrokerSymbol);
 public sealed record SetEnabledRequest(bool IsEnabled);
-public sealed record MonitoredSymbolResponse(int Id, MarketDataSource Source, string SourceLabel, string Symbol, string? DisplayName, string? BaseAsset, string? QuoteAsset, bool IsEnabled);
+public sealed record SetPaperCostsRequest(decimal CommissionPerLotPerSide);
+public sealed record MonitoredSymbolResponse(int Id, MarketDataSource Source, string SourceLabel, string Symbol, string? DisplayName, string? BaseAsset, string? QuoteAsset, bool IsEnabled, decimal? PaperCommissionPerLotPerSide);

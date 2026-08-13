@@ -7,14 +7,15 @@ using Microsoft.EntityFrameworkCore;
 namespace EmaBot.Api.Services;
 
 public sealed record PaperRuntimeSnapshot(int SessionId, string ConnectionState, DateTimeOffset? LastUpdateUtc, IReadOnlyDictionary<string, PaperSymbolRuntimeSnapshot> Symbols);
-public sealed record PaperSymbolRuntimeSnapshot(decimal? LatestPrice, DateTimeOffset? LastMarketEventUtc, DateTimeOffset? LastClosedCandleUtc, IndicatorSnapshot? Indicator, SignalDirection? PendingDirection, PaperTrade? OpenTrade);
+public sealed record PaperSymbolRuntimeSnapshot(decimal? LatestPrice, decimal? LatestBid, decimal? LatestAsk, DateTimeOffset? LastMarketEventUtc, DateTimeOffset? LastClosedCandleUtc, IndicatorSnapshot? Indicator, SignalDirection? PendingDirection, PaperTrade? OpenTrade);
 
 public sealed class PaperTradingCoordinator(
     IServiceScopeFactory scopeFactory,
     IHistoricalMarketDataProviderResolver historicalProviders,
     IMarketBarStreamProvider stream,
     EmaSignalEngine strategy,
-    ILogger<PaperTradingCoordinator> logger) : IHostedService
+    ILogger<PaperTradingCoordinator> logger,
+    EmaBot.Api.Mt5Bridge.IMt5TradeCalculator? calculator = null) : IHostedService
 {
     private readonly SemaphoreSlim gate = new(1, 1);
     private RuntimeSession? active;
@@ -76,7 +77,7 @@ public sealed class PaperTradingCoordinator(
         try
         {
             if (active is null || active.Session.Id != sessionId) throw new InvalidOperationException("That paper session is not running in this application.");
-            if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && !symbol.LatestPrice.HasValue)) throw new InvalidOperationException("An open paper position has no reliable latest market price and cannot be stopped safely.");
+            if (active.Symbols.Values.Any(symbol => symbol.OpenTrade is not null && (active.Session.MarketDataSource == MarketDataSource.Mt5Exness ? ExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) is null : !symbol.LatestPrice.HasValue))) throw new InvalidOperationException("An open paper position has no reliable executable market price and cannot be stopped safely.");
             state = active; state.AcceptSignals = false; state.Cancellation.Cancel(); active = null;
         }
         finally { gate.Release(); }
@@ -87,7 +88,7 @@ public sealed class PaperTradingCoordinator(
     public PaperRuntimeSnapshot? GetRuntimeSnapshot()
     {
         var state = active;
-        return state is null ? null : new PaperRuntimeSnapshot(state.Session.Id, state.ConnectionState, state.LastUpdateUtc, state.Symbols.ToDictionary(pair => pair.Key, pair => new PaperSymbolRuntimeSnapshot(pair.Value.LatestPrice, pair.Value.LastMarketEventUtc, pair.Value.LastClosedCandleUtc, pair.Value.Indicator, pair.Value.Pending?.Direction, pair.Value.OpenTrade)));
+        return state is null ? null : new PaperRuntimeSnapshot(state.Session.Id, state.ConnectionState, state.LastUpdateUtc, state.Symbols.ToDictionary(pair => pair.Key, pair => new PaperSymbolRuntimeSnapshot(pair.Value.LatestPrice, pair.Value.LatestBid, pair.Value.LatestAsk, pair.Value.LastMarketEventUtc, pair.Value.LastClosedCandleUtc, pair.Value.Indicator, pair.Value.Pending?.Direction, pair.Value.OpenTrade)));
     }
 
     private async Task WarmupAsync(RuntimeSession state, CancellationToken token)
@@ -117,7 +118,13 @@ public sealed class PaperTradingCoordinator(
     private async Task StopAfterWorkerAsync(RuntimeSession state, CancellationToken token)
     {
         if (state.Worker is not null) await ObserveWorkerAsync(state.Worker);
-        foreach (var symbol in state.Symbols.Values.Where(symbol => symbol.OpenTrade is not null)) await CloseTradeAsync(state, symbol, symbol.LatestPrice!.Value, PaperExitReason.SessionStopped, DateTimeOffset.UtcNow, token);
+        foreach (var symbol in state.Symbols.Values.Where(symbol => symbol.OpenTrade is not null))
+        {
+            var price = state.Session.MarketDataSource == MarketDataSource.Mt5Exness
+                ? ExecutablePrice(symbol.OpenTrade!.Direction, symbol.LatestBid, symbol.LatestAsk) ?? throw new InvalidOperationException("An open paper position has no reliable executable Bid/Ask quote and cannot be stopped safely.")
+                : symbol.LatestPrice!.Value;
+            await CloseTradeAsync(state, symbol, price, PaperExitReason.SessionStopped, DateTimeOffset.UtcNow, token);
+        }
         await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Stopped; session.StoppedAtUtc = DateTimeOffset.UtcNow; });
         state.Cancellation.Dispose();
     }
@@ -159,14 +166,15 @@ public sealed class PaperTradingCoordinator(
         await gate.WaitAsync(token);
         try
         {
-            runtime.LatestPrice = update.Close; runtime.LastMarketEventUtc = update.EventTimeUtc; state.LastUpdateUtc = update.EventTimeUtc;
-            if (runtime.Pending is not null && runtime.OpenTrade is null && state.AcceptSignals)
+            runtime.LatestPrice = update.Close; runtime.LatestBid = update.Bid; runtime.LatestAsk = update.Ask; runtime.LastMarketEventUtc = update.EventTimeUtc; state.LastUpdateUtc = update.EventTimeUtc;
+            var isMt5Paper = state.Session.MarketDataSource == MarketDataSource.Mt5Exness;
+            if (runtime.Pending is not null && runtime.OpenTrade is null && state.AcceptSignals && (!isMt5Paper || (!update.IsClosed && update.Bid is > 0 && update.Ask is > 0)))
             {
                 var expectedOpen = runtime.Pending.SignalTimeUtc.AddMilliseconds(1);
                 if (update.OpenTimeUtc == expectedOpen) await EnterPendingAsync(state, runtime, update, token);
                 else if (update.OpenTimeUtc > expectedOpen) { runtime.Pending = null; await PersistRuntimeSymbolAsync(runtime, token); logger.LogInformation("Expired stale pending paper entry for {Symbol}.", runtime.Symbol.Symbol); }
             }
-            if (runtime.OpenTrade is not null) await ManageOpenTradeAsync(state, runtime, update, token);
+            if (runtime.OpenTrade is not null && (!isMt5Paper || (!update.IsClosed && update.Bid is > 0 && update.Ask is > 0))) await ManageOpenTradeAsync(state, runtime, update, token);
             if (!update.IsClosed || runtime.LastClosedCandleUtc == update.CloseTimeUtc) return;
             if (runtime.LastClosedCandleUtc is { } previousClose && update.OpenTimeUtc > previousClose.AddMilliseconds(1)) await ResyncCandlesAsync(state, runtime, update, token);
             runtime.LastClosedCandleUtc = update.CloseTimeUtc;
@@ -207,6 +215,12 @@ public sealed class PaperTradingCoordinator(
 
     private async Task EnterPendingAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
     {
+        if (state.Session.MarketDataSource == MarketDataSource.Mt5Exness)
+        {
+            await EnterMt5PendingAsync(state, runtime, update, token);
+            return;
+        }
+
         var pending = runtime.Pending!; runtime.Pending = null;
         if ((pending.Direction == SignalDirection.Long && pending.Stop >= update.Open) || (pending.Direction == SignalDirection.Short && pending.Stop <= update.Open)) { await UpdateSessionAsync(state.Session.Id, session => session.InvalidStopLoss++); await PersistRuntimeSymbolAsync(runtime, token); return; }
         if (state.Session.MaxStopDistancePercent > 0 && TradeMath.StopDistancePercent(update.Open, pending.Stop) > state.Session.MaxStopDistancePercent) { await UpdateSessionAsync(state.Session.Id, session => session.RejectedByStopDistance++); await PersistRuntimeSymbolAsync(runtime, token); return; }
@@ -223,8 +237,118 @@ public sealed class PaperTradingCoordinator(
         logger.LogInformation("Paper trade entered for {Symbol} at {Price}.", trade.Symbol, trade.EntryPrice);
     }
 
+    private async Task EnterMt5PendingAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
+    {
+        var pending = runtime.Pending!;
+        runtime.Pending = null;
+        var entry = ExecutablePrice(pending.Direction, update.Bid, update.Ask);
+        if (entry is null || runtime.Symbol.ContractSize is not > 0m || runtime.Symbol.CommissionPerLotPerSide is null)
+        {
+            await FaultSessionAsync(state, "MT5 Paper entry is missing an executable quote or broker economics snapshot.", token);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+
+        if (!AllowsDirection(runtime.Symbol.TradeMode, pending.Direction))
+        {
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+
+        if ((pending.Direction == SignalDirection.Long && pending.Stop >= entry.Value) || (pending.Direction == SignalDirection.Short && pending.Stop <= entry.Value))
+        {
+            await UpdateSessionAsync(state.Session.Id, session => session.InvalidStopLoss++);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+        if (state.Session.MaxStopDistancePercent > 0 && TradeMath.StopDistancePercent(entry.Value, pending.Stop) > state.Session.MaxStopDistancePercent)
+        {
+            await UpdateSessionAsync(state.Session.Id, session => session.RejectedByStopDistance++);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+
+        var target = TradeMath.InitialTarget(entry.Value, pending.Stop, pending.Direction, state.Session.RiskReward);
+        if (!StopsAreValid(runtime.Symbol, pending.Direction, entry.Value, pending.Stop, target))
+        {
+            await UpdateSessionAsync(state.Session.Id, session => session.InvalidStopLoss++);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+
+        Mt5PaperSize size;
+        try { size = await SizeMt5PositionAsync(state, runtime.Symbol, pending.Direction, entry.Value, token); }
+        catch (InvalidOperationException)
+        {
+            await UpdateSessionAsync(state.Session.Id, session => session.RejectedByInsufficientMargin++);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+        catch (Exception)
+        {
+            await FaultSessionAsync(state, "MT5 margin calculation is unavailable; no Paper trade was created.", token);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+
+        var commission = 2m * size.Lots * runtime.Symbol.CommissionPerLotPerSide.Value;
+        if (commission > 0m && (runtime.Symbol.TickSize is not > 0m || runtime.Symbol.TickValueProfit is not > 0m))
+        {
+            await UpdateSessionAsync(state.Session.Id, session => session.RejectedByTradingCosts++);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+        try
+        {
+            var expected = await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol, pending.Direction.ToString(), size.Lots, entry.Value, target), token);
+            if (expected.Profit - commission <= 0m)
+            {
+                await UpdateSessionAsync(state.Session.Id, session => session.RejectedByTradingCosts++);
+                await PersistRuntimeSymbolAsync(runtime, token);
+                return;
+            }
+        }
+        catch (Exception)
+        {
+            await FaultSessionAsync(state, "MT5 profit calculation is unavailable; no Paper trade was created.", token);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+
+        var trade = new PaperTrade
+        {
+            PaperSessionId = state.Session.Id, PaperSessionSymbolId = runtime.Symbol.Id, Symbol = runtime.Symbol.Symbol, Interval = state.Session.Interval,
+            Status = PaperTradeStatus.Open, Direction = pending.Direction, CrossoverTimeUtc = pending.CrossoverTimeUtc, SignalTimeUtc = pending.SignalTimeUtc,
+            EntryTimeUtc = update.EventTimeUtc, EntryPrice = entry.Value, Quantity = size.Lots * runtime.Symbol.ContractSize.Value,
+            InitialStopLoss = pending.Stop, CurrentStopLoss = pending.Stop, StopSourceType = pending.StopSource, StopSourceTimeUtc = pending.StopTimeUtc,
+            OriginalTakeProfit = target, CurrentTakeProfit = target, SignalOpen = pending.Snapshot.Open, SignalClose = pending.Snapshot.Close,
+            SignalEma9 = pending.Snapshot.Ema9, SignalEma15 = pending.Snapshot.Ema15, SignalEma100 = pending.Snapshot.Ema100,
+            SignalGapPercent = pending.Snapshot.GapPercent, SignalGapState = pending.Snapshot.GapState, IsReentry = pending.IsReentry,
+            TrendRegimeCrossoverTimeUtc = pending.TrendRegimeCrossoverTimeUtc, Lots = size.Lots, EntryBid = update.Bid, EntryAsk = update.Ask,
+            EntrySpread = update.Ask!.Value - update.Bid!.Value, RequiredMargin = size.RequiredMargin, MarginUsed = size.RequiredMargin,
+            AccountEquityAtEntry = state.Session.CurrentBalance, RoundTripCommission = commission, GrossPnl = 0m, NetPnl = -commission
+        };
+        runtime.OpenTrade = trade;
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        database.PaperTrades.Add(trade);
+        database.PaperTradeEvents.Add(new PaperTradeEvent { PaperTrade = trade, TimeUtc = update.EventTimeUtc, Type = PaperTradeEventType.Entry, MarketPrice = entry.Value });
+        await database.SaveChangesAsync(token);
+        state.Session.CurrentBalance -= commission;
+        state.Session.UsedMargin += size.RequiredMargin;
+        await UpdateSessionAsync(state.Session.Id, session => { session.CurrentBalance -= commission; session.UsedMargin += size.RequiredMargin; session.TotalTradingCosts += commission; });
+        await PersistRuntimeSymbolAsync(runtime, token);
+        logger.LogInformation("MT5 Paper trade entered for {Symbol} at executable {Price}.", trade.Symbol, trade.EntryPrice);
+    }
+
     private async Task ManageOpenTradeAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
     {
+        if (state.Session.MarketDataSource == MarketDataSource.Mt5Exness)
+        {
+            await ManageMt5OpenTradeAsync(state, runtime, update, token);
+            return;
+        }
+
         var trade = runtime.OpenTrade!; var direction = trade.Direction;
         // Only live observed prices participate in management; kline highs/lows can predate a reconnect.
         var best = direction == SignalDirection.Long ? Math.Max(trade.EntryPrice + trade.MfePrice, update.Close) : Math.Min(trade.EntryPrice - trade.MfePrice, update.Close);
@@ -242,8 +366,66 @@ public sealed class PaperTradingCoordinator(
         if (improved) { var old = trade.CurrentStopLoss; trade.CurrentStopLoss = next; await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = update.EventTimeUtc, Type = PaperTradeEventType.TrailingStopMoved, MarketPrice = update.Close, OldStop = old, NewStop = next, ProgressPercent = progress }, token); }
     }
 
+    private async Task ManageMt5OpenTradeAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
+    {
+        var trade = runtime.OpenTrade!;
+        var exit = ExecutablePrice(trade.Direction, update.Bid, update.Ask);
+        if (exit is null) return;
+        var direction = trade.Direction;
+        var best = direction == SignalDirection.Long ? Math.Max(trade.EntryPrice + trade.MfePrice, exit.Value) : Math.Min(trade.EntryPrice - trade.MfePrice, exit.Value);
+        trade.MfePrice = direction == SignalDirection.Long ? Math.Max(0m, best - trade.EntryPrice) : Math.Max(0m, trade.EntryPrice - best);
+        trade.MfePercent = trade.EntryPrice == 0m ? 0m : trade.MfePrice / trade.EntryPrice * 100m;
+        var adverse = direction == SignalDirection.Long ? Math.Min(trade.EntryPrice - trade.MaePrice, exit.Value) : Math.Max(trade.EntryPrice + trade.MaePrice, exit.Value);
+        trade.MaePrice = direction == SignalDirection.Long ? Math.Max(0m, trade.EntryPrice - adverse) : Math.Max(0m, adverse - trade.EntryPrice);
+        trade.MaePercent = trade.EntryPrice == 0m ? 0m : trade.MaePrice / trade.EntryPrice * 100m;
+        if ((direction == SignalDirection.Long && exit <= trade.CurrentStopLoss) || (direction == SignalDirection.Short && exit >= trade.CurrentStopLoss))
+        {
+            await CloseTradeAsync(state, runtime, exit.Value, trade.CurrentStopLoss == trade.InitialStopLoss ? PaperExitReason.InitialStopLoss : PaperExitReason.TrailingStop, update.EventTimeUtc, token);
+            return;
+        }
+        var progress = TradeMath.Progress(trade.EntryPrice, trade.OriginalTakeProfit, best, direction);
+        trade.BestFavorableProgressPercent = Math.Max(trade.BestFavorableProgressPercent, progress);
+        if (state.Session.TrailingStopEnabled && progress >= 70m && !trade.TakeProfitExtended)
+        {
+            var old = trade.CurrentTakeProfit;
+            trade.CurrentTakeProfit = TradeMath.ExtendedTarget(trade.EntryPrice, trade.OriginalTakeProfit, direction);
+            trade.TakeProfitExtended = true;
+            await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = update.EventTimeUtc, Type = PaperTradeEventType.TakeProfitExtended, MarketPrice = exit.Value, OldTakeProfit = old, NewTakeProfit = trade.CurrentTakeProfit, ProgressPercent = progress }, token);
+        }
+        if ((direction == SignalDirection.Long && exit >= trade.CurrentTakeProfit) || (direction == SignalDirection.Short && exit <= trade.CurrentTakeProfit))
+        {
+            await CloseTradeAsync(state, runtime, exit.Value, PaperExitReason.TakeProfit, update.EventTimeUtc, token);
+            return;
+        }
+        if (!state.Session.TrailingStopEnabled) return;
+        var lockPercent = TradeMath.LockPercent(progress);
+        if (lockPercent == 0m) return;
+        var normal = TradeMath.TrailingStop(trade.EntryPrice, trade.OriginalTakeProfit, direction, lockPercent);
+        decimal economicBreakEven;
+        try { economicBreakEven = await EconomicBreakEvenAsync(runtime.Symbol, trade, token); }
+        catch (Exception)
+        {
+            await FaultSessionAsync(state, "MT5 profit calculation is unavailable while managing a Paper trade.", token);
+            return;
+        }
+        var next = direction == SignalDirection.Long ? Math.Max(normal, economicBreakEven) : Math.Min(normal, economicBreakEven);
+        var improved = direction == SignalDirection.Long ? next > trade.CurrentStopLoss : next < trade.CurrentStopLoss;
+        if (improved)
+        {
+            var old = trade.CurrentStopLoss;
+            trade.CurrentStopLoss = next;
+            await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = update.EventTimeUtc, Type = PaperTradeEventType.TrailingStopMoved, MarketPrice = exit.Value, OldStop = old, NewStop = next, ProgressPercent = progress }, token);
+        }
+    }
+
     private async Task CloseTradeAsync(RuntimeSession state, RuntimeSymbol runtime, decimal exit, PaperExitReason reason, DateTimeOffset at, CancellationToken token)
     {
+        if (state.Session.MarketDataSource == MarketDataSource.Mt5Exness)
+        {
+            await CloseMt5TradeAsync(state, runtime, exit, reason, at, token);
+            return;
+        }
+
         var trade = runtime.OpenTrade!; trade.Status = PaperTradeStatus.Closed; trade.ExitPrice = exit; trade.ExitTimeUtc = at; trade.FinalStopLoss = trade.CurrentStopLoss; trade.FinalTakeProfit = trade.CurrentTakeProfit; trade.ExitReason = reason; trade.ExitFeeUsdt = TradeMath.Fee(exit, trade.Quantity, state.Session.FeePercentPerSide); trade.TotalFeesUsdt = trade.EntryFeeUsdt + trade.ExitFeeUsdt.Value; trade.GrossPnlUsdt = TradeMath.GrossPnl(trade.EntryPrice, exit, trade.Quantity, trade.Direction); trade.NetPnlUsdt = trade.GrossPnlUsdt - trade.TotalFeesUsdt; trade.NetPnlPercent = trade.NetPnlUsdt / trade.EntryNotionalUsdt * 100m;
         runtime.ReentryEligible = (reason is PaperExitReason.InitialStopLoss or PaperExitReason.TrailingStop) && !trade.IsReentry;
         if (runtime.ReentryEligible) { runtime.TrendRegimeDirection = trade.Direction; runtime.TrendRegimeCrossoverTimeUtc = trade.TrendRegimeCrossoverTimeUtc ?? trade.CrossoverTimeUtc; }
@@ -251,6 +433,27 @@ public sealed class PaperTradingCoordinator(
         if (state.Session.PositionSizingMode == PositionSizingMode.MarginPercent) { state.Session.CurrentBalanceUsdt += trade.NetPnlUsdt; state.Session.UsedMarginUsdt = Math.Max(0m, state.Session.UsedMarginUsdt - (trade.MarginUsedUsdt ?? 0m)); }
         await UpdateSessionAsync(state.Session.Id, session => { session.CompletedTrades++; session.NetPnlUsdt += trade.NetPnlUsdt; session.TotalFeesUsdt += trade.TotalFeesUsdt; if (session.PositionSizingMode == PositionSizingMode.MarginPercent) { session.CurrentBalanceUsdt += trade.NetPnlUsdt; session.UsedMarginUsdt = Math.Max(0m, session.UsedMarginUsdt - (trade.MarginUsedUsdt ?? 0m)); } }); runtime.OpenTrade = null; await PersistRuntimeSymbolAsync(runtime, token);
         logger.LogInformation("Paper trade {TradeId} exited as {Reason}.", trade.Id, reason);
+    }
+
+    private async Task CloseMt5TradeAsync(RuntimeSession state, RuntimeSymbol runtime, decimal exit, PaperExitReason reason, DateTimeOffset at, CancellationToken token)
+    {
+        var trade = runtime.OpenTrade!;
+        EmaBot.Api.Mt5Bridge.Mt5ProfitCalculationPayload profit;
+        try { profit = await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol, trade.Direction.ToString(), trade.Lots ?? 0m, trade.EntryPrice, exit), token); }
+        catch (Exception) { await FaultSessionAsync(state, "MT5 profit calculation is unavailable; the open Paper trade was preserved for diagnosis.", token); return; }
+        trade.Status = PaperTradeStatus.Closed; trade.ExitPrice = exit; trade.ExitTimeUtc = at; trade.FinalStopLoss = trade.CurrentStopLoss; trade.FinalTakeProfit = trade.CurrentTakeProfit; trade.ExitReason = reason;
+        trade.ExitBid = runtime.LatestBid; trade.ExitAsk = runtime.LatestAsk; trade.ExitSpread = runtime.LatestAsk - runtime.LatestBid;
+        trade.GrossPnl = profit.Profit; trade.NetPnl = profit.Profit - (trade.RoundTripCommission ?? 0m);
+        trade.NetPnlPercent = trade.AccountEquityAtEntry is > 0m ? trade.NetPnl.Value / trade.AccountEquityAtEntry.Value * 100m : 0m;
+        runtime.ReentryEligible = (reason is PaperExitReason.InitialStopLoss or PaperExitReason.TrailingStop) && !trade.IsReentry;
+        if (runtime.ReentryEligible) { runtime.TrendRegimeDirection = trade.Direction; runtime.TrendRegimeCrossoverTimeUtc = trade.TrendRegimeCrossoverTimeUtc ?? trade.CrossoverTimeUtc; }
+        await PersistTradeChangeAsync(trade, new PaperTradeEvent { TimeUtc = at, Type = PaperTradeEventType.Exit, MarketPrice = exit }, token);
+        state.Session.CurrentBalance += profit.Profit;
+        state.Session.UsedMargin = Math.Max(0m, state.Session.UsedMargin - (trade.MarginUsed ?? 0m));
+        await UpdateSessionAsync(state.Session.Id, session => { session.CompletedTrades++; session.CurrentBalance += profit.Profit; session.UsedMargin = Math.Max(0m, session.UsedMargin - (trade.MarginUsed ?? 0m)); session.NetPnl += trade.NetPnl ?? 0m; });
+        runtime.OpenTrade = null;
+        await PersistRuntimeSymbolAsync(runtime, token);
+        logger.LogInformation("MT5 Paper trade {TradeId} exited as {Reason}.", trade.Id, reason);
     }
 
     private async Task RecordClosedCandleAsync(int sessionId, RuntimeSymbol runtime, IReadOnlyList<StrategyEvent> events, CancellationToken token)
@@ -262,12 +465,80 @@ public sealed class PaperTradingCoordinator(
     private async Task PersistRuntimeSymbolAsync(RuntimeSymbol runtime, CancellationToken token) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var symbol = await database.PaperSessionSymbols.SingleAsync(item => item.Id == runtime.Symbol.Id, token); symbol.LastKnownPrice = runtime.LatestPrice; symbol.LastMarketEventUtc = runtime.LastMarketEventUtc; symbol.LastProcessedClosedCandleUtc = runtime.LastClosedCandleUtc; symbol.TrendRegimeDirection = runtime.TrendRegimeDirection; symbol.TrendRegimeCrossoverTimeUtc = runtime.TrendRegimeCrossoverTimeUtc; symbol.ReentryEligible = runtime.ReentryEligible; symbol.ReentryConsumed = runtime.ReentryConsumed; ApplyPending(symbol, runtime.Pending); await database.SaveChangesAsync(token); }
     private async Task PersistTradeChangeAsync(PaperTrade runtimeTrade, PaperTradeEvent item, CancellationToken token) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var trade = await database.PaperTrades.SingleAsync(value => value.Id == runtimeTrade.Id, token); database.Entry(trade).CurrentValues.SetValues(runtimeTrade); item.PaperTradeId = trade.Id; database.PaperTradeEvents.Add(item); await database.SaveChangesAsync(token); }
     private async Task UpdateSessionAsync(int id, Action<PaperSession> change) { await using var scope = scopeFactory.CreateAsyncScope(); var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var session = await database.PaperSessions.SingleAsync(item => item.Id == id); change(session); await database.SaveChangesAsync(); }
+    private EmaBot.Api.Mt5Bridge.IMt5TradeCalculator Calculator() => calculator ?? throw new InvalidOperationException("MT5 trade calculation is not configured.");
+    private static decimal? ExecutablePrice(SignalDirection direction, decimal? bid, decimal? ask) => direction switch { SignalDirection.Long when ask is > 0m => ask, SignalDirection.Short when bid is > 0m => bid, _ => null };
+    private static bool AllowsDirection(InstrumentTradeMode? mode, SignalDirection direction) => mode switch { InstrumentTradeMode.Disabled or InstrumentTradeMode.CloseOnly => false, InstrumentTradeMode.LongOnly => direction == SignalDirection.Long, InstrumentTradeMode.ShortOnly => direction == SignalDirection.Short, _ => true };
+    private static bool StopsAreValid(PaperSessionSymbol symbol, SignalDirection direction, decimal entry, decimal stop, decimal target)
+    {
+        if (symbol.ContractSize is not > 0m || symbol.PointSize is not > 0m) return false;
+        var minimum = (symbol.StopsLevelPoints ?? 0) * symbol.PointSize.Value;
+        return direction == SignalDirection.Long
+            ? stop < entry && target > entry && entry - stop >= minimum && target - entry >= minimum
+            : stop > entry && target < entry && stop - entry >= minimum && entry - target >= minimum;
+    }
+    private async Task<Mt5PaperSize> SizeMt5PositionAsync(RuntimeSession state, PaperSessionSymbol symbol, SignalDirection direction, decimal entry, CancellationToken token)
+    {
+        if (symbol.VolumeMin is not > 0m || symbol.VolumeMax is not > 0m || symbol.VolumeStep is not > 0m) throw new InvalidOperationException("MT5 symbol volume rules are unavailable.");
+        var available = state.Session.CurrentBalance - state.Session.UsedMargin;
+        var budget = Math.Min(state.Session.CurrentBalance * state.Session.PaperMarginPerTradePercent / 100m, available);
+        if (budget <= 0m) throw new InvalidOperationException("Insufficient simulated free margin.");
+        decimal requested;
+        if (state.Session.PaperPositionSizingMode == PaperPositionSizingMode.FixedLots)
+        {
+            requested = state.Session.PaperFixedLots;
+            if (requested < symbol.VolumeMin || requested > symbol.VolumeMax) throw new InvalidOperationException("Configured fixed lots are outside the MT5 symbol limits.");
+            requested = NormalizeVolumeDown(requested, symbol);
+            if (requested < symbol.VolumeMin) throw new InvalidOperationException("Configured fixed lots are below the MT5 symbol minimum.");
+            var margin = await MarginAsync(symbol, direction, requested, entry, token);
+            if (margin > available) throw new InvalidOperationException("Insufficient simulated free margin.");
+            return new Mt5PaperSize(requested, margin);
+        }
+        var probe = symbol.VolumeMin.Value;
+        var probeMargin = await MarginAsync(symbol, direction, probe, entry, token);
+        if (probeMargin <= 0m || probeMargin > budget) throw new InvalidOperationException("Insufficient simulated free margin.");
+        requested = NormalizeVolumeDown(Math.Min(symbol.VolumeMax.Value, probe * budget / probeMargin), symbol);
+        for (var attempt = 0; attempt < 4 && requested >= symbol.VolumeMin; attempt++)
+        {
+            var margin = await MarginAsync(symbol, direction, requested, entry, token);
+            if (margin <= budget && margin <= available) return new Mt5PaperSize(requested, margin);
+            requested = NormalizeVolumeDown(requested - symbol.VolumeStep.Value, symbol);
+        }
+        throw new InvalidOperationException("No MT5 lot volume fits the simulated margin budget.");
+    }
+    private async Task<decimal> MarginAsync(PaperSessionSymbol symbol, SignalDirection direction, decimal lots, decimal entry, CancellationToken token)
+        => (await Calculator().CalculateMarginAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateMarginRequest(symbol.BrokerSymbol ?? symbol.Symbol, direction.ToString(), lots, entry), token)).RequiredMargin;
+    private static decimal NormalizeVolumeDown(decimal requested, PaperSessionSymbol symbol)
+    {
+        var step = symbol.VolumeStep!.Value; var minimum = symbol.VolumeMin!.Value;
+        var normalized = minimum + decimal.Floor((requested - minimum) / step) * step;
+        if (symbol.VolumeLimit is { } limit) normalized = Math.Min(normalized, limit);
+        return normalized;
+    }
+    private async Task<decimal> EconomicBreakEvenAsync(PaperSessionSymbol symbol, PaperTrade trade, CancellationToken token)
+    {
+        var commission = trade.RoundTripCommission ?? 0m;
+        var lots = trade.Lots ?? 0m;
+        if (commission == 0m) return trade.EntryPrice;
+        if (symbol.TickSize is not > 0m || symbol.TickValueProfit is not > 0m || lots <= 0m) throw new InvalidOperationException("Cannot establish commission-aware MT5 break-even.");
+        var delta = commission / (lots * (symbol.TickValueProfit.Value / symbol.TickSize.Value));
+        var candidate = trade.Direction == SignalDirection.Long ? trade.EntryPrice + delta : trade.EntryPrice - delta;
+        var profit = await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(symbol.BrokerSymbol ?? symbol.Symbol, trade.Direction.ToString(), lots, trade.EntryPrice, candidate), token);
+        if (profit.Profit - commission < 0m) throw new InvalidOperationException("MT5 break-even validation failed.");
+        return candidate;
+    }
+    private async Task FaultSessionAsync(RuntimeSession state, string message, CancellationToken token)
+    {
+        state.ConnectionState = "Degraded";
+        state.AcceptSignals = false;
+        await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = message; });
+    }
     private static TradingSettings Settings(PaperSession session) => new() { RiskReward = session.RiskReward, FixedOrderSizeUsdt = session.FixedOrderSizeUsdt, MinEmaGapPercent = session.MinEmaGapPercent, MaxStopDistancePercent = session.MaxStopDistancePercent, PositionSizingMode = session.PositionSizingMode, SimulatedAccountBalanceUsdt = session.CurrentBalanceUsdt, MarginPerTradePercent = session.MarginPerTradePercent, Leverage = session.Leverage, WaitForConfirmationCandle = session.WaitForConfirmationCandle, UseEma100Filter = session.UseEma100Filter, TrailingStopEnabled = session.TrailingStopEnabled, FeePercentPerSide = session.FeePercentPerSide };
     private static bool IsContinuation(IndicatorSnapshot snapshot, SignalDirection direction, TradingSettings settings) { var directional = direction == SignalDirection.Long ? snapshot.Ema9 > snapshot.Ema15 && snapshot.Close > snapshot.Ema9 && snapshot.Close > snapshot.Ema15 && snapshot.Close > snapshot.Open : snapshot.Ema9 < snapshot.Ema15 && snapshot.Close < snapshot.Ema9 && snapshot.Close < snapshot.Ema15 && snapshot.Close < snapshot.Open; if (!directional) return false; if (settings.UseEma100Filter && (!snapshot.Ema100.HasValue || (direction == SignalDirection.Long ? snapshot.Ema9 <= snapshot.Ema100 || snapshot.Ema15 <= snapshot.Ema100 : snapshot.Ema9 >= snapshot.Ema100 || snapshot.Ema15 >= snapshot.Ema100))) return false; return settings.MinEmaGapPercent == 0 || snapshot.GapPercent >= settings.MinEmaGapPercent; }
     private static void ClearPending(PaperSessionSymbol symbol) { symbol.PendingDirection = null; symbol.PendingCrossoverTimeUtc = null; symbol.PendingSignalTimeUtc = null; symbol.PendingStopPrice = null; symbol.PendingStopSourceType = null; symbol.PendingStopSourceTimeUtc = null; symbol.PendingSignalOpen = null; symbol.PendingSignalClose = null; symbol.PendingSignalEma9 = null; symbol.PendingSignalEma15 = null; symbol.PendingSignalEma100 = null; symbol.PendingSignalGapPercent = null; symbol.PendingSignalGapState = null; symbol.PendingIsReentry = false; symbol.PendingTrendRegimeCrossoverTimeUtc = null; }
     private static void ApplyPending(PaperSessionSymbol symbol, PendingEntry? pending) { ClearPending(symbol); if (pending is null) return; symbol.PendingDirection = pending.Direction; symbol.PendingCrossoverTimeUtc = pending.CrossoverTimeUtc; symbol.PendingSignalTimeUtc = pending.SignalTimeUtc; symbol.PendingStopPrice = pending.Stop; symbol.PendingStopSourceType = pending.StopSource; symbol.PendingStopSourceTimeUtc = pending.StopTimeUtc; symbol.PendingSignalOpen = pending.Snapshot.Open; symbol.PendingSignalClose = pending.Snapshot.Close; symbol.PendingSignalEma9 = pending.Snapshot.Ema9; symbol.PendingSignalEma15 = pending.Snapshot.Ema15; symbol.PendingSignalEma100 = pending.Snapshot.Ema100; symbol.PendingSignalGapPercent = pending.Snapshot.GapPercent; symbol.PendingSignalGapState = pending.Snapshot.GapState; symbol.PendingIsReentry = pending.IsReentry; symbol.PendingTrendRegimeCrossoverTimeUtc = pending.TrendRegimeCrossoverTimeUtc; }
 
     private sealed class RuntimeSession(PaperSession session, CancellationTokenSource cancellation) { public PaperSession Session { get; } = session; public CancellationTokenSource Cancellation { get; } = cancellation; public Dictionary<string, RuntimeSymbol> Symbols { get; } = new(StringComparer.Ordinal); public string ConnectionState { get; set; } = "Connecting"; public DateTimeOffset? LastUpdateUtc { get; set; } public bool AcceptSignals { get; set; } = true; public Task? Worker { get; set; } }
-    private sealed class RuntimeSymbol(PaperSessionSymbol symbol, PaperTrade? openTrade) { public PaperSessionSymbol Symbol { get; } = symbol; public List<Candle> Candles { get; } = []; public PaperTrade? OpenTrade { get; set; } = openTrade; public PendingEntry? Pending { get; set; } = symbol.PendingDirection is { } direction && symbol.PendingCrossoverTimeUtc is { } crossover && symbol.PendingSignalTimeUtc is { } signal && symbol.PendingStopPrice is { } stop && symbol.PendingStopSourceType is { } source && symbol.PendingStopSourceTimeUtc is { } stopTime ? new PendingEntry(direction, crossover, signal, stop, source, stopTime, new IndicatorSnapshot(signal, symbol.PendingSignalClose ?? 0m, symbol.PendingSignalEma9, symbol.PendingSignalEma15, symbol.PendingSignalEma100, symbol.PendingSignalGapPercent, symbol.PendingSignalGapState ?? GapState.Unchanged, TrendDirection.Neutral, symbol.PendingSignalOpen ?? 0m), symbol.PendingIsReentry, symbol.PendingTrendRegimeCrossoverTimeUtc) : null; public SignalDirection? TrendRegimeDirection { get; set; } = symbol.TrendRegimeDirection; public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; } = symbol.TrendRegimeCrossoverTimeUtc; public bool ReentryEligible { get; set; } = symbol.ReentryEligible; public bool ReentryConsumed { get; set; } = symbol.ReentryConsumed; public decimal? LatestPrice { get; set; } = symbol.LastKnownPrice; public DateTimeOffset? LastMarketEventUtc { get; set; } = symbol.LastMarketEventUtc; public DateTimeOffset? LastClosedCandleUtc { get; set; } = symbol.LastProcessedClosedCandleUtc; public IndicatorSnapshot? Indicator { get; set; } }
+    private sealed class RuntimeSymbol(PaperSessionSymbol symbol, PaperTrade? openTrade) { public PaperSessionSymbol Symbol { get; } = symbol; public List<Candle> Candles { get; } = []; public PaperTrade? OpenTrade { get; set; } = openTrade; public PendingEntry? Pending { get; set; } = symbol.PendingDirection is { } direction && symbol.PendingCrossoverTimeUtc is { } crossover && symbol.PendingSignalTimeUtc is { } signal && symbol.PendingStopPrice is { } stop && symbol.PendingStopSourceType is { } source && symbol.PendingStopSourceTimeUtc is { } stopTime ? new PendingEntry(direction, crossover, signal, stop, source, stopTime, new IndicatorSnapshot(signal, symbol.PendingSignalClose ?? 0m, symbol.PendingSignalEma9, symbol.PendingSignalEma15, symbol.PendingSignalEma100, symbol.PendingSignalGapPercent, symbol.PendingSignalGapState ?? GapState.Unchanged, TrendDirection.Neutral, symbol.PendingSignalOpen ?? 0m), symbol.PendingIsReentry, symbol.PendingTrendRegimeCrossoverTimeUtc) : null; public SignalDirection? TrendRegimeDirection { get; set; } = symbol.TrendRegimeDirection; public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; } = symbol.TrendRegimeCrossoverTimeUtc; public bool ReentryEligible { get; set; } = symbol.ReentryEligible; public bool ReentryConsumed { get; set; } = symbol.ReentryConsumed; public decimal? LatestPrice { get; set; } = symbol.LastKnownPrice; public decimal? LatestBid { get; set; } public decimal? LatestAsk { get; set; } public DateTimeOffset? LastMarketEventUtc { get; set; } = symbol.LastMarketEventUtc; public DateTimeOffset? LastClosedCandleUtc { get; set; } = symbol.LastProcessedClosedCandleUtc; public IndicatorSnapshot? Indicator { get; set; } }
     private sealed record PendingEntry(SignalDirection Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, decimal Stop, StopSourceType StopSource, DateTimeOffset StopTimeUtc, IndicatorSnapshot Snapshot, bool IsReentry, DateTimeOffset? TrendRegimeCrossoverTimeUtc);
+    private sealed record Mt5PaperSize(decimal Lots, decimal RequiredMargin);
 }

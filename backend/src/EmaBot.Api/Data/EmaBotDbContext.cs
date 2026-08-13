@@ -41,6 +41,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(symbol => symbol.DisplayName).HasMaxLength(256);
             entity.Property(symbol => symbol.BaseAsset).HasMaxLength(32);
             entity.Property(symbol => symbol.QuoteAsset).HasMaxLength(16);
+            entity.Property(symbol => symbol.PaperCommissionPerLotPerSide).HasPrecision(18, 8);
         });
 
         builder.Entity<TradingSettings>(entity =>
@@ -56,6 +57,9 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(settings => settings.MarginPerTradePercent).HasPrecision(8, 4);
             entity.Property(settings => settings.Leverage).HasPrecision(8, 4);
             entity.Property(settings => settings.FeePercentPerSide).HasPrecision(8, 4);
+            entity.Property(settings => settings.PaperFixedLots).HasPrecision(18, 8);
+            entity.Property(settings => settings.PaperMarginPerTradePercent).HasPrecision(8, 4);
+            entity.Property(settings => settings.PaperStartingBalance).HasPrecision(18, 8);
         });
         builder.Entity<BacktestRun>(entity => { entity.Property(run => run.MarketDataSource).HasConversion<string>().HasMaxLength(32).HasDefaultValue(MarketDataSource.LegacyBinance); entity.Property(run => run.Symbol).HasMaxLength(64); entity.Property(run => run.Interval).HasMaxLength(8); entity.Property(run => run.MinEmaGapPercent).HasPrecision(8, 4); entity.Property(run => run.MaxStopDistancePercent).HasPrecision(8, 4); entity.Property(run => run.StartingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.EndingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.MarginPerTradePercent).HasPrecision(8, 4); entity.Property(run => run.Leverage).HasPrecision(8, 4); entity.HasMany(run => run.Trades).WithOne(trade => trade.BacktestRun!).HasForeignKey(trade => trade.BacktestRunId).OnDelete(DeleteBehavior.Cascade); });
         builder.Entity<BacktestTrade>(entity => { entity.Property(trade => trade.AccountEquityAtEntryUsdt).HasPrecision(18, 8); entity.Property(trade => trade.MarginUsedUsdt).HasPrecision(18, 8); entity.Property(trade => trade.Leverage).HasPrecision(8, 4); entity.Property(trade => trade.SignalOpen).HasPrecision(18, 8); entity.HasIndex(trade => trade.BacktestRunId); entity.HasMany(trade => trade.Events).WithOne(item => item.BacktestTrade!).HasForeignKey(item => item.BacktestTradeId).OnDelete(DeleteBehavior.Cascade); });
@@ -72,6 +76,14 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(session => session.MarginPerTradePercent).HasPrecision(8, 4);
             entity.Property(session => session.Leverage).HasPrecision(8, 4);
             entity.Property(session => session.UsedMarginUsdt).HasPrecision(18, 8);
+            entity.Property(session => session.AccountCurrency).HasMaxLength(16).HasDefaultValue("USDT");
+            entity.Property(session => session.PaperFixedLots).HasPrecision(18, 8);
+            entity.Property(session => session.PaperMarginPerTradePercent).HasPrecision(8, 4);
+            entity.Property(session => session.StartingBalance).HasPrecision(18, 8);
+            entity.Property(session => session.CurrentBalance).HasPrecision(18, 8);
+            entity.Property(session => session.UsedMargin).HasPrecision(18, 8);
+            entity.Property(session => session.NetPnl).HasPrecision(18, 8);
+            entity.Property(session => session.TotalTradingCosts).HasPrecision(18, 8);
             entity.HasIndex(session => session.Status);
             entity.HasMany(session => session.Symbols).WithOne(symbol => symbol.PaperSession!).HasForeignKey(symbol => symbol.PaperSessionId).OnDelete(DeleteBehavior.Cascade);
             entity.HasMany(session => session.Trades).WithOne(trade => trade.PaperSession!).HasForeignKey(trade => trade.PaperSessionId).OnDelete(DeleteBehavior.Cascade);
@@ -79,6 +91,17 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
         builder.Entity<PaperSessionSymbol>(entity =>
         {
             entity.Property(symbol => symbol.Symbol).HasMaxLength(32);
+            entity.Property(symbol => symbol.BrokerSymbol).HasMaxLength(64).UseCollation("utf8mb4_bin");
+            entity.Property(symbol => symbol.ContractSize).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.VolumeMin).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.VolumeMax).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.VolumeStep).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.VolumeLimit).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.TickSize).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.TickValueProfit).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.TickValueLoss).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.PointSize).HasPrecision(18, 8);
+            entity.Property(symbol => symbol.CommissionPerLotPerSide).HasPrecision(18, 8);
             entity.HasIndex(symbol => new { symbol.PaperSessionId, symbol.Symbol }).IsUnique();
             entity.HasMany(symbol => symbol.Trades).WithOne(trade => trade.PaperSessionSymbol!).HasForeignKey(trade => trade.PaperSessionSymbolId).OnDelete(DeleteBehavior.Restrict);
         });
@@ -90,6 +113,19 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(trade => trade.MarginUsedUsdt).HasPrecision(18, 8);
             entity.Property(trade => trade.Leverage).HasPrecision(8, 4);
             entity.Property(trade => trade.SignalOpen).HasPrecision(18, 8);
+            entity.Property(trade => trade.Lots).HasPrecision(18, 8);
+            entity.Property(trade => trade.EntryBid).HasPrecision(18, 8);
+            entity.Property(trade => trade.EntryAsk).HasPrecision(18, 8);
+            entity.Property(trade => trade.EntrySpread).HasPrecision(18, 8);
+            entity.Property(trade => trade.ExitBid).HasPrecision(18, 8);
+            entity.Property(trade => trade.ExitAsk).HasPrecision(18, 8);
+            entity.Property(trade => trade.ExitSpread).HasPrecision(18, 8);
+            entity.Property(trade => trade.RequiredMargin).HasPrecision(18, 8);
+            entity.Property(trade => trade.RoundTripCommission).HasPrecision(18, 8);
+            entity.Property(trade => trade.GrossPnl).HasPrecision(18, 8);
+            entity.Property(trade => trade.NetPnl).HasPrecision(18, 8);
+            entity.Property(trade => trade.AccountEquityAtEntry).HasPrecision(18, 8);
+            entity.Property(trade => trade.MarginUsed).HasPrecision(18, 8);
             entity.HasIndex(trade => new { trade.PaperSessionSymbolId, trade.Status });
             entity.HasMany(trade => trade.Events).WithOne(item => item.PaperTrade!).HasForeignKey(item => item.PaperTradeId).OnDelete(DeleteBehavior.Cascade);
         });

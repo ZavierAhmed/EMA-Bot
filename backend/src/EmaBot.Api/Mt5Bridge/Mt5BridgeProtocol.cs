@@ -8,13 +8,13 @@ public static class Mt5BridgeProtocol
     public const int ProtocolVersion = 1;
     public static readonly IReadOnlySet<Mt5BridgeOperation> AllowedRequestOperations = new HashSet<Mt5BridgeOperation>
     {
-        Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote, Mt5BridgeOperation.GetLatestBars, Mt5BridgeOperation.GetBarsRange, Mt5BridgeOperation.GetBarSnapshot
+        Mt5BridgeOperation.Ping, Mt5BridgeOperation.GetAccount, Mt5BridgeOperation.GetInstruments, Mt5BridgeOperation.GetInstrument, Mt5BridgeOperation.GetQuote, Mt5BridgeOperation.GetLatestBars, Mt5BridgeOperation.GetBarsRange, Mt5BridgeOperation.GetBarSnapshot, Mt5BridgeOperation.CalculateMargin, Mt5BridgeOperation.CalculateProfit
     };
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter() } };
 }
 
 public enum Mt5BridgeFrameKind { Hello, HelloAck, Heartbeat, Request, Response, Error }
-public enum Mt5BridgeOperation { Hello, Heartbeat, Ping, GetAccount, GetInstruments, GetInstrument, GetQuote, GetLatestBars, GetBarsRange, GetBarSnapshot }
+public enum Mt5BridgeOperation { Hello, Heartbeat, Ping, GetAccount, GetInstruments, GetInstrument, GetQuote, GetLatestBars, GetBarsRange, GetBarSnapshot, CalculateMargin, CalculateProfit }
 
 public sealed record Mt5BridgeEnvelope(int ProtocolVersion, Mt5BridgeFrameKind Kind, Mt5BridgeOperation Operation, Guid? RequestId, DateTimeOffset SentAtUtc, JsonElement? Payload)
 {
@@ -36,8 +36,12 @@ public sealed record Mt5QuotePayload(string BrokerSymbol, DateTimeOffset TimeUtc
 public sealed record Mt5GetLatestBarsRequest(string BrokerSymbol, string Timeframe, int Count);
 public sealed record Mt5GetBarsRangeRequest(string BrokerSymbol, string Timeframe, long StartUnixSeconds, long EndUnixSeconds);
 public sealed record Mt5GetBarSnapshotRequest(string BrokerSymbol, string Timeframe);
+public sealed record Mt5CalculateMarginRequest(string BrokerSymbol, string Direction, decimal VolumeLots, decimal OpenPrice);
+public sealed record Mt5CalculateProfitRequest(string BrokerSymbol, string Direction, decimal VolumeLots, decimal OpenPrice, decimal ClosePrice);
+public sealed record Mt5MarginCalculationPayload(string BrokerSymbol, string Direction, decimal VolumeLots, decimal OpenPrice, decimal RequiredMargin, string AccountCurrency);
+public sealed record Mt5ProfitCalculationPayload(string BrokerSymbol, string Direction, decimal VolumeLots, decimal OpenPrice, decimal ClosePrice, decimal Profit, string AccountCurrency);
 public sealed record Mt5BarPayload(string BrokerSymbol, string Timeframe, DateTimeOffset OpenTimeUtc, decimal Open, decimal High, decimal Low, decimal Close, long TickVolume, long RealVolume, int SpreadPoints, bool IsCurrent);
-public sealed record Mt5BarSnapshotPayload(string BrokerSymbol, string Timeframe, DateTimeOffset EventTimeUtc, Mt5BarPayload PreviousClosed, Mt5BarPayload Current);
+public sealed record Mt5BarSnapshotPayload(string BrokerSymbol, string Timeframe, DateTimeOffset EventTimeUtc, Mt5BarPayload PreviousClosed, Mt5BarPayload Current, decimal Bid = 0m, decimal Ask = 0m);
 
 public sealed class Mt5BridgeProtocolException(string message) : Exception(message);
 public sealed class Mt5BridgeUnavailableException(string message) : InvalidOperationException(message);

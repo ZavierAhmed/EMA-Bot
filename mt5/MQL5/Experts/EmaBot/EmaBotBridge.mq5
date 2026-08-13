@@ -209,6 +209,8 @@ void HandleRequest(const string operation,const string request_id,const string p
    if(operation=="GetLatestBars") { SendLatestBars(request_id,payload); return; }
    if(operation=="GetBarsRange") { SendBarsRange(request_id,payload); return; }
    if(operation=="GetBarSnapshot") { SendBarSnapshot(request_id,payload); return; }
+   if(operation=="CalculateMargin") { SendCalculatedMargin(request_id,payload); return; }
+   if(operation=="CalculateProfit") { SendCalculatedProfit(request_id,payload); return; }
    if(operation=="GetInstrument" || operation=="GetQuote") { SendError(operation,request_id,"InvalidRequest","brokerSymbol is required.",false); return; }
    SendError(operation,request_id,"UnsupportedOperation","The bridge operation is not supported.",false);
 }
@@ -271,8 +273,45 @@ void SendBarSnapshot(const string request_id,const string payload)
    if((bool)SeriesInfoInteger(symbol,period,SERIES_SYNCHRONIZED)==false) { SendError("GetBarSnapshot",request_id,"HistoryNotReady","MT5 history is not synchronized yet.",true); return; }
    MqlTick tick; if(!SymbolInfoTick(symbol,tick)) { SendError("GetBarSnapshot",request_id,"SymbolUnavailable","A current symbol tick is unavailable.",true); return; }
    const string event_time=IsoUtcMilliseconds(tick.time_msc);
-   const string result="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"timeframe\":\""+JsonEscape(timeframe)+"\",\"eventTimeUtc\":\""+event_time+"\",\"previousClosed\":"+RateJson(symbol,timeframe,rates[copied-2],false)+",\"current\":"+RateJson(symbol,timeframe,rates[copied-1],true)+"}";
+   if(tick.bid<=0.0 || tick.ask<=0.0 || tick.ask<tick.bid) { SendError("GetBarSnapshot",request_id,"SymbolUnavailable","A valid current quote is unavailable.",true); return; }
+   const string result="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"timeframe\":\""+JsonEscape(timeframe)+"\",\"eventTimeUtc\":\""+event_time+"\",\"previousClosed\":"+RateJson(symbol,timeframe,rates[copied-2],false)+",\"current\":"+RateJson(symbol,timeframe,rates[copied-1],true)+",\"bid\":"+Number(tick.bid)+",\"ask\":"+Number(tick.ask)+"}";
    SendResponse("GetBarSnapshot",request_id,result);
+}
+
+bool TryCalculationRequest(const string operation,const string request_id,const string payload,string &symbol,string &direction,double &volume,double &open_price,double &close_price,const bool requires_close,ENUM_ORDER_TYPE &order_type)
+{
+   string volume_raw,open_raw,close_raw;
+   if(!GetTopLevelString(payload,"brokerSymbol",symbol) || !GetTopLevelString(payload,"direction",direction) || !GetTopLevelRaw(payload,"volumeLots",volume_raw) || !GetTopLevelRaw(payload,"openPrice",open_raw) || (requires_close && !GetTopLevelRaw(payload,"closePrice",close_raw))) { SendError(operation,request_id,"InvalidRequest","symbol, direction, volume and price are required.",false); return false; }
+   volume=StringToDouble(volume_raw); open_price=StringToDouble(open_raw); close_price=requires_close ? StringToDouble(close_raw) : 0.0;
+   if(direction=="Long") order_type=ORDER_TYPE_BUY; else if(direction=="Short") order_type=ORDER_TYPE_SELL; else { SendError(operation,request_id,"InvalidRequest","Direction must be Long or Short.",false); return false; }
+   bool custom=false;
+   if(!SymbolExist(symbol,custom) || !((bool)SymbolInfoInteger(symbol,SYMBOL_SELECT))) { SendError(operation,request_id,"NotFound","The requested symbol was not found in Market Watch.",false); return false; }
+   if(volume<=0.0 || open_price<=0.0 || (requires_close && close_price<=0.0)) { SendError(operation,request_id,"InvalidRequest","Volume and prices must be positive.",false); return false; }
+   double minimum,maximum,step;
+   if(!SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN,minimum) || !SymbolInfoDouble(symbol,SYMBOL_VOLUME_MAX,maximum) || !SymbolInfoDouble(symbol,SYMBOL_VOLUME_STEP,step) || volume<minimum-0.00000001 || volume>maximum+0.00000001 || step<=0.0) { SendError(operation,request_id,"InvalidVolume","The requested lot volume is outside the symbol limits.",false); return false; }
+   const double steps=(volume-minimum)/step;
+   if(MathAbs(steps-MathRound(steps))>0.000001) { SendError(operation,request_id,"InvalidVolume","The requested lot volume does not conform to the symbol volume step.",false); return false; }
+   return true;
+}
+
+void SendCalculatedMargin(const string request_id,const string payload)
+{
+   string symbol,direction; double volume,open_price,close_price,margin; ENUM_ORDER_TYPE order_type;
+   if(!TryCalculationRequest("CalculateMargin",request_id,payload,symbol,direction,volume,open_price,close_price,false,order_type)) return;
+   ResetLastError();
+   if(!OrderCalcMargin(order_type,symbol,volume,open_price,margin) || margin<0.0) { SendError("CalculateMargin",request_id,"CalculationFailed","OrderCalcMargin failed.",false); return; }
+   const string result="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"direction\":\""+direction+"\",\"volumeLots\":"+Number(volume)+",\"openPrice\":"+Number(open_price)+",\"requiredMargin\":"+Number(margin)+",\"accountCurrency\":\""+JsonEscape(AccountInfoString(ACCOUNT_CURRENCY))+"\"}";
+   SendResponse("CalculateMargin",request_id,result);
+}
+
+void SendCalculatedProfit(const string request_id,const string payload)
+{
+   string symbol,direction; double volume,open_price,close_price,profit; ENUM_ORDER_TYPE order_type;
+   if(!TryCalculationRequest("CalculateProfit",request_id,payload,symbol,direction,volume,open_price,close_price,true,order_type)) return;
+   ResetLastError();
+   if(!OrderCalcProfit(order_type,symbol,volume,open_price,close_price,profit)) { SendError("CalculateProfit",request_id,"CalculationFailed","OrderCalcProfit failed.",false); return; }
+   const string result="{\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"direction\":\""+direction+"\",\"volumeLots\":"+Number(volume)+",\"openPrice\":"+Number(open_price)+",\"closePrice\":"+Number(close_price)+",\"profit\":"+Number(profit)+",\"accountCurrency\":\""+JsonEscape(AccountInfoString(ACCOUNT_CURRENCY))+"\"}";
+   SendResponse("CalculateProfit",request_id,result);
 }
 
 bool SendHello()

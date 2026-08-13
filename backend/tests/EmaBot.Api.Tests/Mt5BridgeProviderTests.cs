@@ -75,7 +75,7 @@ public sealed class Mt5BridgeProviderTests
         var disabled = new MarketProviderCapabilityService().Current;
         var enabled = new MarketProviderCapabilityService(Options.Create(new Mt5BridgeOptions { Enabled = true, HandshakeSecret = new string('s', 32) })).Current;
         Assert.False(disabled.InstrumentCatalogConfigured); Assert.False(disabled.QuoteProviderConfigured);
-        Assert.True(enabled.InstrumentCatalogConfigured); Assert.True(enabled.QuoteProviderConfigured); Assert.False(enabled.LiveBarProviderConfigured); Assert.False(enabled.ExecutionProviderConfigured);
+        Assert.True(enabled.InstrumentCatalogConfigured); Assert.True(enabled.QuoteProviderConfigured); Assert.True(enabled.LiveBarProviderConfigured); Assert.False(enabled.ExecutionProviderConfigured);
     }
 
     private static Mt5BridgeEnvelope Response(Mt5BridgeOperation operation, object payload) => Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Response, operation, Guid.NewGuid(), payload, TimeProvider.System);

@@ -81,6 +81,7 @@ internal static class Mt5BridgeProviderErrors
     public static MarketDataProviderException Catalog(Exception exception) => Translate("MT5 instrument catalog", exception);
     public static MarketDataProviderException Quote(Exception exception) => Translate("MT5 market quotes", exception);
     public static MarketDataProviderException Account(Exception exception) => Translate("MT5 account", exception);
+    public static MarketDataProviderException TradeCalculation(Exception exception) => Translate("MT5 trade calculation", exception);
 
     private static MarketDataProviderException Translate(string provider, Exception exception) => exception switch
     {

@@ -26,7 +26,9 @@ public sealed record MarketBarUpdate(
     decimal Low,
     decimal Close,
     decimal Volume,
-    bool IsClosed);
+    bool IsClosed,
+    decimal? Bid = null,
+    decimal? Ask = null);
 
 public interface IMarketBarStreamProvider
 {

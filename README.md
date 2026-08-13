@@ -15,23 +15,16 @@ active for new preview, backtest, and optimizer research. Binance history is a
 legacy artifact-reproducibility adapter only; it is not selectable for new
 research. Live Exness orders are not available. Strategy logic remains in .NET.
 
-Broker-neutral market contracts are now in place. Phase E3 retires Binance
-live streaming and instrument discovery: Binance remains temporarily only as
-the legacy historical research provider for backtests, optimization,
-diagnostics, charts, and previews. Live market data, execution, and instrument
-discovery are unavailable until the MT5/Exness adapters are implemented.
-
-Broker-neutral lot-volume and commission calculation foundations are available,
-but the current application continues to use legacy percentage-fee/notional sizing by default.
-
 MT5 catalog, quote diagnostics, and historical bars are active when the local
 bridge is configured and connected. New research uses MT5 bars but still uses
 the legacy compatibility economics model (quote-notional sizing and percentage
 fees); it must not be presented as fully Exness-realistic.
 
-Paper Trading remains blocked until broker-aware Exness lot sizing, Bid/Ask,
-spread, commission, and trading-cost assumptions are enabled. The generic live
-bar product provider and all execution providers remain inactive.
+MT5 broker-aware Paper simulation is active with observed Bid/Ask, MT5 lot
+sizing, read-only MT5 margin/profit calculations, and explicit per-lot
+commission. Swap financing and additional slippage are not simulated; broker
+order execution remains impossible. Binance is retained only to reproduce
+legacy historical artifacts.
 
 ## MT5 Bridge (E6)
 

@@ -110,21 +110,23 @@ public sealed class Mt5BridgeMarketBarStreamProvider(IMt5BridgeRequestClient bri
 
     internal static async Task EmitAsync(Mt5BarSnapshotPayload snapshot, StreamState state, Func<MarketBarUpdate, CancellationToken, Task> onUpdate, CancellationToken cancellationToken)
     {
+        if (snapshot.Bid <= 0m || snapshot.Ask <= 0m || snapshot.Ask < snapshot.Bid)
+            throw new MarketDataProviderException("MT5 live bars", MarketDataErrorKind.InvalidResponse, "MT5 returned an invalid snapshot quote.");
         if (!state.Initialized)
         {
             state.Initialized = true; state.CurrentOpen = snapshot.Current.OpenTimeUtc; state.PreviousOpen = snapshot.PreviousClosed.OpenTimeUtc; state.LastEvent = snapshot.EventTimeUtc;
-            await onUpdate(ToUpdate(snapshot.Current, snapshot.EventTimeUtc, false, snapshot.Current.OpenTimeUtc), cancellationToken); return;
+            await onUpdate(ToUpdate(snapshot.Current, snapshot.EventTimeUtc, false, snapshot.Current.OpenTimeUtc, snapshot.Bid, snapshot.Ask), cancellationToken); return;
         }
         if (snapshot.Current.OpenTimeUtc != state.CurrentOpen)
         {
             if (snapshot.PreviousClosed.OpenTimeUtc != state.LastClosed) await onUpdate(ToUpdate(snapshot.PreviousClosed, snapshot.EventTimeUtc, true, snapshot.Current.OpenTimeUtc), cancellationToken);
             state.LastClosed = snapshot.PreviousClosed.OpenTimeUtc; state.PreviousOpen = snapshot.PreviousClosed.OpenTimeUtc; state.CurrentOpen = snapshot.Current.OpenTimeUtc; state.LastEvent = snapshot.EventTimeUtc;
-            await onUpdate(ToUpdate(snapshot.Current, snapshot.EventTimeUtc, false, snapshot.Current.OpenTimeUtc), cancellationToken); return;
+            await onUpdate(ToUpdate(snapshot.Current, snapshot.EventTimeUtc, false, snapshot.Current.OpenTimeUtc, snapshot.Bid, snapshot.Ask), cancellationToken); return;
         }
         if (snapshot.EventTimeUtc > state.LastEvent)
         {
             state.LastEvent = snapshot.EventTimeUtc;
-            await onUpdate(ToUpdate(snapshot.Current, snapshot.EventTimeUtc, false, snapshot.Current.OpenTimeUtc), cancellationToken);
+            await onUpdate(ToUpdate(snapshot.Current, snapshot.EventTimeUtc, false, snapshot.Current.OpenTimeUtc, snapshot.Bid, snapshot.Ask), cancellationToken);
         }
     }
 
@@ -138,6 +140,6 @@ public sealed class Mt5BridgeMarketBarStreamProvider(IMt5BridgeRequestClient bri
         catch (Exception exception) { throw Mt5BridgeHistoricalMarketDataProvider.Translate(exception); }
     }
 
-    private static MarketBarUpdate ToUpdate(Mt5BarPayload bar, DateTimeOffset eventTime, bool closed, DateTimeOffset successorOpen) => new(bar.BrokerSymbol, bar.Timeframe, eventTime, bar.OpenTimeUtc, closed ? successorOpen.AddMilliseconds(-1) : bar.OpenTimeUtc, bar.Open, bar.High, bar.Low, bar.Close, bar.RealVolume > 0 ? bar.RealVolume : bar.TickVolume, closed);
+    private static MarketBarUpdate ToUpdate(Mt5BarPayload bar, DateTimeOffset eventTime, bool closed, DateTimeOffset successorOpen, decimal? bid = null, decimal? ask = null) => new(bar.BrokerSymbol, bar.Timeframe, eventTime, bar.OpenTimeUtc, closed ? successorOpen.AddMilliseconds(-1) : bar.OpenTimeUtc, bar.Open, bar.High, bar.Low, bar.Close, bar.RealVolume > 0 ? bar.RealVolume : bar.TickVolume, closed, closed ? null : bid, closed ? null : ask);
     internal sealed class StreamState { public bool Initialized; public DateTimeOffset CurrentOpen; public DateTimeOffset PreviousOpen; public DateTimeOffset LastClosed; public DateTimeOffset LastEvent; }
 }

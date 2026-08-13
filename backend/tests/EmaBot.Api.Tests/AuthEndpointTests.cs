@@ -113,7 +113,7 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var before = await database.PaperSessions.CountAsync();
         var symbolsBefore = await database.PaperSessionSymbols.CountAsync();
-        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new TestBinanceStreamClient(), TestMarketProviderCapabilities.WithLiveBars(false));
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new TestBinanceStreamClient(), TestMarketProviderCapabilities.WithLiveBars(false), scope.ServiceProvider.GetRequiredService<IInstrumentCatalogProvider>(), scope.ServiceProvider.GetRequiredService<EmaBot.Api.Mt5Bridge.IMt5AccountReader>());
         var response = await controller.Start(new StartPaperSessionRequest("3m", ["BTCUSDT", "ETHUSDT"]), CancellationToken.None);
         Assert.Equal(StatusCodes.Status503ServiceUnavailable, Assert.IsType<ObjectResult>(response.Result).StatusCode);
         Assert.Equal(before, await database.PaperSessions.CountAsync());
@@ -127,7 +127,7 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var session = new PaperSession { Interval = "3m", Status = PaperSessionStatus.Interrupted, StartedAtUtc = DateTimeOffset.UtcNow, CreatedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m };
         database.PaperSessions.Add(session); await database.SaveChangesAsync();
-        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new TestBinanceStreamClient(), TestMarketProviderCapabilities.WithLiveBars(false));
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new TestBinanceStreamClient(), TestMarketProviderCapabilities.WithLiveBars(false), scope.ServiceProvider.GetRequiredService<IInstrumentCatalogProvider>(), scope.ServiceProvider.GetRequiredService<EmaBot.Api.Mt5Bridge.IMt5AccountReader>());
 
         var response = await controller.Resume(session.Id, CancellationToken.None);
 
@@ -141,7 +141,7 @@ public sealed class AuthEndpointTests : IClassFixture<EmaBotApiFactory>
         using var scope = _factory.Services.CreateScope();
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var before = await database.PaperSessions.CountAsync();
-        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider(), TestMarketProviderCapabilities.WithLiveBars(true));
+        var controller = new PaperSessionsController(database, scope.ServiceProvider.GetRequiredService<TradingSettingsService>(), scope.ServiceProvider.GetRequiredService<PaperTradingCoordinator>(), new UnavailableMarketBarStreamProvider(), TestMarketProviderCapabilities.WithLiveBars(true), scope.ServiceProvider.GetRequiredService<IInstrumentCatalogProvider>(), scope.ServiceProvider.GetRequiredService<EmaBot.Api.Mt5Bridge.IMt5AccountReader>());
 
         var response = await controller.Start(new StartPaperSessionRequest("3m", ["BTCUSDT"]), CancellationToken.None);
 

@@ -1,4 +1,5 @@
 using EmaBot.Api.Strategy;
+using EmaBot.Api.Market;
 using System.Text.Json.Serialization;
 
 namespace EmaBot.Api.Models;
@@ -40,6 +41,7 @@ public sealed class PaperSession
     public int RejectedByEmaGap { get; set; }
     public int RejectedByStopDistance { get; set; }
     public int RejectedByFees { get; set; }
+    public int RejectedByTradingCosts { get; set; }
     public int RejectedByInsufficientMargin { get; set; }
     public int ConfirmationFailed { get; set; }
     public int InvalidStopLoss { get; set; }
@@ -47,6 +49,15 @@ public sealed class PaperSession
     public int CompletedTrades { get; set; }
     public decimal NetPnlUsdt { get; set; }
     public decimal TotalFeesUsdt { get; set; }
+    public string AccountCurrency { get; set; } = "USDT";
+    public PaperPositionSizingMode PaperPositionSizingMode { get; set; } = PaperPositionSizingMode.FixedLots;
+    public decimal PaperFixedLots { get; set; }
+    public decimal PaperMarginPerTradePercent { get; set; }
+    public decimal StartingBalance { get; set; }
+    public decimal CurrentBalance { get; set; }
+    public decimal UsedMargin { get; set; }
+    public decimal NetPnl { get; set; }
+    public decimal TotalTradingCosts { get; set; }
     public List<PaperSessionSymbol> Symbols { get; set; } = [];
     public List<PaperTrade> Trades { get; set; } = [];
 }
@@ -79,6 +90,19 @@ public sealed class PaperSessionSymbol
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
     public bool ReentryEligible { get; set; }
     public bool ReentryConsumed { get; set; }
+    public string? BrokerSymbol { get; set; }
+    public decimal? ContractSize { get; set; }
+    public decimal? VolumeMin { get; set; }
+    public decimal? VolumeMax { get; set; }
+    public decimal? VolumeStep { get; set; }
+    public decimal? VolumeLimit { get; set; }
+    public decimal? TickSize { get; set; }
+    public decimal? TickValueProfit { get; set; }
+    public decimal? TickValueLoss { get; set; }
+    public decimal? PointSize { get; set; }
+    public int? StopsLevelPoints { get; set; }
+    public InstrumentTradeMode? TradeMode { get; set; }
+    public decimal? CommissionPerLotPerSide { get; set; }
     public List<PaperTrade> Trades { get; set; } = [];
 }
 
@@ -136,6 +160,19 @@ public sealed class PaperTrade
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
     public PaperExitReason? ExitReason { get; set; }
     public List<PaperTradeEvent> Events { get; set; } = [];
+    public decimal? Lots { get; set; }
+    public decimal? EntryBid { get; set; }
+    public decimal? EntryAsk { get; set; }
+    public decimal? EntrySpread { get; set; }
+    public decimal? ExitBid { get; set; }
+    public decimal? ExitAsk { get; set; }
+    public decimal? ExitSpread { get; set; }
+    public decimal? RequiredMargin { get; set; }
+    public decimal? RoundTripCommission { get; set; }
+    public decimal? GrossPnl { get; set; }
+    public decimal? NetPnl { get; set; }
+    public decimal? AccountEquityAtEntry { get; set; }
+    public decimal? MarginUsed { get; set; }
 }
 
 public sealed class PaperTradeEvent

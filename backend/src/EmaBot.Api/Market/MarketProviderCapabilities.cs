@@ -22,7 +22,7 @@ public sealed class MarketProviderCapabilityService : IMarketProviderCapabilitie
     public MarketProviderCapabilityService(Microsoft.Extensions.Options.IOptions<EmaBot.Api.Mt5Bridge.Mt5BridgeOptions> options) : this(options.Value.Enabled) { }
     private MarketProviderCapabilityService(bool bridgeEnabled)
     {
-        Current = new("MT5 / Exness", bridgeEnabled, "MetaTrader 5", "Exness", bridgeEnabled, bridgeEnabled, false, false, Mt5NativeTimeframes.Supported);
+        Current = new("MT5 / Exness", bridgeEnabled, "MetaTrader 5", "Exness", bridgeEnabled, bridgeEnabled, bridgeEnabled, false, Mt5NativeTimeframes.Supported);
     }
     public MarketProviderCapabilities Current { get; }
 }

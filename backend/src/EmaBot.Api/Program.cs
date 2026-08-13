@@ -97,13 +97,14 @@ builder.Services.AddHttpClient<IBinanceHistoricalKlineClient, BinanceHistoricalK
 });
 // Binance history remains available only for reproducing persisted legacy artifacts.
 builder.Services.AddSingleton<BinanceHistoricalMarketDataProvider>();
-builder.Services.AddSingleton<IMarketBarStreamProvider, UnavailableMarketBarStreamProvider>();
+builder.Services.AddSingleton<IMarketBarStreamProvider>(provider => provider.GetRequiredService<Mt5BridgeMarketBarStreamProvider>());
 builder.Services.AddSingleton<IInstrumentCatalogProvider, Mt5BridgeInstrumentCatalogProvider>();
 builder.Services.AddSingleton<IMarketQuoteProvider, Mt5BridgeMarketQuoteProvider>();
 builder.Services.AddSingleton<IMarketProviderCapabilities, MarketProviderCapabilityService>();
 builder.Services.AddSingleton<Mt5BridgeServer>();
 builder.Services.AddSingleton<IMt5BridgeRequestClient>(provider => provider.GetRequiredService<Mt5BridgeServer>());
 builder.Services.AddSingleton<IMt5AccountReader, Mt5BridgeAccountReader>();
+builder.Services.AddSingleton<IMt5TradeCalculator, Mt5BridgeTradeCalculator>();
 builder.Services.AddSingleton<Mt5BridgeHistoricalMarketDataProvider>();
 builder.Services.AddSingleton<Mt5BridgeMarketBarStreamProvider>();
 builder.Services.AddSingleton<IHistoricalMarketDataProvider>(provider => provider.GetRequiredService<Mt5BridgeHistoricalMarketDataProvider>());
