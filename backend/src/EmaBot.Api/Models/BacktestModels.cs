@@ -4,7 +4,8 @@ using System.Text.Json.Serialization;
 namespace EmaBot.Api.Models;
 
 public enum BacktestRunStatus { Completed, Failed }
-public enum StopSourceType { Pivot, FallbackLookback }
+public enum StopSourceType { Pivot, FallbackLookback, AdaptiveSignalCandle, AdaptiveMicroStructure, AdaptiveLegacyFallback }
+public enum ReversalPowerBand { Weak, Normal, Strong }
 public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData, TrailingStop }
 public enum BacktestTradeEventType { Entry, TrailingStopMoved, TakeProfitExtended, Exit }
 
@@ -34,6 +35,7 @@ public sealed class BacktestRun
     public bool UseEma100Filter { get; set; }
     public bool UseHtfRegimeFilter { get; set; }
     public bool TrailingStopEnabled { get; set; }
+    public bool UseAdaptiveInitialStop { get; set; }
     public decimal FeePercentPerSide { get; set; }
     public int TotalTrades { get; set; }
     public int WinningTrades { get; set; }
@@ -119,6 +121,12 @@ public sealed class BacktestTrade
     public GapState SignalGapState { get; set; }
     public bool IsReentry { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
+    public bool UseAdaptiveInitialStop { get; set; }
+    public decimal? SignalAtr14 { get; set; }
+    public decimal? ReversalPowerScore { get; set; }
+    public ReversalPowerBand? ReversalPowerBand { get; set; }
+    public decimal? StopAnchorPrice { get; set; }
+    public decimal? StopBuffer { get; set; }
     public List<BacktestTradeEvent> Events { get; set; } = [];
 }
 

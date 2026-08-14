@@ -1,5 +1,13 @@
 # EMA-Bot strategy origin and kernel lock
 
+## Optional adaptive initial stop (E11.0)
+
+`Adaptive initial SL (reversal-aware)` is experimental and defaults to **Off**. Off preserves the legacy initial-stop rule exactly: the latest strict two-left/two-right pivot before the crossover, otherwise the prior-ten-completed-candle extreme. The stop is selected first and the existing R:R target formula then calculates TP; trailing thresholds and TP extension are unchanged.
+
+When enabled, the stop uses the actual closed signal candle (the confirmation candle when confirmation is enabled, or the continuation candle for a re-entry), never a future candle. ATR14 uses Wilder RMA of True Range `max(high-low, abs(high-previousClose), abs(low-previousClose))`. Reversal power is 0–100: body/ATR (45 points), directional close location (35), and EMA-gap state (Expanding 20, Unchanged 10, Contracting 0). Weak (<45) anchors the signal candle and buffers by 0.10 ATR; Normal (45–<70) uses signal plus one prior candle with a 0.20 ATR buffer; Strong (>=70) uses signal plus two prior candles with a 0.30 ATR buffer. Long stops are below the selected low, Short stops above the selected high. If ATR14 is unavailable, the legacy structure is used and recorded as `AdaptiveLegacyFallback`.
+
+The broker stop-level and configured maximum-stop-distance checks remain authoritative after executable entry is known. The adaptive setting is snapshotted per Paper session and backtest run, so changing global settings never alters an already-running session.
+
 ## Provenance
 
 EMA-Bot was inspired by the project owner's supplied Pine Script strategy,

@@ -33,6 +33,7 @@ public sealed class PaperSession
     public bool WaitForConfirmationCandle { get; set; }
     public bool UseEma100Filter { get; set; }
     public bool TrailingStopEnabled { get; set; }
+    public bool UseAdaptiveInitialStop { get; set; }
     public decimal FeePercentPerSide { get; set; }
     public int TotalCrossovers { get; set; }
     public int LongSignals { get; set; }
@@ -87,6 +88,11 @@ public sealed class PaperSessionSymbol
     public GapState? PendingSignalGapState { get; set; }
     public bool PendingIsReentry { get; set; }
     public DateTimeOffset? PendingTrendRegimeCrossoverTimeUtc { get; set; }
+    public decimal? PendingSignalAtr14 { get; set; }
+    public decimal? PendingReversalPowerScore { get; set; }
+    public ReversalPowerBand? PendingReversalPowerBand { get; set; }
+    public decimal? PendingStopAnchorPrice { get; set; }
+    public decimal? PendingStopBuffer { get; set; }
     public SignalDirection? TrendRegimeDirection { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
     public bool ReentryEligible { get; set; }
@@ -202,6 +208,12 @@ public sealed class PaperTrade
     public decimal? NetPnl { get; set; }
     public decimal? AccountEquityAtEntry { get; set; }
     public decimal? MarginUsed { get; set; }
+    public bool UseAdaptiveInitialStop { get; set; }
+    public decimal? SignalAtr14 { get; set; }
+    public decimal? ReversalPowerScore { get; set; }
+    public ReversalPowerBand? ReversalPowerBand { get; set; }
+    public decimal? StopAnchorPrice { get; set; }
+    public decimal? StopBuffer { get; set; }
 }
 
 public sealed class PaperTradeEvent
