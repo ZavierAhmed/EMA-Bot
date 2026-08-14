@@ -84,3 +84,17 @@ Before starting, Paper lists all supported MT5-native intervals and requires a
 commission setting for every selected instrument. The pre-start display shows
 the complete settings snapshot that will be captured. Running-session polling is
 single-flight and keeps the selected workspace tab stable through refreshes.
+
+## E10.7 outage recovery and session archive
+
+An MT5 live-market-data `Unavailable` or `Timeout` interruption now changes a
+running Paper session to `Interrupted`, records the interruption reason, and
+requires an explicit Resume after MT5 reconnects. Invalid broker data and other
+unexpected failures remain `Faulted`. Paper never invents prices, entries, or
+exits while the application or bridge is offline.
+
+Paper history now provides **View session** for stopped, interrupted, and
+faulted sessions. Archive mode is read-only: it shows the session failure
+reason, persisted market/decision state, unresolved positions, paginated trade
+history, and paginated decision history. Historical open positions have no
+runtime live P/L or executable quote until their interrupted session is resumed.

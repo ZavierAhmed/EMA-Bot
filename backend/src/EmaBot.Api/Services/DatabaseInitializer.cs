@@ -29,12 +29,23 @@ public sealed class DatabaseInitializer(
             else logger.LogInformation("Database migration check completed with no pending migrations.");
             await scope.ServiceProvider.GetRequiredService<TradingSettingsService>().GetAsync(cancellationToken);
             var interruptedAt = DateTimeOffset.UtcNow;
-            var runningSessions = await database.PaperSessions.Where(session => session.Status == PaperSessionStatus.Running).ToListAsync(cancellationToken);
+            var runningSessions = await database.PaperSessions.Include(session => session.Symbols).Where(session => session.Status == PaperSessionStatus.Running).ToListAsync(cancellationToken);
             foreach (var session in runningSessions)
             {
                 session.Status = PaperSessionStatus.Interrupted;
                 session.InterruptedAtUtc = interruptedAt;
-                session.FailureMessage = "The application restarted; resume to reconnect public market data.";
+                session.FailureMessage = "The application restarted while this Paper session was Running. Resume when MT5 is connected.";
+                foreach (var symbol in session.Symbols)
+                {
+                    database.PaperDecisionEvents.Add(new PaperDecisionEvent
+                    {
+                        PaperSessionId = session.Id,
+                        PaperSessionSymbolId = symbol.Id,
+                        TimeUtc = interruptedAt,
+                        Stage = "ApplicationRestartInterrupted",
+                        Message = "The application restarted while this Paper session was Running. The exact market-data interruption time may be unknown."
+                    });
+                }
             }
             if (runningSessions.Count > 0) await database.SaveChangesAsync(cancellationToken);
             await scope.ServiceProvider.GetRequiredService<StrategyOptimizationService>().MarkRunningAsInterruptedAsync(cancellationToken);

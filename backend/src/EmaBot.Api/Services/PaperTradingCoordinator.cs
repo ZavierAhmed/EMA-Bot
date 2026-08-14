@@ -83,6 +83,13 @@ public sealed class PaperTradingCoordinator(
             await database.SaveChangesAsync(cancellationToken);
             active = proposed;
             proposed.Worker = Task.Run(() => RunStreamAsync(proposed), CancellationToken.None);
+            if (resume)
+            {
+                foreach (var runtime in proposed.Symbols.Values)
+                {
+                    await AddDecisionAsync(proposed, runtime, new PaperDecisionRuntimeEvent(DateTimeOffset.UtcNow, null, "SessionResumed", null, "Paper processing resumed with live MT5 market data."), cancellationToken);
+                }
+            }
             logger.LogInformation("Paper session {SessionId} started for {SymbolCount} symbols.", session.Id, session.Symbols.Count);
         }
         finally { gate.Release(); }
@@ -180,16 +187,33 @@ public sealed class PaperTradingCoordinator(
         {
             await stream.StreamAsync(state.Symbols.Keys.ToArray(), state.Session.Interval, async (update, token) => await ProcessUpdateAsync(state, update, token), value => state.ConnectionState = value, state.Cancellation.Token);
         }
+        catch (MarketDataProviderException exception) when (!state.Cancellation.IsCancellationRequested && state.Session.MarketDataSource == MarketDataSource.Mt5Exness && exception.Kind is MarketDataErrorKind.Unavailable or MarketDataErrorKind.Timeout)
+        {
+            logger.LogWarning(exception, "Paper session {SessionId} live market data was interrupted.", state.Session.Id);
+            await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Interrupted; session.InterruptedAtUtc = DateTimeOffset.UtcNow; session.FailureMessage = "MT5 live market data was interrupted. Resume the Paper session when MT5 is connected."; });
+            state.ConnectionState = "Disconnected";
+            foreach (var runtime in state.Symbols.Values)
+            {
+                await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(DateTimeOffset.UtcNow, null, "SessionInterrupted", null, "MT5 live market data was interrupted. Paper processing stopped until Resume."), CancellationToken.None);
+            }
+            await RemoveActiveRuntimeAsync(state);
+        }
         catch (Exception exception) when (!state.Cancellation.IsCancellationRequested)
         {
             logger.LogError(exception, "Paper session {SessionId} stream faulted.", state.Session.Id);
             await UpdateSessionAsync(state.Session.Id, session => { session.Status = PaperSessionStatus.Faulted; session.FailureMessage = "Live market-bar streaming could not be maintained."; });
             state.ConnectionState = "Degraded";
-            await gate.WaitAsync();
-            try { if (ReferenceEquals(active, state)) active = null; }
-            finally { gate.Release(); }
-            state.Cancellation.Dispose();
+            await RemoveActiveRuntimeAsync(state);
         }
+    }
+
+    private async Task RemoveActiveRuntimeAsync(RuntimeSession state)
+    {
+        state.Cancellation.Cancel();
+        await gate.WaitAsync();
+        try { if (ReferenceEquals(active, state)) active = null; }
+        finally { gate.Release(); }
+        state.Cancellation.Dispose();
     }
 
     internal async Task ProcessUpdateForTestAsync(MarketBarUpdate update, CancellationToken token = default)
