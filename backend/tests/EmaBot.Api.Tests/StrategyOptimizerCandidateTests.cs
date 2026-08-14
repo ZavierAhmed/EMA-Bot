@@ -43,6 +43,19 @@ public sealed class StrategyOptimizerCandidateTests
         Assert.All(candidates, candidate => Assert.Equal(enabled, candidate.UseAdaptiveInitialStop));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FinalizationSettings_PreserveBaselineAdaptiveMode(bool enabled)
+    {
+        var candidate = new StrategyOptimizationCandidate { RiskReward = 1.5m, MinEmaGapPercent = .01m, MaxStopDistancePercent = 1m, WaitForConfirmationCandle = true, UseEma100Filter = true, UseHtfRegimeFilter = false, TrailingStopEnabled = true };
+        var run = new StrategyOptimizationRun { FixedOrderSizeUsdt = 100m, SimulatedAccountBalanceUsdt = 1000m, MarginPerTradePercent = 10m, Leverage = 5m, FeePercentPerSide = .05m };
+        var fixedSettings = new TradingSettings { UseAdaptiveInitialStop = enabled };
+        var method = typeof(StrategyOptimizationService).GetMethod("Settings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var settings = Assert.IsType<TradingSettings>(method.Invoke(null, [candidate, run, fixedSettings]));
+        Assert.Equal(enabled, settings.UseAdaptiveInitialStop);
+    }
+
     private static StrategyOptimizerGrid Grid(IReadOnlyList<decimal> riskRewards) => new(riskRewards, [0m], [0m], [false], [true], [false]);
     private static TradingSettings Settings(decimal riskReward) => new() { RiskReward = riskReward, MinEmaGapPercent = 0m, MaxStopDistancePercent = 0m, WaitForConfirmationCandle = false, UseEma100Filter = true, TrailingStopEnabled = false };
     private static bool Same(TradingSettings left, TradingSettings right) => left.RiskReward == right.RiskReward && left.MinEmaGapPercent == right.MinEmaGapPercent && left.MaxStopDistancePercent == right.MaxStopDistancePercent && left.WaitForConfirmationCandle == right.WaitForConfirmationCandle && left.UseEma100Filter == right.UseEma100Filter && left.TrailingStopEnabled == right.TrailingStopEnabled;

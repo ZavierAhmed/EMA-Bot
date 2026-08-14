@@ -87,6 +87,14 @@ public sealed class AdaptiveInitialStopRulesTests
         Assert.Equal(expected.Price, actual.Price); Assert.Equal(StopSourceType.AdaptiveLegacyFallback, actual.Source); Assert.True(actual.UseAdaptiveInitialStop); Assert.Null(actual.Atr14); Assert.Null(actual.ReversalPowerScore);
     }
 
+    [Theory]
+    [InlineData(SignalDirection.Long, 100, 98, 1.5, 103)]
+    [InlineData(SignalDirection.Short, 100, 102, 1.5, 97)]
+    public void AdaptiveRiskGeometry_UsesExistingRiskRewardTarget(SignalDirection direction, decimal entry, decimal stop, decimal riskReward, decimal expectedTarget)
+    {
+        Assert.Equal(expectedTarget, TradeMath.InitialTarget(entry, stop, direction, riskReward));
+    }
+
     [Fact]
     public void FutureCandles_DoNotChangeSelection_AndLegacyIsUnchanged()
     {
