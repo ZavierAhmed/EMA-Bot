@@ -98,3 +98,12 @@ faulted sessions. Archive mode is read-only: it shows the session failure
 reason, persisted market/decision state, unresolved positions, paginated trade
 history, and paginated decision history. Historical open positions have no
 runtime live P/L or executable quote until their interrupted session is resumed.
+
+## E10.7.1 Trade Explorer and exports
+
+Trade Explorer and exports use source-aware economics. MT5 Paper trades display
+the persisted account currency, broker-calculated gross/net P/L, commission,
+lots, margin, account equity at entry, and entry/exit Bid/Ask/spread. MT5 Paper
+net P/L percent is explicitly based on entry equity; R is left unavailable when
+no authoritative broker-currency initial-risk amount was persisted. Legacy
+Paper and backtest USDT reporting remain unchanged.

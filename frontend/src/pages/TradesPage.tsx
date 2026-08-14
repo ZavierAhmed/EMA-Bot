@@ -49,7 +49,7 @@ export function TradesPage() {
       if (error.name !== 'AbortError') setDetailError('Trade details are currently unavailable.')
     })
     void getTradeChart(selectedSource, selectedId, controller.signal).then(setChart).catch(error => {
-      if (error.name !== 'AbortError') setChartError('Chart data is currently unavailable from Binance.')
+      if (error.name !== 'AbortError') setChartError('Chart data is currently unavailable from the configured historical provider.')
     })
     return () => controller.abort()
   }, [chartReload, selectedSource, selectedId])
@@ -61,7 +61,7 @@ export function TradesPage() {
     <div>
       <p className="text-sm font-medium text-slate-500">Analysis</p>
       <h1 className="mt-2 text-3xl font-semibold">Trade Explorer</h1>
-      <p className="mt-2 text-slate-600">Review simulated backtest and paper trades with on-demand Binance chart context.</p>
+      <p className="mt-2 text-slate-600">Review simulated backtest and Paper trades with on-demand market chart context.</p>
     </div>
     {listError && <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{listError}</div>}
     <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-7">
@@ -79,7 +79,7 @@ export function TradesPage() {
           {listLoading ? <p className="text-sm text-slate-500">Loading trades...</p> : trades.length === 0 ? <p className="text-sm text-slate-500">No trades match these filters.</p> : trades.map(trade => <button key={`${trade.source}-${trade.id}`} onClick={() => select(trade)} className={`w-full rounded border p-3 text-left text-sm ${selectedSource?.toLowerCase() === trade.source.toLowerCase() && selectedId === trade.id ? 'border-slate-950 bg-slate-50' : 'border-slate-200'}`}>
             <div className="flex justify-between gap-2"><span className="font-medium">{trade.symbol} {trade.interval}</span><span className="text-xs">{trade.source}</span></div>
             <p>{trade.direction} · {trade.status} · {trade.exitReason ?? '-'}</p>
-            <p className={trade.netPnlUsdt >= 0 ? 'text-emerald-700' : 'text-red-700'}>Net {format(trade.netPnlUsdt)} · R {format(trade.netRMultiple)}</p>
+            <p className={trade.status === 'Open' ? '' : trade.netPnl >= 0 ? 'text-emerald-700' : 'text-red-700'}>{trade.status === 'Open' ? 'Unresolved / Open' : `Net ${format(trade.netPnl)} ${trade.accountCurrency}`} · R {format(trade.netRMultiple)}</p>
             <p className="text-xs text-slate-500">{date(trade.entryTimeUtc)}</p>
           </button>)}
         </div>
@@ -87,7 +87,7 @@ export function TradesPage() {
       <section className="min-w-0 space-y-5">
         {!selectedSource || !selectedId ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-slate-500">Select a trade to inspect its reasoning and chart.</div> : detailError ? <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{detailError}</div> : !detail ? <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">Loading trade details...</div> : <>
           <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="flex flex-wrap gap-3 text-sm"><strong>{detail.summary.symbol} {detail.summary.interval} · {detail.summary.direction}</strong><span>Net {format(detail.summary.netPnlUsdt)} USDT</span><span>{detail.summary.status}</span></div>
+            <div className="flex flex-wrap gap-3 text-sm"><strong>{detail.summary.symbol} {detail.summary.interval} · {detail.summary.direction}</strong><span>{detail.summary.status === 'Open' ? 'Unresolved / Open' : `Net ${format(detail.summary.netPnl)} ${detail.summary.accountCurrency}`}</span><span>{detail.summary.status}</span></div>
             <div className="mt-3 flex flex-wrap gap-3 text-xs">{(['ema9', 'ema15', 'ema100', 'levels', 'markers'] as const).map(key => <label key={key}><input type="checkbox" checked={visibility[key]} onChange={() => setVisibility(current => ({ ...current, [key]: !current[key] }))} /> {key === 'levels' ? 'SL/TP' : key.toUpperCase()}</label>)}</div>
           </div>
           {chart ? <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3"><TradeChart data={chart} detail={detail} visibility={visibility} /></div> : <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">{chartError ?? 'Loading chart data...'} {chartError && <button className="ml-3 underline" onClick={() => setChartReload(value => value + 1)}>Retry Chart</button>}</div>}
@@ -99,6 +99,7 @@ export function TradesPage() {
 }
 
 function Details({ detail }: { detail: TradeDetail }) {
+  if (detail.summary.marketDataSource === 'Mt5Exness') return <Mt5PaperDetails detail={detail} />
   const explanation = detail.summary.direction === 'Long'
     ? `EMA 9 crossed above EMA 15. ${detail.waitForConfirmationCandle ? 'The next closed candle confirmed the setup.' : 'The crossover generated the signal because confirmation was disabled.'} ${detail.useEma100Filter ? 'The EMA 100 direction filter was applied.' : 'EMA 100 filtering was disabled for this trade.'} Entry occurred at the following candle open.`
     : `EMA 9 crossed below EMA 15. ${detail.waitForConfirmationCandle ? 'The next closed candle confirmed the setup.' : 'The crossover generated the signal because confirmation was disabled.'} ${detail.useEma100Filter ? 'The EMA 100 direction filter was applied.' : 'EMA 100 filtering was disabled for this trade.'} Entry occurred at the following candle open.`
@@ -121,4 +122,10 @@ function Details({ detail }: { detail: TradeDetail }) {
       <p className="mt-3 text-slate-500">Source: {detail.summary.source} #{detail.summary.parentId}</p>
     </section>
   </div>
+}
+
+function Mt5PaperDetails({ detail }: { detail: TradeDetail }) {
+  const currency = detail.summary.accountCurrency
+  const outcome = detail.summary.status === 'Open' ? 'Unresolved / Open' : `Gross ${format(detail.summary.grossPnl)} ${currency} · Commission ${format(detail.summary.tradingCosts)} ${currency} · Net ${format(detail.summary.netPnl)} ${currency}`
+  return <div className="grid min-w-0 gap-4 lg:grid-cols-2"><section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">MT5 Paper trade details</h2><dl className="mt-3 grid gap-2 text-slate-700"><div><dt className="font-medium text-slate-950">Entry economics</dt><dd>{date(detail.summary.entryTimeUtc)} at {format(detail.summary.entryPrice)} · Bid {format(detail.entryBid)}, Ask {format(detail.entryAsk)}, spread {format(detail.entrySpread)}</dd></div><div><dt className="font-medium text-slate-950">Sizing</dt><dd>{detail.paperPositionSizingMode ?? '—'} · lots {format(detail.lots)} · quantity / exposure {format(detail.quantity)} · required margin {format(detail.requiredMargin)} {currency} · entry equity {format(detail.accountEquityAtEntry)} {currency}</dd></div><div><dt className="font-medium text-slate-950">Risk levels</dt><dd>Initial SL {format(detail.initialStopLoss)} ({detail.stopSourceType}); final SL {format(detail.finalStopLoss)}. Original TP {format(detail.originalTakeProfit)}; final TP {format(detail.finalTakeProfit)}</dd></div><div><dt className="font-medium text-slate-950">Exit economics</dt><dd>{date(detail.summary.exitTimeUtc)} at {format(detail.summary.exitPrice)} · Bid {format(detail.exitBid)}, Ask {format(detail.exitAsk)}, spread {format(detail.exitSpread)} · {detail.summary.exitReason ?? 'Open'}</dd></div><div><dt className="font-medium text-slate-950">Result</dt><dd>{outcome}. {detail.summary.status === 'Open' ? 'Final P/L is unavailable until this Paper position is resolved.' : `Net P/L % of entry equity: ${format(detail.summary.netPnlPercent)}%.`} R {format(detail.summary.netRMultiple)}</dd></div></dl><p className="mt-3 text-slate-600">The signal scheduled entry for the exact next bar. The Paper position entered on the first executable Ask quote for Long or Bid quote for Short observed on that bar.</p></section><section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Management timeline</h2><div className="mt-3 space-y-2">{detail.events.map((event, index) => <p key={`${event.type}-${index}`}><strong>{event.type}</strong> · {date(event.timeUtc)} · price {format(event.marketPrice)}{event.newStop !== null ? ` · SL ${format(event.newStop)}` : ''}{event.newTakeProfit !== null ? ` · TP ${format(event.newTakeProfit)}` : ''}</p>)}</div><p className="mt-3 text-slate-500">Source: Paper / MT5 Exness · session #{detail.summary.parentId}</p></section></div>
 }
