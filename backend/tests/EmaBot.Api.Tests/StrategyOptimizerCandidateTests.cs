@@ -33,6 +33,16 @@ public sealed class StrategyOptimizerCandidateTests
         Assert.Single(candidates);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AdaptiveInitialStop_IsFixedAcrossCandidateGeneration(bool enabled)
+    {
+        var settings = Settings(1.1m); settings.UseAdaptiveInitialStop = enabled;
+        var candidates = StrategyOptimizationService.CandidateSettings(Grid([.9m, 1.1m]), settings);
+        Assert.All(candidates, candidate => Assert.Equal(enabled, candidate.UseAdaptiveInitialStop));
+    }
+
     private static StrategyOptimizerGrid Grid(IReadOnlyList<decimal> riskRewards) => new(riskRewards, [0m], [0m], [false], [true], [false]);
     private static TradingSettings Settings(decimal riskReward) => new() { RiskReward = riskReward, MinEmaGapPercent = 0m, MaxStopDistancePercent = 0m, WaitForConfirmationCandle = false, UseEma100Filter = true, TrailingStopEnabled = false };
     private static bool Same(TradingSettings left, TradingSettings right) => left.RiskReward == right.RiskReward && left.MinEmaGapPercent == right.MinEmaGapPercent && left.MaxStopDistancePercent == right.MaxStopDistancePercent && left.WaitForConfirmationCandle == right.WaitForConfirmationCandle && left.UseEma100Filter == right.UseEma100Filter && left.TrailingStopEnabled == right.TrailingStopEnabled;

@@ -69,7 +69,7 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                     {
                         if (!PassesHtf(settings, marketContext, reentry.Time, direction, out var reentryHtf)) { rejectedHtf++; continue; }
                         var reentrySignal = new StrategyEvent(reentry.Time, direction, direction == SignalDirection.Long ? SignalStatus.ReentryLongSignal : SignalStatus.ReentryShortSignal, reentry);
-                        var reentryStop = InitialStopSelector.Select(candles, crossoverIndex, reentrySignalIndex, reentry, direction, settings); var reentryEntry = candles[reentrySignalIndex + 1].Open;
+                        var reentryStop = InitialStopSelector.Select(candles, reentrySignalIndex, reentrySignalIndex, reentry, direction, settings); var reentryEntry = candles[reentrySignalIndex + 1].Open;
                         if ((direction == SignalDirection.Long ? reentryStop.Price < reentryEntry : reentryStop.Price > reentryEntry) && (settings.MaxStopDistancePercent == 0 || TradeMath.StopDistancePercent(reentryEntry, reentryStop.Price) <= settings.MaxStopDistancePercent))
                         {
                             var reentrySize = TradeMath.CalculatePositionSize(settings, equity, reentryEntry); var reentryTarget = TradeMath.InitialTarget(reentryEntry, reentryStop.Price, direction, settings.RiskReward);

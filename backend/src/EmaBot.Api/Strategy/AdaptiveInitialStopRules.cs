@@ -64,15 +64,15 @@ public static class AdaptiveInitialStopRules
 
 public static class InitialStopSelector
 {
-    public static InitialStopSelection Select(IReadOnlyList<Candle> candles, int crossoverIndex, int signalIndex, IndicatorSnapshot signal, SignalDirection direction, TradingSettings settings)
+    public static InitialStopSelection Select(IReadOnlyList<Candle> candles, int legacyStopIndex, int signalIndex, IndicatorSnapshot signal, SignalDirection direction, TradingSettings settings)
     {
         if (!settings.UseAdaptiveInitialStop)
         {
-            var legacy = SwingStopRules.Find(candles, crossoverIndex, direction);
+            var legacy = SwingStopRules.Find(candles, legacyStopIndex, direction);
             return new(legacy.Price, legacy.Source, legacy.Time, false);
         }
         if (AtrCalculator.Wilder14(candles, signalIndex) is { } ) return AdaptiveInitialStopRules.Find(candles, signalIndex, signal, direction);
-        var fallback = SwingStopRules.Find(candles, crossoverIndex, direction);
+        var fallback = SwingStopRules.Find(candles, legacyStopIndex, direction);
         return new(fallback.Price, StopSourceType.AdaptiveLegacyFallback, fallback.Time, true);
     }
 }
