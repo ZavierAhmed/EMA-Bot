@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using System.Xml.Linq;
 using EmaBot.Api.Auth;
 using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
@@ -36,6 +37,10 @@ public sealed class PaperSessionExcelExportTests(EmaBotApiFactory factory) : ICl
         Assert.Contains("AdaptiveMicroStructure", all); Assert.Contains("1.25", all); Assert.Contains("Strong", all); Assert.Contains("99.5", all); Assert.Contains("0.25", all);
         Assert.Contains("Open", all); Assert.Contains("TrailingStopMoved", all); Assert.Contains("TakeProfitExtended", all);
         foreach (var message in decisionMessages) Assert.Contains(message, all);
+        var closed = TradeRow(entries["xl/worksheets/sheet4.xml"], "Closed");
+        Assert.Equal("-9.97", closed["Gross P/L"]); Assert.Equal("-9.97", closed["Net P/L"]); Assert.Equal("USD", closed["Account Currency"]);
+        var open = TradeRow(entries["xl/worksheets/sheet4.xml"], "Open");
+        foreach (var field in new[] { "Gross P/L", "Net P/L", "Net P/L %", "Exit UTC", "Exit Price", "Exit Bid", "Exit Ask", "Exit Spread", "Exit Reason", "Final SL", "Final TP", "Current Executable Exit Price", "Current Gross P/L", "Current Net P/L", "Current P/L % On Margin", "Current P/L Valuation UTC", "Current P/L Available", "Legacy Gross P/L USDT", "Legacy Net P/L USDT", "Legacy Fees USDT" }) Assert.Null(open[field]);
         using var scope = factory.Services.CreateScope();
         var persisted = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessions.SingleAsync(item => item.Id == id);
         Assert.Equal(PaperSessionStatus.Running, persisted.Status);
@@ -64,5 +69,12 @@ public sealed class PaperSessionExcelExportTests(EmaBotApiFactory factory) : ICl
 
     private static PaperTrade Trade(PaperSessionSymbol symbol, DateTimeOffset at, PaperTradeStatus status, decimal? net) => new() { PaperSessionSymbol = symbol, Symbol = symbol.Symbol, Interval = "3m", Status = status, Direction = SignalDirection.Long, CrossoverTimeUtc = at, SignalTimeUtc = at, EntryTimeUtc = at.AddMinutes(3), ExitTimeUtc = status == PaperTradeStatus.Closed ? at.AddMinutes(12) : null, EntryPrice = 100m, ExitPrice = status == PaperTradeStatus.Closed ? 90m : null, Quantity = 1m, InitialStopLoss = 99m, CurrentStopLoss = 99.5m, FinalStopLoss = status == PaperTradeStatus.Closed ? 99.5m : null, StopSourceType = StopSourceType.AdaptiveMicroStructure, StopSourceTimeUtc = at, OriginalTakeProfit = 102m, CurrentTakeProfit = 103m, FinalTakeProfit = status == PaperTradeStatus.Closed ? 103m : null, TakeProfitExtended = true, Lots = .01m, RequiredMargin = 35m, MarginUsed = 35m, AccountEquityAtEntry = 1000m, EntryBid = 100m, EntryAsk = 100.01m, EntrySpread = .01m, ExitBid = 90m, ExitAsk = 90.01m, ExitSpread = .01m, GrossPnl = net, RoundTripCommission = 0m, NetPnl = net, NetPnlPercent = net is null ? 0m : net.Value / 1000m * 100m, MfePrice = 102m, MfePercent = 2m, MaePrice = 99m, MaePercent = 1m, BestFavorableProgressPercent = 70m, SignalOpen = 100m, SignalClose = 101m, SignalEma9 = 101m, SignalEma15 = 100m, SignalEma100 = 99m, SignalGapPercent = 1m, SignalGapState = GapState.Expanding, UseAdaptiveInitialStop = true, SignalAtr14 = 1.25m, ReversalPowerScore = 80m, ReversalPowerBand = ReversalPowerBand.Strong, StopAnchorPrice = 99.5m, StopBuffer = .25m };
     private static Dictionary<string, string> Read(byte[] bytes) { using var archive = new ZipArchive(new MemoryStream(bytes), ZipArchiveMode.Read); return archive.Entries.ToDictionary(entry => entry.FullName, entry => { using var reader = new StreamReader(entry.Open()); return reader.ReadToEnd(); }); }
+    private static IReadOnlyDictionary<string, string?> TradeRow(string xml, string status)
+    {
+        var ns = (XNamespace)"http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        var rows = XDocument.Parse(xml).Descendants(ns + "row").Select(row => row.Elements(ns + "c").Select(cell => cell.Element(ns + "v")?.Value ?? cell.Descendants(ns + "t").FirstOrDefault()?.Value).ToArray()).ToArray();
+        var headers = rows[0]; var row = rows.Single(item => item.Length > 5 && item[5] == status);
+        return headers.Select((header, index) => (header!, Value: row[index])).ToDictionary(item => item.Item1, item => item.Value);
+    }
     private async Task<HttpClient> AdminClientAsync() { var client = factory.CreateClient(new WebApplicationFactoryClientOptions { HandleCookies = true }); var token = (await client.GetFromJsonAsync<JsonElement>("/api/auth/antiforgery")).GetProperty("token").GetString()!; using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login") { Content = JsonContent.Create(new LoginRequest("admin", "A-strong-password-123!")) }; request.Headers.Add("X-CSRF-TOKEN", token); Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(request)).StatusCode); return client; }
 }
