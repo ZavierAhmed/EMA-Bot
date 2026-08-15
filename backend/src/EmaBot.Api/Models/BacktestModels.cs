@@ -37,6 +37,8 @@ public sealed class BacktestRun
     public bool UseHtfRegimeFilter { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
+    public bool SameTrendReentryEnabled { get; set; }
+    public int MaxReentryAgeBars { get; set; } = 6;
     public decimal FeePercentPerSide { get; set; }
     public int TotalTrades { get; set; }
     public int WinningTrades { get; set; }

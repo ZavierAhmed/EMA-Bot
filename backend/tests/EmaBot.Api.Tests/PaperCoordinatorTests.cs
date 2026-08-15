@@ -203,6 +203,43 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
+    public async Task DisabledSameTrendReentry_DoesNotScheduleAContinuationTrade()
+    {
+        var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
+        _factory.BinanceClient.Klines = TrendingWarmup(SignalDirection.Long);
+        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, entry: 300m, stop: 290m, reentry: false);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var exitOpen = _factory.BinanceClient.Klines[^1].CloseTimeUtc.AddMilliseconds(1);
+
+        await coordinator.ProcessUpdateForTestAsync(Kline(exitOpen, 300m, 290m, 290m, false));
+        await coordinator.ProcessUpdateForTestAsync(Kline(exitOpen, 300m, 310m, 299m, true));
+
+        Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"].PendingDirection);
+        await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData(7)]
+    [InlineData(18)]
+    public async Task StaleSameTrendReentry_ExpiresOnceWithoutCreatingPendingEntry(int maxAgeBars)
+    {
+        var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
+        _factory.BinanceClient.Klines = TrendingWarmup(SignalDirection.Long);
+        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, entry: 300m, stop: 290m, reentry: true, maxReentryAgeBars: maxAgeBars);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var exitOpen = _factory.BinanceClient.Klines[^1].CloseTimeUtc.AddMilliseconds(1);
+
+        await coordinator.ProcessUpdateForTestAsync(Kline(exitOpen, 300m, 290m, 290m, false));
+        await coordinator.ProcessUpdateForTestAsync(Kline(exitOpen, 300m, 310m, 299m, true));
+
+        Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"].PendingDirection);
+        using var scope = _factory.Services.CreateScope();
+        var decisions = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "ReentryExpired").ToListAsync();
+        Assert.Single(decisions); Assert.Contains(maxAgeBars.ToString(), decisions[0].Message);
+        await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
+    }
+
+    [Fact]
     public async Task ClosedCandleGap_RefetchesHistoryWithoutSchedulingHistoricalSignals()
     {
         var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
@@ -245,11 +282,11 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
     }
 
-    private async Task<PaperSession> CreateSession(PaperSessionStatus status, DateTimeOffset? pendingSignal = null, bool openTrade = false, SignalDirection direction = SignalDirection.Long, decimal entry = 100m, decimal? stop = null, decimal fee = .1m, bool trailing = false, bool adaptive = false, bool reentry = false)
+    private async Task<PaperSession> CreateSession(PaperSessionStatus status, DateTimeOffset? pendingSignal = null, bool openTrade = false, SignalDirection direction = SignalDirection.Long, decimal entry = 100m, decimal? stop = null, decimal fee = .1m, bool trailing = false, bool adaptive = false, bool reentry = false, int? maxReentryAgeBars = null)
     {
         using var scope = _factory.Services.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var symbol = new PaperSessionSymbol { Symbol = "BTCUSDT", PendingDirection = pendingSignal.HasValue ? SignalDirection.Long : null, PendingCrossoverTimeUtc = pendingSignal, PendingSignalTimeUtc = pendingSignal, PendingStopPrice = pendingSignal.HasValue ? 90m : null, PendingStopSourceType = pendingSignal.HasValue ? StopSourceType.FallbackLookback : null, PendingStopSourceTimeUtc = pendingSignal, PendingSignalClose = pendingSignal.HasValue ? 100m : null, PendingSignalEma9 = pendingSignal.HasValue ? 101m : null, PendingSignalEma15 = pendingSignal.HasValue ? 100m : null, PendingSignalGapState = pendingSignal.HasValue ? GapState.Expanding : null };
-        var session = new PaperSession { Interval = "3m", Status = status, CreatedAtUtc = DateTimeOffset.UtcNow, StartedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = fee, TrailingStopEnabled = trailing, UseAdaptiveInitialStop = adaptive, SameTrendReentryEnabled = reentry, MaxReentryAgeBars = reentry ? 500 : 6, Symbols = [symbol] };
+        var session = new PaperSession { Interval = "3m", Status = status, CreatedAtUtc = DateTimeOffset.UtcNow, StartedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = fee, TrailingStopEnabled = trailing, UseAdaptiveInitialStop = adaptive, SameTrendReentryEnabled = reentry, MaxReentryAgeBars = maxReentryAgeBars ?? (reentry ? 500 : 6), Symbols = [symbol] };
         if (openTrade) { var effectiveStop = stop ?? (direction == SignalDirection.Long ? entry - 10m : entry + 10m); var target = direction == SignalDirection.Long ? entry + (entry - effectiveStop) * 2m : entry - (effectiveStop - entry) * 2m; var entryFee = TradeMath.Fee(entry, 1m, fee); session.Trades.Add(new PaperTrade { PaperSessionSymbol = symbol, Symbol = "BTCUSDT", Interval = "3m", Status = PaperTradeStatus.Open, Direction = direction, CrossoverTimeUtc = DateTimeOffset.UnixEpoch, SignalTimeUtc = DateTimeOffset.UnixEpoch, EntryTimeUtc = DateTimeOffset.UnixEpoch, EntryPrice = entry, Quantity = 1m, EntryNotionalUsdt = entry, InitialStopLoss = effectiveStop, CurrentStopLoss = effectiveStop, StopSourceType = StopSourceType.FallbackLookback, StopSourceTimeUtc = DateTimeOffset.UnixEpoch, OriginalTakeProfit = target, CurrentTakeProfit = target, EntryFeeUsdt = entryFee, TotalFeesUsdt = entryFee }); }
         db.PaperSessions.Add(session); await db.SaveChangesAsync(); return session;
     }

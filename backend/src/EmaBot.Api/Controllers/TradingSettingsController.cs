@@ -18,7 +18,7 @@ public sealed class TradingSettingsController(TradingSettingsService settingsSer
     [HttpPut]
     public async Task<ActionResult<TradingSettingsResponse>> Put(UpdateTradingSettingsRequest request, CancellationToken cancellationToken)
     {
-        if (request.RiskReward <= 0 || request.RiskReward > 1000 || request.FixedOrderSizeUsdt <= 0 || request.FixedOrderSizeUsdt > 10_000_000 || request.FeePercentPerSide is < 0 or > 5 || request.MinEmaGapPercent is < 0 or > 10 || request.MaxStopDistancePercent is < 0 or > 25 || request.SimulatedAccountBalanceUsdt <= 0 || request.MarginPerTradePercent is <= 0 or > 100 || request.Leverage is < 1 or > 125 || request.PaperFixedLots <= 0 || request.PaperMarginPerTradePercent is <= 0 or > 100 || request.PaperStartingBalance <= 0 || request.MaxReentryAgeBars < 1) return BadRequest(new ApiMessage("Trading settings are outside supported limits."));
+        if (request.RiskReward <= 0 || request.RiskReward > 1000 || request.FixedOrderSizeUsdt <= 0 || request.FixedOrderSizeUsdt > 10_000_000 || request.FeePercentPerSide is < 0 or > 5 || request.MinEmaGapPercent is < 0 or > 10 || request.MaxStopDistancePercent is < 0 or > 25 || request.SimulatedAccountBalanceUsdt <= 0 || request.MarginPerTradePercent is <= 0 or > 100 || request.Leverage is < 1 or > 125 || request.PaperFixedLots <= 0 || request.PaperMarginPerTradePercent is <= 0 or > 100 || request.PaperStartingBalance <= 0 || request.MaxReentryAgeBars is < 1 or > 100) return BadRequest(new ApiMessage("Trading settings are outside supported limits."));
         var settings = await settingsService.GetAsync(cancellationToken);
         settings.RiskReward = request.RiskReward;
         settings.FixedOrderSizeUsdt = request.FixedOrderSizeUsdt;

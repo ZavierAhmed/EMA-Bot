@@ -44,6 +44,17 @@ public sealed class StrategyOptimizerCandidateTests
     }
 
     [Theory]
+    [InlineData(true, 4)]
+    [InlineData(false, 9)]
+    public void ReentrySettings_AreFixedAcrossCandidateGeneration(bool enabled, int maxAgeBars)
+    {
+        var settings = Settings(1.1m); settings.SameTrendReentryEnabled = enabled; settings.MaxReentryAgeBars = maxAgeBars;
+        var candidates = StrategyOptimizationService.CandidateSettings(Grid([.9m, 1.1m]), settings);
+
+        Assert.All(candidates, candidate => { Assert.Equal(enabled, candidate.SameTrendReentryEnabled); Assert.Equal(maxAgeBars, candidate.MaxReentryAgeBars); });
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public void FinalizationSettings_PreserveBaselineAdaptiveMode(bool enabled)
@@ -51,9 +62,22 @@ public sealed class StrategyOptimizerCandidateTests
         var candidate = new StrategyOptimizationCandidate { RiskReward = 1.5m, MinEmaGapPercent = .01m, MaxStopDistancePercent = 1m, WaitForConfirmationCandle = true, UseEma100Filter = true, UseHtfRegimeFilter = false, TrailingStopEnabled = true };
         var run = new StrategyOptimizationRun { FixedOrderSizeUsdt = 100m, SimulatedAccountBalanceUsdt = 1000m, MarginPerTradePercent = 10m, Leverage = 5m, FeePercentPerSide = .05m };
         var fixedSettings = new TradingSettings { UseAdaptiveInitialStop = enabled };
-        var method = typeof(StrategyOptimizationService).GetMethod("Settings", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
-        var settings = Assert.IsType<TradingSettings>(method.Invoke(null, [candidate, run, fixedSettings]));
+        var settings = StrategyOptimizationService.Settings(candidate, run, fixedSettings);
         Assert.Equal(enabled, settings.UseAdaptiveInitialStop);
+    }
+
+    [Theory]
+    [InlineData(true, 4)]
+    [InlineData(false, 9)]
+    public void FinalizationSettings_PreserveBaselineReentrySettings(bool enabled, int maxAgeBars)
+    {
+        var candidate = new StrategyOptimizationCandidate { RiskReward = 1.5m, MinEmaGapPercent = .01m, MaxStopDistancePercent = 1m, WaitForConfirmationCandle = true, UseEma100Filter = true, UseHtfRegimeFilter = false, TrailingStopEnabled = true };
+        var run = new StrategyOptimizationRun { FixedOrderSizeUsdt = 100m, SimulatedAccountBalanceUsdt = 1000m, MarginPerTradePercent = 10m, Leverage = 5m, FeePercentPerSide = .05m };
+        var fixedSettings = new TradingSettings { SameTrendReentryEnabled = enabled, MaxReentryAgeBars = maxAgeBars };
+
+        var settings = StrategyOptimizationService.Settings(candidate, run, fixedSettings);
+
+        Assert.Equal(enabled, settings.SameTrendReentryEnabled); Assert.Equal(maxAgeBars, settings.MaxReentryAgeBars);
     }
 
     private static StrategyOptimizerGrid Grid(IReadOnlyList<decimal> riskRewards) => new(riskRewards, [0m], [0m], [false], [true], [false]);

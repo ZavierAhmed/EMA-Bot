@@ -60,7 +60,20 @@ public sealed class StrategyRegimeDiagnosticsService(EmaBotDbContext database, I
     private static bool AlignFast(decimal ema9, decimal ema15, SignalDirection direction) => direction == SignalDirection.Long ? ema9 > ema15 : ema9 < ema15;
     private static bool? AlignPrice(decimal close, decimal? ema, SignalDirection direction) => !ema.HasValue ? null : direction == SignalDirection.Long ? close > ema : close < ema;
     private static TimeSpan Warmup(string frame) => frame switch { "3m"=>TimeSpan.FromMinutes(600),"5m"=>TimeSpan.FromMinutes(1000),"15m"=>TimeSpan.FromMinutes(3000),"30m"=>TimeSpan.FromMinutes(6000),"1h"=>TimeSpan.FromHours(200),"2h"=>TimeSpan.FromHours(400),"4h"=>TimeSpan.FromHours(800),"6h"=>TimeSpan.FromHours(1200),"8h"=>TimeSpan.FromHours(1600),"12h"=>TimeSpan.FromHours(2400),"1d"=>TimeSpan.FromDays(200),"3d"=>TimeSpan.FromDays(600),"1w"=>TimeSpan.FromDays(1400),_=>TimeSpan.FromDays(6200) };
-    private static TradingSettings Settings(StrategyOptimizationCandidate candidate, StrategyOptimizationRun run) => new(){Id=1,RiskReward=candidate.RiskReward,MinEmaGapPercent=candidate.MinEmaGapPercent,MaxStopDistancePercent=candidate.MaxStopDistancePercent,WaitForConfirmationCandle=candidate.WaitForConfirmationCandle,UseEma100Filter=candidate.UseEma100Filter,UseHtfRegimeFilter=candidate.UseHtfRegimeFilter,TrailingStopEnabled=candidate.TrailingStopEnabled,SimulatedAccountBalanceUsdt=run.SimulatedAccountBalanceUsdt,FixedOrderSizeUsdt=run.FixedOrderSizeUsdt,MarginPerTradePercent=run.MarginPerTradePercent,Leverage=run.Leverage,FeePercentPerSide=run.FeePercentPerSide,PositionSizingMode=run.PositionSizingMode};
+    internal static TradingSettings Settings(StrategyOptimizationCandidate candidate, StrategyOptimizationRun run)
+    {
+        var settings = System.Text.Json.JsonSerializer.Deserialize<TradingSettings>(run.BaselineSettingsJson)
+            ?? throw new InvalidOperationException("The optimizer run does not contain a valid baseline settings snapshot.");
+        settings.Id = 1;
+        settings.RiskReward = candidate.RiskReward;
+        settings.MinEmaGapPercent = candidate.MinEmaGapPercent;
+        settings.MaxStopDistancePercent = candidate.MaxStopDistancePercent;
+        settings.WaitForConfirmationCandle = candidate.WaitForConfirmationCandle;
+        settings.UseEma100Filter = candidate.UseEma100Filter;
+        settings.UseHtfRegimeFilter = candidate.UseHtfRegimeFilter;
+        settings.TrailingStopEnabled = candidate.TrailingStopEnabled;
+        return settings;
+    }
 }
 
 public static class StrategyRegimeWorkbook
