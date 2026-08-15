@@ -120,6 +120,7 @@ export const getActivePaperSession = () => request<PaperSession>('/api/paper-ses
 export const getPaperSession = (id: number) => request<PaperSession>(`/api/paper-sessions/${id}`)
 export const getPaperSessionTrades = (id: number, page = 1, pageSize = 50) => request<{ total: number; items: PaperTrade[] }>(`/api/paper-sessions/${id}/trades?page=${page}&pageSize=${pageSize}`)
 export const getPaperSessionDecisions = (id: number, page = 1, pageSize = 50, symbol?: string) => request<{ total: number; items: PaperDecision[] }>(`/api/paper-sessions/${id}/decisions?${new URLSearchParams({ page: String(page), pageSize: String(pageSize), ...(symbol ? { symbol } : {}) })}`)
+export async function downloadPaperSessionExcel(id: number) { await download(`/api/paper-sessions/${id}/export/excel`, `ema-bot-paper-session-${id}.xlsx`) }
 export const startPaperSession = (interval: string, symbols: string[]) => protectedRequest<PaperSession>('/api/paper-sessions', 'POST', { interval, symbols })
 export const resumePaperSession = (id: number) => protectedRequest<PaperSession>(`/api/paper-sessions/${id}/resume`, 'POST')
 export const stopPaperSession = (id: number) => protectedRequest<void>(`/api/paper-sessions/${id}/stop`, 'POST')

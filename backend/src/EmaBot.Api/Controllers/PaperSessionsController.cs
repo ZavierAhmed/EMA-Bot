@@ -36,6 +36,13 @@ public sealed class PaperSessionsController(EmaBotDbContext database, TradingSet
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id, CancellationToken token) => await DetailQuery().SingleOrDefaultAsync(item => item.Id == id, token) is { } session ? Ok(await ToDetailAsync(session, token)) : NotFound(new ApiMessage("Paper session not found."));
 
+    [HttpGet("{id:int}/export/excel")]
+    public async Task<IActionResult> ExportExcel(int id, CancellationToken token)
+    {
+        var workbook = await PaperSessionExcelExport.CreateAsync(database, coordinator, id, token);
+        return workbook is null ? NotFound(new ApiMessage("Paper session not found.")) : File(workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-paper-session-{id}.xlsx");
+    }
+
     [HttpGet("{id:int}/trades")]
     public async Task<IActionResult> Trades(int id, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken token = default)
     {
