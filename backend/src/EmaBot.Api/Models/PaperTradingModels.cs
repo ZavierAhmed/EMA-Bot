@@ -34,6 +34,8 @@ public sealed class PaperSession
     public bool UseEma100Filter { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
+    public bool SameTrendReentryEnabled { get; set; }
+    public int MaxReentryAgeBars { get; set; } = 6;
     public decimal FeePercentPerSide { get; set; }
     public int TotalCrossovers { get; set; }
     public int LongSignals { get; set; }
@@ -44,6 +46,7 @@ public sealed class PaperSession
     public int RejectedByFees { get; set; }
     public int RejectedByTradingCosts { get; set; }
     public int RejectedByInsufficientMargin { get; set; }
+    public int RejectedByInvalidVolume { get; set; }
     public int ConfirmationFailed { get; set; }
     public int InvalidStopLoss { get; set; }
     public int SkippedWhilePositionOpen { get; set; }
@@ -193,6 +196,7 @@ public sealed class PaperTrade
     public GapState SignalGapState { get; set; }
     public bool IsReentry { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
+    public int? ReentryAgeBars { get; set; }
     public PaperExitReason? ExitReason { get; set; }
     public List<PaperTradeEvent> Events { get; set; } = [];
     public decimal? Lots { get; set; }

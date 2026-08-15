@@ -19,7 +19,7 @@ const normalizeLinePoints = (points: LinePoint[]) => Array.from(new Map(points.m
 
 export function TradeChart({ data, detail, visibility }: { data: TradeChartData; detail: TradeDetail; visibility: Visibility }) {
   const host = useRef<HTMLDivElement>(null)
-  const series = useRef<{ ema9: ISeriesApi<'Line'>; ema15: ISeriesApi<'Line'>; ema100: ISeriesApi<'Line'>; stop: ISeriesApi<'Line'>; target: ISeriesApi<'Line'> } | null>(null)
+  const series = useRef<{ ema9: ISeriesApi<'Line'>; ema15: ISeriesApi<'Line'>; ema100: ISeriesApi<'Line'>; stop: ISeriesApi<'Line'>; target: ISeriesApi<'Line'>; executionEntry: ISeriesApi<'Line'>; executionExit: ISeriesApi<'Line'> } | null>(null)
   const markers = useRef<ISeriesMarkersPluginApi<Time> | null>(null)
   const markerData = useRef<SeriesMarker<Time>[]>([])
   const [renderError, setRenderError] = useState(false)
@@ -37,6 +37,10 @@ export function TradeChart({ data, detail, visibility }: { data: TradeChartData;
       const ema100 = chart.addSeries(LineSeries, { color: '#dc2626', lineWidth: 2, title: 'EMA 100' })
       const stop = chart.addSeries(LineSeries, { color: '#991b1b', lineWidth: 1, lineStyle: 2, lineType: LineType.WithSteps, title: 'SL' })
       const target = chart.addSeries(LineSeries, { color: '#15803d', lineWidth: 1, lineStyle: 2, lineType: LineType.WithSteps, title: 'TP' })
+      const isMt5Paper = detail.summary.source === 'Paper' && detail.summary.marketDataSource === 'Mt5Exness'
+      const isLong = detail.summary.direction === 'Long'
+      const executionEntry = chart.addSeries(LineSeries, { color: '#0f172a', lineWidth: 3, title: isLong ? 'Entry Ask' : 'Entry Bid', visible: isMt5Paper })
+      const executionExit = chart.addSeries(LineSeries, { color: '#ea580c', lineWidth: 3, title: isLong ? 'Exit Bid' : 'Exit Ask', visible: isMt5Paper })
 
       candleSeries.setData(data.candles.map(item => ({ time: utc(item.openTimeUtc), open: item.open, high: item.high, low: item.low, close: item.close })))
       const points = (items: typeof data.ema9) => normalizeLinePoints(items.filter(item => item.value !== null).map(item => ({ time: utc(item.timeUtc), value: item.value! })))
@@ -57,8 +61,16 @@ export function TradeChart({ data, detail, visibility }: { data: TradeChartData;
       }
       stop.setData(normalizeLinePoints(level(detail.initialStopLoss, detail.finalStopLoss, 'newStop')))
       target.setData(normalizeLinePoints(level(detail.originalTakeProfit, detail.finalTakeProfit, 'newTakeProfit')))
+      const exact = (when: string | null, value: number | null) => {
+        if (!isMt5Paper || value === null) return []
+        const index = data.candles.findIndex(item => chartBarTime(data.candles, when) === utc(item.openTimeUtc))
+        if (index < 0) return []
+        const next = data.candles[Math.min(index + 1, data.candles.length - 1)]
+        return next.openTimeUtc === data.candles[index].openTimeUtc ? [{ time: utc(data.candles[index].openTimeUtc), value }] : [{ time: utc(data.candles[index].openTimeUtc), value }, { time: utc(next.openTimeUtc), value }]
+      }
+      executionEntry.setData(exact(detail.summary.entryTimeUtc, detail.summary.entryPrice))
+      executionExit.setData(exact(detail.summary.exitTimeUtc, detail.summary.exitPrice))
 
-      const isLong = detail.summary.direction === 'Long'
       const marker = (when: string | null, position: 'aboveBar' | 'belowBar', shape: 'circle' | 'arrowUp' | 'arrowDown', text: string, color: string) => {
         const time = chartBarTime(data.candles, when)
         return time === null ? [] : [{ time, position, shape, text, color }]
@@ -71,7 +83,7 @@ export function TradeChart({ data, detail, visibility }: { data: TradeChartData;
         ...marker(detail.summary.exitTimeUtc, isLong ? 'aboveBar' : 'belowBar', isLong ? 'arrowDown' : 'arrowUp', detail.summary.exitReason ?? 'Exit', '#dc2626')
       ].sort((left, right) => Number(left.time) - Number(right.time))
       markers.current = createSeriesMarkers(candleSeries, markerData.current)
-      series.current = { ema9, ema15, ema100, stop, target }
+      series.current = { ema9, ema15, ema100, stop, target, executionEntry, executionExit }
       chart.timeScale().fitContent()
       setRenderError(false)
     } catch {
@@ -97,8 +109,10 @@ export function TradeChart({ data, detail, visibility }: { data: TradeChartData;
     current.ema100.applyOptions({ visible: visibility.ema100 })
     current.stop.applyOptions({ visible: visibility.levels })
     current.target.applyOptions({ visible: visibility.levels })
+    current.executionEntry.applyOptions({ visible: detail.summary.source === 'Paper' && detail.summary.marketDataSource === 'Mt5Exness' && visibility.levels })
+    current.executionExit.applyOptions({ visible: detail.summary.source === 'Paper' && detail.summary.marketDataSource === 'Mt5Exness' && visibility.levels })
     markers.current?.setMarkers(visibility.markers ? markerData.current : [])
-  }, [visibility])
+  }, [visibility, detail.summary.marketDataSource, detail.summary.source])
 
   const retry = () => {
     setRenderError(false)

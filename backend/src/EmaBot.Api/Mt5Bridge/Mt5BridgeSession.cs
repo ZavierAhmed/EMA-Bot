@@ -73,6 +73,7 @@ public sealed class Mt5BridgeSession : IAsyncDisposable
             using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopped.Token);
             try { return await pending.Task.WaitAsync(_requestTimeout, waitCancellation.Token); }
             catch (TimeoutException) { throw new Mt5BridgeRequestTimeoutException("MT5 bridge request timed out."); }
+            catch (OperationCanceledException) when (_stopped.IsCancellationRequested) { throw new Mt5BridgeDisconnectedException("MT5 bridge client disconnected."); }
         }
         finally { _pending.TryRemove(requestId, out _); }
     }

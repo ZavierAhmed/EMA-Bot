@@ -1,4 +1,5 @@
 using EmaBot.Api.Strategy;
+using System.ComponentModel.DataAnnotations.Schema;
 using System.Text.Json.Serialization;
 
 namespace EmaBot.Api.Models;
@@ -121,6 +122,7 @@ public sealed class BacktestTrade
     public GapState SignalGapState { get; set; }
     public bool IsReentry { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
+    [NotMapped] public int? ReentryAgeBars { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
     public decimal? SignalAtr14 { get; set; }
     public decimal? ReversalPowerScore { get; set; }

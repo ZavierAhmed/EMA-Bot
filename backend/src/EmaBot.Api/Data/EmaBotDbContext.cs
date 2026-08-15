@@ -61,6 +61,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(settings => settings.PaperFixedLots).HasPrecision(18, 8);
             entity.Property(settings => settings.PaperMarginPerTradePercent).HasPrecision(8, 4);
             entity.Property(settings => settings.PaperStartingBalance).HasPrecision(18, 8);
+            entity.Property(settings => settings.MaxReentryAgeBars).HasDefaultValue(6);
         });
         builder.Entity<BacktestRun>(entity => { entity.Property(run => run.MarketDataSource).HasConversion<string>().HasMaxLength(32).HasDefaultValue(MarketDataSource.LegacyBinance); entity.Property(run => run.Symbol).HasMaxLength(64); entity.Property(run => run.Interval).HasMaxLength(8); entity.Property(run => run.MinEmaGapPercent).HasPrecision(8, 4); entity.Property(run => run.MaxStopDistancePercent).HasPrecision(8, 4); entity.Property(run => run.StartingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.EndingBalanceUsdt).HasPrecision(18, 8); entity.Property(run => run.MarginPerTradePercent).HasPrecision(8, 4); entity.Property(run => run.Leverage).HasPrecision(8, 4); entity.HasMany(run => run.Trades).WithOne(trade => trade.BacktestRun!).HasForeignKey(trade => trade.BacktestRunId).OnDelete(DeleteBehavior.Cascade); });
         builder.Entity<BacktestTrade>(entity => { entity.Property(trade => trade.AccountEquityAtEntryUsdt).HasPrecision(18, 8); entity.Property(trade => trade.MarginUsedUsdt).HasPrecision(18, 8); entity.Property(trade => trade.Leverage).HasPrecision(8, 4); entity.Property(trade => trade.SignalOpen).HasPrecision(18, 8); entity.Property(trade => trade.SignalAtr14).HasPrecision(18, 8); entity.Property(trade => trade.ReversalPowerScore).HasPrecision(8, 4); entity.Property(trade => trade.StopAnchorPrice).HasPrecision(18, 8); entity.Property(trade => trade.StopBuffer).HasPrecision(18, 8); entity.HasIndex(trade => trade.BacktestRunId); entity.HasMany(trade => trade.Events).WithOne(item => item.BacktestTrade!).HasForeignKey(item => item.BacktestTradeId).OnDelete(DeleteBehavior.Cascade); });
@@ -85,6 +86,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(session => session.UsedMargin).HasPrecision(18, 8);
             entity.Property(session => session.NetPnl).HasPrecision(18, 8);
             entity.Property(session => session.TotalTradingCosts).HasPrecision(18, 8);
+            entity.Property(session => session.MaxReentryAgeBars).HasDefaultValue(6);
             entity.HasIndex(session => session.Status);
             entity.HasMany(session => session.Symbols).WithOne(symbol => symbol.PaperSession!).HasForeignKey(symbol => symbol.PaperSessionId).OnDelete(DeleteBehavior.Cascade);
             entity.HasMany(session => session.Trades).WithOne(trade => trade.PaperSession!).HasForeignKey(trade => trade.PaperSessionId).OnDelete(DeleteBehavior.Cascade);

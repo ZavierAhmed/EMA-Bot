@@ -21,6 +21,8 @@ public sealed class TradingSettings
     public bool UseHtfRegimeFilter { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
+    public bool SameTrendReentryEnabled { get; set; }
+    public int MaxReentryAgeBars { get; set; } = 6;
     public decimal FeePercentPerSide { get; set; } = 0.05m;
     public PaperPositionSizingMode PaperPositionSizingMode { get; set; } = PaperPositionSizingMode.FixedLots;
     public decimal PaperFixedLots { get; set; } = .01m;

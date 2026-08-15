@@ -58,10 +58,10 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
             // A SL/TP exit is intrabar. A signal at that candle's close may enter on the following open;
             // signals from earlier closes remain unavailable while the position was open.
             occupiedUntil = Array.FindIndex(candles, c => c.CloseTimeUtc == trade.ExitTimeUtc);
-            if (snapshots.Count > 0 && trade.ExitReason is BacktestExitReason.StopLoss or BacktestExitReason.TrailingStop && reenteredRegimes.Add(crossover!.Time))
+            if (settings.SameTrendReentryEnabled && snapshots.Count > 0 && (trade.ExitReason is BacktestExitReason.StopLoss or BacktestExitReason.TrailingStop) && reenteredRegimes.Add(crossover!.Time))
             {
                 var opposite = direction == SignalDirection.Long ? TrendDirection.Down : TrendDirection.Up;
-                var reentry = snapshots.Where(snapshot => { var index = Array.FindIndex(candles, candle => candle.CloseTimeUtc == snapshot.Time); return index >= occupiedUntil && index <= maxExecutionIndex; }).TakeWhile(snapshot => snapshot.TrendDirection != opposite).FirstOrDefault(snapshot => IsContinuation(snapshot, direction, settings));
+                var reentry = snapshots.Where(snapshot => { var index = Array.FindIndex(candles, candle => candle.CloseTimeUtc == snapshot.Time); var ageBars = candles.Count(candle => candle.CloseTimeUtc > crossover.Time && candle.CloseTimeUtc <= snapshot.Time); return index >= occupiedUntil && index <= maxExecutionIndex && ageBars <= settings.MaxReentryAgeBars; }).TakeWhile(snapshot => snapshot.TrendDirection != opposite).FirstOrDefault(snapshot => IsContinuation(snapshot, direction, settings));
                 if (reentry is not null)
                 {
                     var reentrySignalIndex = Array.FindIndex(candles, candle => candle.CloseTimeUtc == reentry.Time);
@@ -76,7 +76,7 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                             if (TradeMath.ExpectedNetAtTarget(reentryEntry, reentryTarget, reentrySize.Quantity, direction, settings.FeePercentPerSide) > 0)
                             {
                                 var second = Execute(candles, reentrySignalIndex + 1, crossoverIndex, reentrySignal, direction, reentryEntry, reentryStop, settings, reentrySize, maxExecutionIndex, reentryHtf);
-                                second.IsReentry = true; second.TrendRegimeCrossoverTimeUtc = crossover.Time; trades.Add(second);
+                                second.IsReentry = true; second.TrendRegimeCrossoverTimeUtc = crossover.Time; second.ReentryAgeBars = candles.Count(candle => candle.CloseTimeUtc > crossover.Time && candle.CloseTimeUtc <= reentry.Time); trades.Add(second);
                                 if (settings.PositionSizingMode == PositionSizingMode.MarginPercent) equity += second.NetPnlUsdt;
                                 occupiedUntil = Array.FindIndex(candles, candle => candle.CloseTimeUtc == second.ExitTimeUtc);
                             }

@@ -152,7 +152,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         var entry = 300m; var originalStop = direction == SignalDirection.Long ? 290m : 310m;
         var continuationClose = direction == SignalDirection.Long ? 310m : 290m;
         _factory.BinanceClient.Klines = TrendingWarmup(direction);
-        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, direction: direction, entry: entry, stop: originalStop);
+        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, direction: direction, entry: entry, stop: originalStop, reentry: true);
         await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
         var exitCandleOpen = _factory.BinanceClient.Klines[^1].CloseTimeUtc.AddMilliseconds(1);
 
@@ -189,7 +189,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
         const decimal entry = 300m; const decimal stop = 290m; const decimal continuationClose = 310m;
         _factory.BinanceClient.Klines = TrendingWarmup(SignalDirection.Long);
-        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, direction: SignalDirection.Long, entry: entry, stop: stop, adaptive: true);
+        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, direction: SignalDirection.Long, entry: entry, stop: stop, adaptive: true, reentry: true);
         await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
         var exitOpen = _factory.BinanceClient.Klines[^1].CloseTimeUtc.AddMilliseconds(1);
         await coordinator.ProcessUpdateForTestAsync(Kline(exitOpen, entry, stop, stop, false));
@@ -245,11 +245,11 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
     }
 
-    private async Task<PaperSession> CreateSession(PaperSessionStatus status, DateTimeOffset? pendingSignal = null, bool openTrade = false, SignalDirection direction = SignalDirection.Long, decimal entry = 100m, decimal? stop = null, decimal fee = .1m, bool trailing = false, bool adaptive = false)
+    private async Task<PaperSession> CreateSession(PaperSessionStatus status, DateTimeOffset? pendingSignal = null, bool openTrade = false, SignalDirection direction = SignalDirection.Long, decimal entry = 100m, decimal? stop = null, decimal fee = .1m, bool trailing = false, bool adaptive = false, bool reentry = false)
     {
         using var scope = _factory.Services.CreateScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var symbol = new PaperSessionSymbol { Symbol = "BTCUSDT", PendingDirection = pendingSignal.HasValue ? SignalDirection.Long : null, PendingCrossoverTimeUtc = pendingSignal, PendingSignalTimeUtc = pendingSignal, PendingStopPrice = pendingSignal.HasValue ? 90m : null, PendingStopSourceType = pendingSignal.HasValue ? StopSourceType.FallbackLookback : null, PendingStopSourceTimeUtc = pendingSignal, PendingSignalClose = pendingSignal.HasValue ? 100m : null, PendingSignalEma9 = pendingSignal.HasValue ? 101m : null, PendingSignalEma15 = pendingSignal.HasValue ? 100m : null, PendingSignalGapState = pendingSignal.HasValue ? GapState.Expanding : null };
-        var session = new PaperSession { Interval = "3m", Status = status, CreatedAtUtc = DateTimeOffset.UtcNow, StartedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = fee, TrailingStopEnabled = trailing, UseAdaptiveInitialStop = adaptive, Symbols = [symbol] };
+        var session = new PaperSession { Interval = "3m", Status = status, CreatedAtUtc = DateTimeOffset.UtcNow, StartedAtUtc = DateTimeOffset.UtcNow, RiskReward = 2m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = fee, TrailingStopEnabled = trailing, UseAdaptiveInitialStop = adaptive, SameTrendReentryEnabled = reentry, MaxReentryAgeBars = reentry ? 500 : 6, Symbols = [symbol] };
         if (openTrade) { var effectiveStop = stop ?? (direction == SignalDirection.Long ? entry - 10m : entry + 10m); var target = direction == SignalDirection.Long ? entry + (entry - effectiveStop) * 2m : entry - (effectiveStop - entry) * 2m; var entryFee = TradeMath.Fee(entry, 1m, fee); session.Trades.Add(new PaperTrade { PaperSessionSymbol = symbol, Symbol = "BTCUSDT", Interval = "3m", Status = PaperTradeStatus.Open, Direction = direction, CrossoverTimeUtc = DateTimeOffset.UnixEpoch, SignalTimeUtc = DateTimeOffset.UnixEpoch, EntryTimeUtc = DateTimeOffset.UnixEpoch, EntryPrice = entry, Quantity = 1m, EntryNotionalUsdt = entry, InitialStopLoss = effectiveStop, CurrentStopLoss = effectiveStop, StopSourceType = StopSourceType.FallbackLookback, StopSourceTimeUtc = DateTimeOffset.UnixEpoch, OriginalTakeProfit = target, CurrentTakeProfit = target, EntryFeeUsdt = entryFee, TotalFeesUsdt = entryFee }); }
         db.PaperSessions.Add(session); await db.SaveChangesAsync(); return session;
     }
