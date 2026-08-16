@@ -381,6 +381,103 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         await coordinator.StopAsync(CancellationToken.None);
     }
 
+    [Theory]
+    [InlineData("63005.37", "63015.37", "63013.281347")]
+    [InlineData("63060.87", "63070.87", "63070.832718")]
+    public async Task AlreadyBreachedShortStop_IsRejectedBeforePaperTradeCreation(string bidText, string askText, string stopText)
+    {
+        var coordinator = CreateCoordinator(new TestCalculator());
+        var signal = DateTimeOffset.UnixEpoch.AddHours(11).AddMilliseconds(-1);
+        var session = await CreateSessionAsync(SignalDirection.Short, pendingSignal: signal);
+        var bid = decimal.Parse(bidText, System.Globalization.CultureInfo.InvariantCulture);
+        var ask = decimal.Parse(askText, System.Globalization.CultureInfo.InvariantCulture);
+        var stop = decimal.Parse(stopText, System.Globalization.CultureInfo.InvariantCulture);
+        await ConfigureAsync(session.Id, (_, symbol) => symbol.PendingStopPrice = stop);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(signal.AddMilliseconds(1), bid, ask));
+
+        Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        using var scope = factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        Assert.Equal(1, await database.PaperSessions.Where(item => item.Id == session.Id).Select(item => item.RejectedByExecutableStop).SingleAsync());
+        var decision = await database.PaperDecisionEvents.SingleAsync(item => item.PaperSessionId == session.Id && item.Stage == "ExecutableStopRejected");
+        Assert.Contains("Ask", decision.Message); Assert.Contains("already", decision.Message, StringComparison.OrdinalIgnoreCase);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task AlreadyBreachedLongStop_IsRejectedBeforePaperTradeCreation()
+    {
+        var coordinator = CreateCoordinator(new TestCalculator());
+        var signal = DateTimeOffset.UnixEpoch.AddHours(12).AddMilliseconds(-1);
+        var session = await CreateSessionAsync(SignalDirection.Long, pendingSignal: signal);
+        await ConfigureAsync(session.Id, (_, symbol) => symbol.PendingStopPrice = 100m);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(signal.AddMilliseconds(1), 100m, 100.2m));
+
+        Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        using var scope = factory.Services.CreateScope();
+        var decision = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperDecisionEvents.SingleAsync(item => item.PaperSessionId == session.Id && item.Stage == "ExecutableStopRejected");
+        Assert.Contains("Bid", decision.Message);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public void BrokerStopsLevel_UsesExecutableExitQuoteSides()
+    {
+        var symbol = new PaperSessionSymbol { Symbol = "XAUUSDm", ContractSize = 100m, PointSize = .01m, StopsLevelPoints = 2 };
+
+        Assert.False(PaperTradingCoordinator.StopsAreValid(symbol, SignalDirection.Long, 100.2m, 100m, 100.2m, 99.99m, 102.6m));
+        Assert.False(PaperTradingCoordinator.StopsAreValid(symbol, SignalDirection.Short, 100m, 100m, 100.2m, 100.21m, 98m));
+        Assert.True(PaperTradingCoordinator.StopsAreValid(symbol, SignalDirection.Long, 100.2m, 100m, 100.2m, 99.98m, 102.6m));
+        Assert.True(PaperTradingCoordinator.StopsAreValid(symbol, SignalDirection.Short, 100m, 100m, 100.2m, 100.22m, 98m));
+    }
+
+    [Theory]
+    [InlineData(SignalDirection.Long)]
+    [InlineData(SignalDirection.Short)]
+    public async Task OppositeSignal_ClosesOnlyOnLaterExecutableQuote(SignalDirection direction)
+    {
+        var calculator = new TestCalculator();
+        var coordinator = CreateCoordinator(calculator);
+        var session = await CreateSessionAsync(direction, openTrade: true);
+        await ConfigureAsync(session.Id, (value, _) => value.ExitOnOppositeCrossover = true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        var opposite = direction == SignalDirection.Long ? SignalDirection.Short : SignalDirection.Long;
+        await ScheduleOppositeExitForTestAsync(coordinator, opposite);
+
+        Assert.NotNull(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        var bid = direction == SignalDirection.Long ? 101m : 99m;
+        var ask = direction == SignalDirection.Long ? 101.2m : 99.2m;
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(13), bid, ask));
+
+        using var scope = factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var trade = await database.PaperTrades.SingleAsync(item => item.PaperSessionId == session.Id);
+        Assert.Equal(PaperExitReason.OppositeCrossover, trade.ExitReason);
+        Assert.Equal(direction == SignalDirection.Long ? bid : ask, trade.ExitPrice);
+        Assert.Single(await database.PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "OppositeExitScheduled").ToListAsync());
+        Assert.Single(await database.PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "OppositeCrossoverExit").ToListAsync());
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task OppositeSignal_WhenOptionIsOff_RemainsSkippedWhileOpen()
+    {
+        var coordinator = CreateCoordinator(new TestCalculator());
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        await ScheduleOppositeExitForTestAsync(coordinator, SignalDirection.Short);
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(14), 101m, 101.2m));
+
+        Assert.NotNull(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        using var scope = factory.Services.CreateScope();
+        Assert.Single(await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "SkippedWhileOpen").ToListAsync());
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
     [Fact]
     public async Task CalculatorFailure_FaultsSessionWithoutCreatingTrade()
     {
@@ -470,6 +567,18 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         var symbols = (IDictionary)active.GetType().GetProperty("Symbols")!.GetValue(active)!;
         var runtime = symbols["XAUUSDm"]!;
         typeof(PaperTradingCoordinator).GetMethod("SetOpenTrade", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [runtime, trade]);
+    }
+
+    private static async Task ScheduleOppositeExitForTestAsync(PaperTradingCoordinator coordinator, SignalDirection direction)
+    {
+        var active = typeof(PaperTradingCoordinator).GetField("active", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(coordinator)!;
+        var symbols = (IDictionary)active.GetType().GetProperty("Symbols")!.GetValue(active)!;
+        var runtime = symbols["XAUUSDm"]!;
+        var at = DateTimeOffset.UnixEpoch.AddHours(12);
+        var snapshot = new IndicatorSnapshot(at, 100m, 100m, 99m, null, 1m, GapState.Expanding, TrendDirection.Neutral, 100m);
+        var signal = new StrategyEvent(at, direction, direction == SignalDirection.Long ? SignalStatus.LongSignal : SignalStatus.ShortSignal, snapshot);
+        var method = typeof(PaperTradingCoordinator).GetMethod("ScheduleSignalAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await (Task)method.Invoke(coordinator, [active, runtime, Array.Empty<StrategyEvent>(), signal, CancellationToken.None])!;
     }
 
     private sealed class FixedResolver(IHistoricalMarketDataProvider provider) : IHistoricalMarketDataProviderResolver

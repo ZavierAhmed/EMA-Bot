@@ -7,7 +7,7 @@ namespace EmaBot.Api.Models;
 public enum BacktestRunStatus { Completed, Failed }
 public enum StopSourceType { Pivot, FallbackLookback, AdaptiveSignalCandle, AdaptiveMicroStructure, AdaptiveLegacyFallback }
 public enum ReversalPowerBand { Weak, Normal, Strong }
-public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData, TrailingStop }
+public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData, TrailingStop, OppositeCrossover }
 public enum BacktestTradeEventType { Entry, TrailingStopMoved, TakeProfitExtended, Exit }
 
 public sealed class BacktestRun
@@ -39,6 +39,7 @@ public sealed class BacktestRun
     public bool UseAdaptiveInitialStop { get; set; }
     public bool SameTrendReentryEnabled { get; set; }
     public int MaxReentryAgeBars { get; set; } = 6;
+    public bool ExitOnOppositeCrossover { get; set; }
     public decimal FeePercentPerSide { get; set; }
     public int TotalTrades { get; set; }
     public int WinningTrades { get; set; }

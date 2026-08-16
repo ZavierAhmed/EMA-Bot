@@ -53,11 +53,11 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
             var size = TradeMath.CalculatePositionSize(settings, equity, entry);
             var target = TradeMath.InitialTarget(entry, stop.Price, direction, settings.RiskReward);
             if (TradeMath.ExpectedNetAtTarget(entry, target, size.Quantity, direction, settings.FeePercentPerSide) <= 0) { rejectedFees++; continue; }
-            var trade = Execute(candles, entryIndex, crossoverIndex, signal, direction, entry, stop, settings, size, maxExecutionIndex, htf); trades.Add(trade);
+            var trade = Execute(candles, entryIndex, crossoverIndex, signal, direction, entry, stop, settings, size, maxExecutionIndex, htf, events); trades.Add(trade);
             if (settings.PositionSizingMode == PositionSizingMode.MarginPercent) equity += trade.NetPnlUsdt;
             // A SL/TP exit is intrabar. A signal at that candle's close may enter on the following open;
             // signals from earlier closes remain unavailable while the position was open.
-            occupiedUntil = Array.FindIndex(candles, c => c.CloseTimeUtc == trade.ExitTimeUtc);
+            occupiedUntil = Array.FindIndex(candles, c => c.OpenTimeUtc <= trade.ExitTimeUtc && trade.ExitTimeUtc <= c.CloseTimeUtc);
             if (settings.SameTrendReentryEnabled && snapshots.Count > 0 && (trade.ExitReason is BacktestExitReason.StopLoss or BacktestExitReason.TrailingStop) && reenteredRegimes.Add(crossover!.Time))
             {
                 var opposite = direction == SignalDirection.Long ? TrendDirection.Down : TrendDirection.Up;
@@ -75,10 +75,10 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                             var reentrySize = TradeMath.CalculatePositionSize(settings, equity, reentryEntry); var reentryTarget = TradeMath.InitialTarget(reentryEntry, reentryStop.Price, direction, settings.RiskReward);
                             if (TradeMath.ExpectedNetAtTarget(reentryEntry, reentryTarget, reentrySize.Quantity, direction, settings.FeePercentPerSide) > 0)
                             {
-                                var second = Execute(candles, reentrySignalIndex + 1, crossoverIndex, reentrySignal, direction, reentryEntry, reentryStop, settings, reentrySize, maxExecutionIndex, reentryHtf);
+                                var second = Execute(candles, reentrySignalIndex + 1, crossoverIndex, reentrySignal, direction, reentryEntry, reentryStop, settings, reentrySize, maxExecutionIndex, reentryHtf, events);
                                 second.IsReentry = true; second.TrendRegimeCrossoverTimeUtc = crossover.Time; second.ReentryAgeBars = candles.Count(candle => candle.CloseTimeUtc > crossover.Time && candle.CloseTimeUtc <= reentry.Time); trades.Add(second);
                                 if (settings.PositionSizingMode == PositionSizingMode.MarginPercent) equity += second.NetPnlUsdt;
-                                occupiedUntil = Array.FindIndex(candles, candle => candle.CloseTimeUtc == second.ExitTimeUtc);
+                                occupiedUntil = Array.FindIndex(candles, candle => candle.OpenTimeUtc <= second.ExitTimeUtc && second.ExitTimeUtc <= candle.CloseTimeUtc);
                             }
                         }
                     }
@@ -106,13 +106,18 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
         return settings.MinEmaGapPercent == 0 || snapshot.GapPercent >= settings.MinEmaGapPercent;
     }
 
-    private static BacktestTrade Execute(Candle[] candles, int entryIndex, int crossoverIndex, StrategyEvent signal, SignalDirection direction, decimal entry, InitialStopSelection stop, TradingSettings settings, TradeMath.PositionSize size, int maxExecutionIndex, HigherTimeframeDiagnostic? htf)
+    private static BacktestTrade Execute(Candle[] candles, int entryIndex, int crossoverIndex, StrategyEvent signal, SignalDirection direction, decimal entry, InitialStopSelection stop, TradingSettings settings, TradeMath.PositionSize size, int maxExecutionIndex, HigherTimeframeDiagnostic? htf, IReadOnlyList<StrategyEvent> events)
     {
         var risk = decimal.Abs(entry - stop.Price); var originalTp = TradeMath.InitialTarget(entry, stop.Price, direction, settings.RiskReward); var managementEvents = new List<BacktestTradeEvent> { new() { TimeUtc = candles[entryIndex].OpenTimeUtc, EffectiveTimeUtc = candles[entryIndex].OpenTimeUtc, Type = BacktestTradeEventType.Entry, MarketPrice = entry } };
-        var currentStop = stop.Price; var currentTp = originalTp; var extended = false; var max = entry; var min = entry; var exitIndex = maxExecutionIndex; var exitPrice = candles[maxExecutionIndex].Close; var reason = BacktestExitReason.EndOfData; var conflict = false;
+        var currentStop = stop.Price; var currentTp = originalTp; var extended = false; var max = entry; var min = entry; var exitIndex = maxExecutionIndex; var exitPrice = candles[maxExecutionIndex].Close; var exitTime = candles[maxExecutionIndex].CloseTimeUtc; var reason = BacktestExitReason.EndOfData; var conflict = false; var oppositeExitIndex = -1;
         for (var i = entryIndex; i <= maxExecutionIndex; i++)
         {
             var c = candles[i];
+            if (i == oppositeExitIndex)
+            {
+                exitPrice = c.Open; exitIndex = i; exitTime = c.OpenTimeUtc; reason = BacktestExitReason.OppositeCrossover;
+                break;
+            }
             var sl = direction == SignalDirection.Long ? c.Low <= currentStop : c.High >= currentStop;
             var tp = direction == SignalDirection.Long ? c.High >= currentTp : c.Low <= currentTp;
             if (sl || tp)
@@ -121,6 +126,7 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                 reason = sl ? currentStop == stop.Price ? BacktestExitReason.StopLoss : BacktestExitReason.TrailingStop : BacktestExitReason.TakeProfit;
                 exitPrice = sl ? currentStop : currentTp;
                 exitIndex = i;
+                exitTime = c.CloseTimeUtc;
                 // OHLC does not reveal intrabar order. Record the exit fill as an excursion, but do not
                 // attribute the rest of an exit candle's range to a position that may already be closed.
                 if (direction == SignalDirection.Long)
@@ -154,9 +160,10 @@ public sealed class BacktestEngine(EmaSignalEngine strategy)
                     extended = true; managementEvents.Add(new BacktestTradeEvent { TimeUtc = c.CloseTimeUtc, EffectiveTimeUtc = i + 1 <= maxExecutionIndex ? candles[i + 1].OpenTimeUtc : null, Type = BacktestTradeEventType.TakeProfitExtended, MarketPrice = c.Close, OldTakeProfit = oldTp, NewTakeProfit = currentTp, ProgressPercent = progress });
                 }
             }
+            if (settings.ExitOnOppositeCrossover && i + 1 <= maxExecutionIndex && events.Any(item => item.Time == c.CloseTimeUtc && item.Direction != direction && item.Status is SignalStatus.LongSignal or SignalStatus.ShortSignal)) oppositeExitIndex = i + 1;
         }
         var quantity = size.Quantity; var notional = size.NotionalUsdt; var entryFee = TradeMath.Fee(entry, quantity, settings.FeePercentPerSide); var exitFee = TradeMath.Fee(exitPrice, quantity, settings.FeePercentPerSide); var gross = TradeMath.GrossPnl(entry, exitPrice, quantity, direction); var net = gross - entryFee - exitFee; var snap = signal.Snapshot;
-        managementEvents.Add(new BacktestTradeEvent { TimeUtc = candles[exitIndex].CloseTimeUtc, EffectiveTimeUtc = candles[exitIndex].CloseTimeUtc, Type = BacktestTradeEventType.Exit, MarketPrice = exitPrice });
-        return new BacktestTrade { Direction = direction, CrossoverTimeUtc = candles[crossoverIndex].CloseTimeUtc, SignalTimeUtc = signal.Time, EntryTimeUtc = candles[entryIndex].OpenTimeUtc, ExitTimeUtc = candles[exitIndex].CloseTimeUtc, EntryPrice = entry, ExitPrice = exitPrice, Quantity = quantity, EntryNotionalUsdt = notional, PositionSizingMode = settings.PositionSizingMode, AccountEquityAtEntryUsdt = size.AccountEquityAtEntryUsdt, MarginUsedUsdt = size.MarginUsedUsdt, Leverage = size.Leverage, InitialStopLoss = stop.Price, FinalStopLoss = currentStop, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, OriginalTakeProfit = originalTp, FinalTakeProfit = currentTp, TakeProfitExtended = extended, ExitReason = reason, SameCandleExitConflict = conflict, EntryFeeUsdt = entryFee, ExitFeeUsdt = exitFee, TotalFeesUsdt = entryFee + exitFee, GrossPnlUsdt = gross, NetPnlUsdt = net, NetPnlPercent = net / notional * 100m, GrossRMultiple = gross / (risk * quantity), NetRMultiple = net / (risk * quantity), MfePrice = direction == SignalDirection.Long ? max - entry : entry - min, MfePercent = (direction == SignalDirection.Long ? max - entry : entry - min) / entry * 100m, MaePrice = direction == SignalDirection.Long ? entry - min : max - entry, MaePercent = (direction == SignalDirection.Long ? entry - min : max - entry) / entry * 100m, SignalOpen = snap.Open, SignalClose = snap.Close, SignalEma9 = snap.Ema9, SignalEma15 = snap.Ema15, SignalEma100 = snap.Ema100, SignalGapPercent = snap.GapPercent, SignalGapState = snap.GapState, HtfTimeframe = htf?.Timeframe, SignalHtfCandleCloseTimeUtc = htf?.CandleCloseTimeUtc, SignalHtfEma100Slope20Percent = htf?.Ema100Slope20Percent, SignalHtfAtr14Percent = htf?.Atr14Percent, UseAdaptiveInitialStop = stop.UseAdaptiveInitialStop, SignalAtr14 = stop.Atr14, ReversalPowerScore = stop.ReversalPowerScore, ReversalPowerBand = stop.ReversalPowerBand, StopAnchorPrice = stop.AnchorPrice, StopBuffer = stop.Buffer, Events = managementEvents };
+        managementEvents.Add(new BacktestTradeEvent { TimeUtc = exitTime, EffectiveTimeUtc = exitTime, Type = BacktestTradeEventType.Exit, MarketPrice = exitPrice });
+        return new BacktestTrade { Direction = direction, CrossoverTimeUtc = candles[crossoverIndex].CloseTimeUtc, SignalTimeUtc = signal.Time, EntryTimeUtc = candles[entryIndex].OpenTimeUtc, ExitTimeUtc = exitTime, EntryPrice = entry, ExitPrice = exitPrice, Quantity = quantity, EntryNotionalUsdt = notional, PositionSizingMode = settings.PositionSizingMode, AccountEquityAtEntryUsdt = size.AccountEquityAtEntryUsdt, MarginUsedUsdt = size.MarginUsedUsdt, Leverage = size.Leverage, InitialStopLoss = stop.Price, FinalStopLoss = currentStop, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, OriginalTakeProfit = originalTp, FinalTakeProfit = currentTp, TakeProfitExtended = extended, ExitReason = reason, SameCandleExitConflict = conflict, EntryFeeUsdt = entryFee, ExitFeeUsdt = exitFee, TotalFeesUsdt = entryFee + exitFee, GrossPnlUsdt = gross, NetPnlUsdt = net, NetPnlPercent = net / notional * 100m, GrossRMultiple = gross / (risk * quantity), NetRMultiple = net / (risk * quantity), MfePrice = direction == SignalDirection.Long ? max - entry : entry - min, MfePercent = (direction == SignalDirection.Long ? max - entry : entry - min) / entry * 100m, MaePrice = direction == SignalDirection.Long ? entry - min : max - entry, MaePercent = (direction == SignalDirection.Long ? entry - min : max - entry) / entry * 100m, SignalOpen = snap.Open, SignalClose = snap.Close, SignalEma9 = snap.Ema9, SignalEma15 = snap.Ema15, SignalEma100 = snap.Ema100, SignalGapPercent = snap.GapPercent, SignalGapState = snap.GapState, HtfTimeframe = htf?.Timeframe, SignalHtfCandleCloseTimeUtc = htf?.CandleCloseTimeUtc, SignalHtfEma100Slope20Percent = htf?.Ema100Slope20Percent, SignalHtfAtr14Percent = htf?.Atr14Percent, UseAdaptiveInitialStop = stop.UseAdaptiveInitialStop, SignalAtr14 = stop.Atr14, ReversalPowerScore = stop.ReversalPowerScore, ReversalPowerBand = stop.ReversalPowerBand, StopAnchorPrice = stop.AnchorPrice, StopBuffer = stop.Buffer, Events = managementEvents };
     }
 }

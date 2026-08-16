@@ -57,6 +57,16 @@ public sealed class StrategyOptimizerCandidateTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public void OppositeExitSetting_IsFixedAcrossCandidateGeneration(bool enabled)
+    {
+        var settings = Settings(1.1m); settings.ExitOnOppositeCrossover = enabled;
+        var candidates = StrategyOptimizationService.CandidateSettings(Grid([.9m, 1.1m]), settings);
+        Assert.All(candidates, candidate => Assert.Equal(enabled, candidate.ExitOnOppositeCrossover));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public void FinalizationSettings_PreserveBaselineAdaptiveMode(bool enabled)
     {
         var candidate = new StrategyOptimizationCandidate { RiskReward = 1.5m, MinEmaGapPercent = .01m, MaxStopDistancePercent = 1m, WaitForConfirmationCandle = true, UseEma100Filter = true, UseHtfRegimeFilter = false, TrailingStopEnabled = true };
@@ -78,6 +88,17 @@ public sealed class StrategyOptimizerCandidateTests
         var settings = StrategyOptimizationService.Settings(candidate, run, fixedSettings);
 
         Assert.Equal(enabled, settings.SameTrendReentryEnabled); Assert.Equal(maxAgeBars, settings.MaxReentryAgeBars);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void FinalizationSettings_PreserveBaselineOppositeExitSetting(bool enabled)
+    {
+        var candidate = new StrategyOptimizationCandidate { RiskReward = 1.5m, MinEmaGapPercent = .01m, MaxStopDistancePercent = 1m, WaitForConfirmationCandle = true, UseEma100Filter = true, TrailingStopEnabled = true };
+        var run = new StrategyOptimizationRun { FixedOrderSizeUsdt = 100m, SimulatedAccountBalanceUsdt = 1000m, MarginPerTradePercent = 10m, Leverage = 5m, FeePercentPerSide = .05m };
+        var settings = StrategyOptimizationService.Settings(candidate, run, new TradingSettings { ExitOnOppositeCrossover = enabled });
+        Assert.Equal(enabled, settings.ExitOnOppositeCrossover);
     }
 
     private static StrategyOptimizerGrid Grid(IReadOnlyList<decimal> riskRewards) => new(riskRewards, [0m], [0m], [false], [true], [false]);

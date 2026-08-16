@@ -18,8 +18,10 @@ public sealed class PomeloQueryRegressionTests
         Assert.Contains("20260813115102_ActivateBrokerAwareMt5PaperTrading", migrations);
         Assert.Contains("20260813173000_PersistPaperDecisionLedger", migrations);
         Assert.Contains("20260814185858_AddAdaptiveInitialStop", migrations);
+        Assert.Contains("20260816093000_AddExecutableStopGuardsAndOppositeExits", migrations);
         Assert.True(Array.IndexOf(migrations, "20260813115102_ActivateBrokerAwareMt5PaperTrading") < Array.IndexOf(migrations, "20260813173000_PersistPaperDecisionLedger"));
         Assert.True(Array.IndexOf(migrations, "20260813173000_PersistPaperDecisionLedger") < Array.IndexOf(migrations, "20260814185858_AddAdaptiveInitialStop"));
+        Assert.True(Array.IndexOf(migrations, "20260814185858_AddAdaptiveInitialStop") < Array.IndexOf(migrations, "20260816093000_AddExecutableStopGuardsAndOppositeExits"));
     }
 
     [Fact]

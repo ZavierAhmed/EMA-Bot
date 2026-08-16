@@ -208,6 +208,42 @@ public sealed class BacktestEngineCorrectiveTests
         Assert.Empty(calculation.Trades); Assert.Equal(1, calculation.Diagnostics.InvalidStopLoss);
     }
 
+    [Theory]
+    [InlineData(SignalDirection.Long)]
+    [InlineData(SignalDirection.Short)]
+    public void OppositeCrossover_ClosesAtFollowingCandleOpenWithoutReversing(SignalDirection direction)
+    {
+        var candles = Candles(10, 100m);
+        candles[0] = direction == SignalDirection.Long ? candles[0] with { Low = 90m } : candles[0] with { High = 110m };
+        var opposite = direction == SignalDirection.Long ? SignalDirection.Short : SignalDirection.Long;
+        var settings = Settings(); settings.ExitOnOppositeCrossover = true;
+        var events = new[]
+        {
+            Event(candles, 5, direction, direction == SignalDirection.Long ? SignalStatus.BullishCrossover : SignalStatus.BearishCrossover),
+            Event(candles, 5, direction, direction == SignalDirection.Long ? SignalStatus.LongSignal : SignalStatus.ShortSignal),
+            Event(candles, 6, opposite, opposite == SignalDirection.Long ? SignalStatus.BullishCrossover : SignalStatus.BearishCrossover),
+            Event(candles, 6, opposite, opposite == SignalDirection.Long ? SignalStatus.LongSignal : SignalStatus.ShortSignal)
+        };
+
+        var calculation = Engine().RunWithEvents(candles, settings, events);
+
+        var trade = Assert.Single(calculation.Trades);
+        Assert.Equal(direction, trade.Direction); Assert.Equal(BacktestExitReason.OppositeCrossover, trade.ExitReason);
+        Assert.Equal(candles[7].OpenTimeUtc, trade.ExitTimeUtc); Assert.Equal(candles[7].Open, trade.ExitPrice);
+    }
+
+    [Fact]
+    public void OppositeCrossoverOptionOff_PreservesSkippedWhileOpenBehavior()
+    {
+        var candles = Candles(10, 100m); candles[0] = candles[0] with { Low = 90m };
+        var calculation = Engine().RunWithEvents(candles, Settings(), [
+            Event(candles, 5, SignalDirection.Long, SignalStatus.BullishCrossover), Event(candles, 5, SignalDirection.Long, SignalStatus.LongSignal),
+            Event(candles, 6, SignalDirection.Short, SignalStatus.BearishCrossover), Event(candles, 6, SignalDirection.Short, SignalStatus.ShortSignal)]);
+
+        var trade = Assert.Single(calculation.Trades);
+        Assert.Equal(BacktestExitReason.EndOfData, trade.ExitReason); Assert.Equal(1, calculation.Diagnostics.SkippedWhilePositionOpen);
+    }
+
     [Fact]
     public void ReentryContinuation_RequiresBothFastEmasBeyondEma100()
     {

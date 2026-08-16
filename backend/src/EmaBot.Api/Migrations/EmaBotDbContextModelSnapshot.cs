@@ -177,6 +177,10 @@ namespace EmaBot.Api.Migrations
                     b.Property<decimal>("MaxDrawdownUsdt")
                         .HasColumnType("decimal(65,30)");
 
+                    b.Property<bool>("ExitOnOppositeCrossover")
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false);
+
                     b.Property<int>("MaxReentryAgeBars")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
@@ -696,6 +700,10 @@ namespace EmaBot.Api.Migrations
                         .HasPrecision(8, 4)
                         .HasColumnType("decimal(8,4)");
 
+                    b.Property<bool>("ExitOnOppositeCrossover")
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false);
+
                     b.Property<decimal>("FixedOrderSizeUsdt")
                         .HasColumnType("decimal(65,30)");
 
@@ -776,6 +784,11 @@ namespace EmaBot.Api.Migrations
 
                     b.Property<int>("RejectedByInvalidVolume")
                         .HasColumnType("int");
+
+                    b.Property<int>("RejectedByExecutableStop")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
 
                     b.Property<int>("RejectedByStopDistance")
                         .HasColumnType("int");
@@ -1588,6 +1601,10 @@ namespace EmaBot.Api.Migrations
                     b.Property<decimal>("FeePercentPerSide")
                         .HasPrecision(8, 4)
                         .HasColumnType("decimal(8,4)");
+
+                    b.Property<bool>("ExitOnOppositeCrossover")
+                        .HasColumnType("tinyint(1)")
+                        .HasDefaultValue(false);
 
                     b.Property<decimal>("FixedOrderSizeUsdt")
                         .HasPrecision(18, 8)

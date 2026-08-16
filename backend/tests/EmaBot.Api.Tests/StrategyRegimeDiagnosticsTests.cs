@@ -101,13 +101,13 @@ public sealed class StrategyRegimeDiagnosticsTests
     [Fact]
     public void Settings_ReconstructsFrozenBaselineThenOverlaysCandidateGridValues()
     {
-        var baseline = new TradingSettings { Id = 1, UseAdaptiveInitialStop = true, SameTrendReentryEnabled = true, MaxReentryAgeBars = 4, FixedOrderSizeUsdt = 321m, FeePercentPerSide = .25m, PaperFixedLots = .10m, PaperStartingBalance = 2000m };
+        var baseline = new TradingSettings { Id = 1, UseAdaptiveInitialStop = true, SameTrendReentryEnabled = true, MaxReentryAgeBars = 4, ExitOnOppositeCrossover = true, FixedOrderSizeUsdt = 321m, FeePercentPerSide = .25m, PaperFixedLots = .10m, PaperStartingBalance = 2000m };
         var run = new StrategyOptimizationRun { BaselineSettingsJson = System.Text.Json.JsonSerializer.Serialize(baseline) };
         var candidate = new StrategyOptimizationCandidate { RiskReward = 1.5m, MinEmaGapPercent = .01m, MaxStopDistancePercent = 1m, WaitForConfirmationCandle = true, UseEma100Filter = true, UseHtfRegimeFilter = true, TrailingStopEnabled = true };
 
         var settings = StrategyRegimeDiagnosticsService.Settings(candidate, run);
 
-        Assert.True(settings.UseAdaptiveInitialStop); Assert.True(settings.SameTrendReentryEnabled); Assert.Equal(4, settings.MaxReentryAgeBars);
+        Assert.True(settings.UseAdaptiveInitialStop); Assert.True(settings.SameTrendReentryEnabled); Assert.Equal(4, settings.MaxReentryAgeBars); Assert.True(settings.ExitOnOppositeCrossover);
         Assert.Equal(321m, settings.FixedOrderSizeUsdt); Assert.Equal(.25m, settings.FeePercentPerSide); Assert.Equal(.10m, settings.PaperFixedLots); Assert.Equal(2000m, settings.PaperStartingBalance);
         Assert.Equal(1.5m, settings.RiskReward); Assert.Equal(.01m, settings.MinEmaGapPercent); Assert.True(settings.TrailingStopEnabled);
     }

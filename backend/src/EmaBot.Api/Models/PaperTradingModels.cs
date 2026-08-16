@@ -6,7 +6,7 @@ namespace EmaBot.Api.Models;
 
 public enum PaperSessionStatus { Running, Interrupted, Stopped, Faulted }
 public enum PaperTradeStatus { Open, Closed }
-public enum PaperExitReason { InitialStopLoss, TrailingStop, TakeProfit, SessionStopped }
+public enum PaperExitReason { InitialStopLoss, TrailingStop, TakeProfit, SessionStopped, OppositeCrossover }
 public enum PaperTradeEventType { Entry, TrailingStopMoved, TakeProfitExtended, Exit }
 
 public sealed class PaperSession
@@ -36,6 +36,7 @@ public sealed class PaperSession
     public bool UseAdaptiveInitialStop { get; set; }
     public bool SameTrendReentryEnabled { get; set; }
     public int MaxReentryAgeBars { get; set; } = 6;
+    public bool ExitOnOppositeCrossover { get; set; }
     public decimal FeePercentPerSide { get; set; }
     public int TotalCrossovers { get; set; }
     public int LongSignals { get; set; }
@@ -47,6 +48,7 @@ public sealed class PaperSession
     public int RejectedByTradingCosts { get; set; }
     public int RejectedByInsufficientMargin { get; set; }
     public int RejectedByInvalidVolume { get; set; }
+    public int RejectedByExecutableStop { get; set; }
     public int ConfirmationFailed { get; set; }
     public int InvalidStopLoss { get; set; }
     public int SkippedWhilePositionOpen { get; set; }

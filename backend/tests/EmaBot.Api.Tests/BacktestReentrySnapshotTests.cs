@@ -12,15 +12,15 @@ public sealed class BacktestReentrySnapshotTests
     {
         var options = new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options;
         await using var database = new EmaBotDbContext(options);
-        var global = new TradingSettings { Id = 1, SameTrendReentryEnabled = true, MaxReentryAgeBars = 5 };
-        var run = new BacktestRun { Symbol = "BTCUSDm", Interval = "3m", SameTrendReentryEnabled = global.SameTrendReentryEnabled, MaxReentryAgeBars = global.MaxReentryAgeBars };
+        var global = new TradingSettings { Id = 1, SameTrendReentryEnabled = true, MaxReentryAgeBars = 5, ExitOnOppositeCrossover = true };
+        var run = new BacktestRun { Symbol = "BTCUSDm", Interval = "3m", SameTrendReentryEnabled = global.SameTrendReentryEnabled, MaxReentryAgeBars = global.MaxReentryAgeBars, ExitOnOppositeCrossover = global.ExitOnOppositeCrossover };
         database.AddRange(global, run); await database.SaveChangesAsync();
 
-        global.SameTrendReentryEnabled = false; global.MaxReentryAgeBars = 9; await database.SaveChangesAsync();
+        global.SameTrendReentryEnabled = false; global.MaxReentryAgeBars = 9; global.ExitOnOppositeCrossover = false; await database.SaveChangesAsync();
         var saved = await database.BacktestRuns.AsNoTracking().SingleAsync();
         var response = BacktestResponseMapper.ToDetail(saved);
 
-        Assert.True(response.SameTrendReentryEnabled); Assert.Equal(5, response.MaxReentryAgeBars);
+        Assert.True(response.SameTrendReentryEnabled); Assert.Equal(5, response.MaxReentryAgeBars); Assert.True(response.ExitOnOppositeCrossover);
     }
 
     [Theory]

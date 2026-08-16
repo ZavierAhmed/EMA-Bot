@@ -130,7 +130,7 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
     public async Task InitialStopExit_PersistsSingleReentryRegimeState()
     {
         var coordinator = _factory.Services.GetRequiredService<PaperTradingCoordinator>();
-        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true);
+        var session = await CreateSession(PaperSessionStatus.Running, openTrade: true, reentry: true);
         await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
         await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(1), 90m));
 
@@ -215,6 +215,14 @@ public sealed class PaperCoordinatorTests : IClassFixture<EmaBotApiFactory>
         await coordinator.ProcessUpdateForTestAsync(Kline(exitOpen, 300m, 310m, 299m, true));
 
         Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"].PendingDirection);
+        Assert.False(coordinator.GetRuntimeSnapshot()!.Symbols["BTCUSDT"].ReentryEligible);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            var persisted = await database.PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+            Assert.False(persisted.ReentryEligible); Assert.False(persisted.ReentryConsumed);
+            Assert.Empty(await database.PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "ReentryEligible").ToListAsync());
+        }
         await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
     }
 
