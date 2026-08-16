@@ -901,6 +901,12 @@ namespace EmaBot.Api.Migrations
                     b.Property<int?>("PendingDirection")
                         .HasColumnType("int");
 
+                    b.Property<int?>("PendingOppositeExitDirection")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("PendingOppositeExitSignalTimeUtc")
+                        .HasColumnType("datetime(6)");
+
                     b.Property<bool>("PendingIsReentry")
                         .HasColumnType("tinyint(1)");
 

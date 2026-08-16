@@ -98,6 +98,8 @@ public sealed class PaperSessionSymbol
     public ReversalPowerBand? PendingReversalPowerBand { get; set; }
     public decimal? PendingStopAnchorPrice { get; set; }
     public decimal? PendingStopBuffer { get; set; }
+    public DateTimeOffset? PendingOppositeExitSignalTimeUtc { get; set; }
+    public SignalDirection? PendingOppositeExitDirection { get; set; }
     public SignalDirection? TrendRegimeDirection { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
     public bool ReentryEligible { get; set; }

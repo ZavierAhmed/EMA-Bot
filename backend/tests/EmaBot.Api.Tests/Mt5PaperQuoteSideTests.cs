@@ -449,6 +449,11 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         await ScheduleOppositeExitForTestAsync(coordinator, opposite);
 
         Assert.NotNull(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        using (var initialScope = factory.Services.CreateScope())
+        {
+            var persisted = await initialScope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+            Assert.Equal(opposite, persisted.PendingOppositeExitDirection); Assert.Equal(DateTimeOffset.UnixEpoch.AddHours(12), persisted.PendingOppositeExitSignalTimeUtc);
+        }
         var bid = direction == SignalDirection.Long ? 101m : 99m;
         var ask = direction == SignalDirection.Long ? 101.2m : 99.2m;
         await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(13), bid, ask));
@@ -458,8 +463,71 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
         var trade = await database.PaperTrades.SingleAsync(item => item.PaperSessionId == session.Id);
         Assert.Equal(PaperExitReason.OppositeCrossover, trade.ExitReason);
         Assert.Equal(direction == SignalDirection.Long ? bid : ask, trade.ExitPrice);
+        var symbol = await database.PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+        Assert.Null(symbol.PendingOppositeExitDirection); Assert.Null(symbol.PendingOppositeExitSignalTimeUtc);
         Assert.Single(await database.PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "OppositeExitScheduled").ToListAsync());
         Assert.Single(await database.PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "OppositeCrossoverExit").ToListAsync());
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task PendingOppositeExit_SurvivesInterruptionAndResumesAtFirstBid()
+    {
+        var coordinator = CreateCoordinator(new TestCalculator());
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await ConfigureAsync(session.Id, (value, _) => value.ExitOnOppositeCrossover = true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        await ScheduleOppositeExitForTestAsync(coordinator, SignalDirection.Short);
+        await coordinator.StopAsync(CancellationToken.None);
+        await ConfigureAsync(session.Id, (value, _) => value.Status = PaperSessionStatus.Interrupted);
+
+        var resumed = CreateCoordinator(new TestCalculator());
+        await resumed.StartSessionAsync(session.Id, true, CancellationToken.None);
+        Assert.NotNull(resumed.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        await resumed.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(13), 101m, 101.2m));
+
+        using var scope = factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var trade = await database.PaperTrades.SingleAsync(item => item.PaperSessionId == session.Id);
+        var symbol = await database.PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+        Assert.Equal(PaperExitReason.OppositeCrossover, trade.ExitReason); Assert.Equal(101m, trade.ExitPrice);
+        Assert.Null(symbol.PendingOppositeExitDirection); Assert.Null(symbol.PendingOppositeExitSignalTimeUtc);
+        await resumed.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task InitialStop_WinsOverPendingOppositeExitAndClearsIntent()
+    {
+        var coordinator = CreateCoordinator(new TestCalculator());
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await ConfigureAsync(session.Id, (value, _) => value.ExitOnOppositeCrossover = true);
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        await ScheduleOppositeExitForTestAsync(coordinator, SignalDirection.Short);
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(13), 98.9m, 99.1m));
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(14), 101m, 101.2m));
+
+        using var scope = factory.Services.CreateScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var trade = await database.PaperTrades.SingleAsync(item => item.PaperSessionId == session.Id);
+        var symbol = await database.PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+        Assert.Equal(PaperExitReason.InitialStopLoss, trade.ExitReason); Assert.Null(symbol.PendingOppositeExitDirection); Assert.Null(symbol.PendingOppositeExitSignalTimeUtc);
+        Assert.Empty(await database.PaperDecisionEvents.Where(item => item.PaperSessionId == session.Id && item.Stage == "OppositeCrossoverExit").ToListAsync());
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task OptionOff_SanitizesStalePendingOppositeExitWithoutClosingTrade()
+    {
+        var coordinator = CreateCoordinator(new TestCalculator());
+        var session = await CreateSessionAsync(SignalDirection.Long, openTrade: true);
+        await ConfigureAsync(session.Id, (_, symbol) => { symbol.PendingOppositeExitDirection = SignalDirection.Short; symbol.PendingOppositeExitSignalTimeUtc = DateTimeOffset.UnixEpoch; });
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+        await coordinator.ProcessUpdateForTestAsync(Update(DateTimeOffset.UnixEpoch.AddHours(13), 101m, 101.2m));
+
+        Assert.NotNull(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        using var scope = factory.Services.CreateScope();
+        var symbol = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessionSymbols.SingleAsync(item => item.PaperSessionId == session.Id);
+        Assert.Null(symbol.PendingOppositeExitDirection); Assert.Null(symbol.PendingOppositeExitSignalTimeUtc);
         await coordinator.StopAsync(CancellationToken.None);
     }
 
