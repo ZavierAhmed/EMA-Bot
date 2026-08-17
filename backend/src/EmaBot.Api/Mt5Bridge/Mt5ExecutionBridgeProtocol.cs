@@ -23,9 +23,11 @@ public sealed record Mt5ExecutionErrorPayload(string Code, string Message, bool 
 public sealed record Mt5ExecutionAccountPayload(string AccountFingerprint, string Server, string TradeMode, bool AccountTradeAllowed, bool ExpertTradeAllowed);
 public sealed record Mt5OrderRequest(string ClientExecutionId, string BrokerSymbol, string Side, decimal VolumeLots, decimal? StopLoss, decimal? TakeProfit, long MagicNumber, string CorrelationMarker, long? PositionTicket = null);
 public sealed record Mt5OrderCheckPayload(bool Accepted, string? Retcode, string? Message, decimal? Bid, decimal? Ask);
-public sealed record Mt5OrderResultPayload(bool Accepted, string? Retcode, string? Message, long? PositionTicket, long? DealTicket, decimal? FilledVolumeLots, decimal? AverageFillPrice, bool IsClosed = false);
+public sealed record Mt5OrderResultPayload(bool Accepted, string? Retcode, string? Message, long? PositionTicket, long? DealTicket, decimal? FilledVolumeLots, decimal? AverageFillPrice, bool IsClosed = false, long? OrderTicket = null, long? PositionIdentifier = null, bool IsPartial = false, bool IsPositionOpen = false);
 public sealed record Mt5ExecutionPositionRequest(long PositionTicket, long MagicNumber, string CorrelationMarker);
-public sealed record Mt5ExecutionHistoryRequest(string ClientExecutionId, long MagicNumber, string CorrelationMarker);
+public sealed record Mt5ExecutionHistoryRequest(string ClientExecutionId, long MagicNumber, string CorrelationMarker, string BrokerSymbol, string Side, decimal ExpectedVolumeLots, long FromUnixSeconds, long ToUnixSeconds, long? KnownPositionTicket = null);
+public sealed record Mt5ExecutionHistoryEvidence(long? OrderTicket, long? DealTicket, long? PositionIdentifier, long? PositionTicket, string BrokerSymbol, string Side, long MagicNumber, string CorrelationMarker, decimal ExecutedVolumeLots, decimal? ExecutionPrice, DateTimeOffset ExecutedAtUtc, string EntryType, string DealState, bool IsEntry, bool IsExit, bool IsPartial, string? NativeCode = null);
+public sealed record Mt5ExecutionHistoryPayload(IReadOnlyList<Mt5ExecutionHistoryEvidence> Evidence);
 public sealed class Mt5ExecutionBridgeException(string message) : Exception(message);
 public sealed class Mt5ExecutionBridgeUnavailableException(string message) : InvalidOperationException(message);
 public sealed class Mt5ExecutionBridgeAmbiguousException(string message) : TimeoutException(message);

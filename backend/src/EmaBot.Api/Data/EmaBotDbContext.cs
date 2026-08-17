@@ -174,11 +174,15 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(item => item.CorrelationMarker).HasMaxLength(96);
             entity.Property(item => item.FilledVolumeLots).HasPrecision(18, 8);
             entity.Property(item => item.AverageFillPrice).HasPrecision(18, 8);
+            entity.Property(item => item.ClosedVolumeLots).HasPrecision(18, 8);
+            entity.Property(item => item.AverageClosePrice).HasPrecision(18, 8);
             entity.Property(item => item.BrokerRetcode).HasMaxLength(64);
             entity.Property(item => item.BrokerMessage).HasMaxLength(1024);
             entity.Property(item => item.ReconciliationNote).HasMaxLength(1024);
+            entity.Property(item => item.ReconciliationSource).HasMaxLength(64);
             entity.HasIndex(item => item.ClientExecutionId).IsUnique();
             entity.HasIndex(item => item.PositionTicket);
+            entity.HasIndex(item => item.PositionIdentifier);
             entity.HasIndex(item => item.State);
         });
         builder.Entity<StrategyOptimizationRun>(entity =>

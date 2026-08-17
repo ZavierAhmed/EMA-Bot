@@ -220,7 +220,7 @@ void HandleRequest(const string operation,const string request_id,const string p
    if(operation=="SubmitMarketOrder") { HandleExecutionOrder("SubmitMarketOrder",request_id,payload,false); return; }
    if(operation=="ClosePosition") { HandleExecutionOrder("ClosePosition",request_id,payload,true); return; }
    if(operation=="GetPosition") { SendExecutionPosition(request_id,payload); return; }
-   if(operation=="GetExecutionHistory") { SendError(operation,request_id,"ReconciliationRequired","Use exact known position ticket reconciliation; history cannot be used to adopt positions.",false); return; }
+   if(operation=="GetExecutionHistory") { SendExecutionHistory(request_id,payload); return; }
    if(operation=="GetInstrument" || operation=="GetQuote") { SendError(operation,request_id,"InvalidRequest","brokerSymbol is required.",false); return; }
    SendError(operation,request_id,"UnsupportedOperation","The bridge operation is not supported.",false);
 }
@@ -361,7 +361,7 @@ bool TryExecutionRequest(const string operation,const string request_id,const st
 void SendExecutionResult(const string operation,const string request_id,const bool accepted,const MqlTradeResult &result,const bool closed)
 {
    ulong position_ticket=result.order; if(result.deal>0) position_ticket=(ulong)HistoryDealGetInteger(result.deal,DEAL_POSITION_ID);
-   const string payload="{\"accepted\":"+(accepted ? "true" : "false")+",\"retcode\":\""+(string)result.retcode+"\",\"message\":\""+JsonEscape(result.comment)+"\",\"positionTicket\":"+(position_ticket>0 ? (string)position_ticket : "null")+",\"dealTicket\":"+(result.deal>0 ? (string)result.deal : "null")+",\"filledVolumeLots\":"+OptionalNumber(result.volume)+",\"averageFillPrice\":"+OptionalNumber(result.price)+",\"isClosed\":"+(closed ? "true" : "false")+"}"; SendResponse(operation,request_id,payload);
+   const bool partial=result.retcode==TRADE_RETCODE_DONE_PARTIAL; const string payload="{\"accepted\":"+(accepted ? "true" : "false")+",\"retcode\":\""+(string)result.retcode+"\",\"message\":\""+JsonEscape(result.comment)+"\",\"positionTicket\":"+(position_ticket>0 ? (string)position_ticket : "null")+",\"dealTicket\":"+(result.deal>0 ? (string)result.deal : "null")+",\"orderTicket\":"+(result.order>0 ? (string)result.order : "null")+",\"positionIdentifier\":"+(position_ticket>0 ? (string)position_ticket : "null")+",\"filledVolumeLots\":"+OptionalNumber(result.volume)+",\"averageFillPrice\":"+OptionalNumber(result.price)+",\"isPartial\":"+(partial ? "true" : "false")+",\"isPositionOpen\":"+(position_ticket>0 && !closed ? "true" : "false")+",\"isClosed\":"+(closed ? "true" : "false")+"}"; SendResponse(operation,request_id,payload);
 }
 bool TradeAccepted(const uint retcode) { return retcode==TRADE_RETCODE_DONE || retcode==TRADE_RETCODE_DONE_PARTIAL; }
 void HandleExecutionOrder(const string operation,const string request_id,const string payload,const bool close)
@@ -377,13 +377,40 @@ void HandleExecutionOrder(const string operation,const string request_id,const s
    else { request.volume=volume; request.type=side=="Buy" ? ORDER_TYPE_BUY : ORDER_TYPE_SELL; request.price=request.type==ORDER_TYPE_BUY ? tick.ask : tick.bid; request.sl=sl; request.tp=tp; }
    if(!OrderCheck(request,check)) { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,false,result,false); return; }
    if(operation=="OrderCheck") { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,TradeAccepted(check.retcode),result,false); return; }
-   const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendExecutionResult(operation,request_id,accepted,result,close && accepted);
+   const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendExecutionResult(operation,request_id,accepted,result,false);
 }
 void SendExecutionPosition(const string request_id,const string payload)
 {
    string raw,marker; if(!GetTopLevelRaw(payload,"positionTicket",raw) || !GetTopLevelRaw(payload,"magicNumber",raw) || !GetTopLevelString(payload,"correlationMarker",marker)) { SendError("GetPosition",request_id,"InvalidRequest","Exact ticket and ownership marker are required.",false); return; }
    const long magic=(long)StringToInteger(raw); if(!GetTopLevelRaw(payload,"positionTicket",raw)) return; const ulong ticket=(ulong)StringToInteger(raw); if(!PositionSelectByTicket(ticket) || (long)PositionGetInteger(POSITION_MAGIC)!=magic || PositionGetString(POSITION_COMMENT)!=marker) { SendResponse("GetPosition",request_id,"{\"accepted\":true,\"isClosed\":true}"); return; }
    const string result="{\"accepted\":true,\"positionTicket\":"+(string)ticket+",\"filledVolumeLots\":"+Number(PositionGetDouble(POSITION_VOLUME))+",\"averageFillPrice\":"+Number(PositionGetDouble(POSITION_PRICE_OPEN))+",\"isClosed\":false}"; SendResponse("GetPosition",request_id,result);
+}
+
+void SendExecutionHistory(const string request_id,const string payload)
+{
+   string client_id,marker,symbol,side,raw,from_raw,to_raw,volume_raw;
+   if(!GetTopLevelString(payload,"clientExecutionId",client_id) || !GetTopLevelString(payload,"correlationMarker",marker) || !GetTopLevelString(payload,"brokerSymbol",symbol) || !GetTopLevelString(payload,"side",side) || !GetTopLevelRaw(payload,"magicNumber",raw) || !GetTopLevelRaw(payload,"expectedVolumeLots",volume_raw) || !GetTopLevelRaw(payload,"fromUnixSeconds",from_raw) || !GetTopLevelRaw(payload,"toUnixSeconds",to_raw)) { SendError("GetExecutionHistory",request_id,"InvalidRequest","Bounded execution history request fields are required.",false); return; }
+   const long magic=(long)StringToInteger(raw), from=(long)StringToInteger(from_raw), to=(long)StringToInteger(to_raw); const double expected_volume=StringToDouble(volume_raw);
+   if(StringLen(client_id)<32 || StringLen(marker)==0 || StringLen(marker)>60 || (side!="Buy" && side!="Sell") || expected_volume<=0.0 || magic<=0 || from<=0 || to<from || to-from>604800) { SendError("GetExecutionHistory",request_id,"InvalidRequest","Execution history bounds or correlation fields are invalid.",false); return; }
+   if(!HistorySelect((datetime)from,(datetime)to)) { SendError("GetExecutionHistory",request_id,"HistoryUnavailable","MT5 history selection failed.",true); return; }
+   string items="["; int matched=0; const int count=HistoryDealsTotal();
+   for(int i=0;i<count;i++)
+   {
+      const ulong deal=HistoryDealGetTicket(i); if(deal==0) continue;
+      if((long)HistoryDealGetInteger(deal,DEAL_MAGIC)!=magic || HistoryDealGetString(deal,DEAL_SYMBOL)!=symbol || HistoryDealGetString(deal,DEAL_COMMENT)!=marker) continue;
+      const ENUM_DEAL_TYPE type=(ENUM_DEAL_TYPE)HistoryDealGetInteger(deal,DEAL_TYPE); if(type!=DEAL_TYPE_BUY && type!=DEAL_TYPE_SELL) continue;
+      const ENUM_DEAL_ENTRY entry=(ENUM_DEAL_ENTRY)HistoryDealGetInteger(deal,DEAL_ENTRY); const bool is_entry=(entry==DEAL_ENTRY_IN || entry==DEAL_ENTRY_INOUT); const bool is_exit=(entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY || entry==DEAL_ENTRY_INOUT);
+      const string deal_side=type==DEAL_TYPE_BUY ? "Buy" : "Sell"; if(is_entry && deal_side!=side) continue;
+      const double volume=HistoryDealGetDouble(deal,DEAL_VOLUME); if(volume<=0.0 || volume>expected_volume+0.00000001) continue;
+      const long position_id=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); const long order_ticket=(long)HistoryDealGetInteger(deal,DEAL_ORDER); const long time_msc=(long)HistoryDealGetInteger(deal,DEAL_TIME_MSC);
+      if(matched++>0) items+=",";
+      items+="{\"orderTicket\":"+(order_ticket>0 ? (string)order_ticket : "null")+",\"dealTicket\":"+(string)deal+",\"positionIdentifier\":"+(position_id>0 ? (string)position_id : "null")+",\"positionTicket\":"+(position_id>0 ? (string)position_id : "null")+",\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)magic+",\"correlationMarker\":\""+JsonEscape(marker)+"\",\"executedVolumeLots\":"+Number(volume)+",\"executionPrice\":"+Number(HistoryDealGetDouble(deal,DEAL_PRICE))+",\"executedAtUtc\":\""+IsoUtcMilliseconds(time_msc)+"\",\"entryType\":\""+DealEntryName(entry)+"\",\"dealState\":\"HistoryDeal\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"isPartial\":"+(entry==DEAL_ENTRY_INOUT ? "true" : "false")+"}";
+   }
+   items+="]"; SendResponse("GetExecutionHistory",request_id,"{\"evidence\":"+items+"}");
+}
+string DealEntryName(const ENUM_DEAL_ENTRY entry)
+{
+   if(entry==DEAL_ENTRY_IN) return "Entry"; if(entry==DEAL_ENTRY_OUT) return "Exit"; if(entry==DEAL_ENTRY_INOUT) return "InOut"; if(entry==DEAL_ENTRY_OUT_BY) return "OutBy"; return "Unknown";
 }
 
 void SendHeartbeat()

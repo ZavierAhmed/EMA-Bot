@@ -373,3 +373,7 @@ model has been reviewed.
 # E11.5 — Demo execution foundation
 
 The original v1 MT5 pipe remains read-only. E11.5 adds an independently disabled v2 execution pipe and a durable `DemoExecutions` ledger for explicit administrator-only Demo order intent, preflight, broker acknowledgement, close, and reconciliation. It is not connected to Paper or strategy execution. See `mt5-bridge-protocol-v2.md` and `e11.5-demo-execution-validation.md`.
+
+# E11.5A — Execution reconciliation and Demo validation
+
+E11.5A adds bounded MT5 deal-history reconciliation for uncertain execution writes, separate entry/exit/order/position evidence, and conservative concurrent client-ID handling. It does not enable strategy execution or submit a broker order. Database and controlled Demo lifecycle checks remain intentionally pending until a local/disposable Demo target is explicitly established.

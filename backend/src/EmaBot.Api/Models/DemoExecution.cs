@@ -24,9 +24,17 @@ public sealed class DemoExecution
     public long MagicNumber { get; set; }
     public string CorrelationMarker { get; set; } = string.Empty;
     public long? PositionTicket { get; set; }
+    public long? PositionIdentifier { get; set; }
+    public long? OrderTicket { get; set; }
     public long? DealTicket { get; set; }
+    public long? EntryDealTicket { get; set; }
+    public long? ExitDealTicket { get; set; }
     public decimal? FilledVolumeLots { get; set; }
     public decimal? AverageFillPrice { get; set; }
+    public decimal? ClosedVolumeLots { get; set; }
+    public decimal? AverageClosePrice { get; set; }
+    public DateTimeOffset? BrokerExecutedAtUtc { get; set; }
+    public DateTimeOffset? BrokerClosedAtUtc { get; set; }
     public string? BrokerRetcode { get; set; }
     public string? BrokerMessage { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
@@ -36,4 +44,5 @@ public sealed class DemoExecution
     public DateTimeOffset? ClosedAtUtc { get; set; }
     public DateTimeOffset? ReconciledAtUtc { get; set; }
     public string? ReconciliationNote { get; set; }
+    public string? ReconciliationSource { get; set; }
 }
