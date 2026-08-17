@@ -76,7 +76,7 @@ public sealed class PaperObservabilityTests : IClassFixture<EmaBotApiFactory>
         Assert.Equal(25, decisions.Count);
         Assert.Equal("SessionResumed", decisions.First().Stage);
         Assert.Contains(decisions, item => item.Stage == "Warmup");
-        Assert.Equal("Event8", decisions.Last().Stage);
+        Assert.Equal("Event9", decisions.Last().Stage);
         await coordinator.StopSessionAsync(session.Id, CancellationToken.None);
     }
 

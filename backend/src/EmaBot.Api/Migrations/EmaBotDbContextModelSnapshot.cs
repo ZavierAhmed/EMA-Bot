@@ -1145,6 +1145,10 @@ namespace EmaBot.Api.Migrations
                         .HasPrecision(18, 8)
                         .HasColumnType("decimal(18,8)");
 
+                    b.Property<decimal?>("InitialRiskAmount")
+                        .HasPrecision(18, 8)
+                        .HasColumnType("decimal(18,8)");
+
                     b.Property<decimal?>("MarginUsedUsdt")
                         .HasPrecision(18, 8)
                         .HasColumnType("decimal(18,8)");

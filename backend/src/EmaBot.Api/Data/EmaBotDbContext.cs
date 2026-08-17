@@ -134,6 +134,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(trade => trade.NetPnl).HasPrecision(18, 8);
             entity.Property(trade => trade.AccountEquityAtEntry).HasPrecision(18, 8);
             entity.Property(trade => trade.MarginUsed).HasPrecision(18, 8);
+            entity.Property(trade => trade.InitialRiskAmount).HasPrecision(18, 8);
             entity.Property(trade => trade.SignalAtr14).HasPrecision(18, 8);
             entity.Property(trade => trade.ReversalPowerScore).HasPrecision(8, 4);
             entity.Property(trade => trade.StopAnchorPrice).HasPrecision(18, 8);

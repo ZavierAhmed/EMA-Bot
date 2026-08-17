@@ -216,6 +216,7 @@ public sealed class PaperTrade
     public decimal? NetPnl { get; set; }
     public decimal? AccountEquityAtEntry { get; set; }
     public decimal? MarginUsed { get; set; }
+    public decimal? InitialRiskAmount { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
     public decimal? SignalAtr14 { get; set; }
     public decimal? ReversalPowerScore { get; set; }

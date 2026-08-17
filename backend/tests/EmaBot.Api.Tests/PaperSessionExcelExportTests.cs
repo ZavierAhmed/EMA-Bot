@@ -40,7 +40,7 @@ public sealed class PaperSessionExcelExportTests(EmaBotApiFactory factory) : ICl
         var closed = TradeRow(entries["xl/worksheets/sheet4.xml"], "Closed");
         Assert.Equal("-9.97", closed["Gross P/L"]); Assert.Equal("-9.97", closed["Net P/L"]); Assert.Equal("USD", closed["Account Currency"]);
         var open = TradeRow(entries["xl/worksheets/sheet4.xml"], "Open");
-        foreach (var field in new[] { "Gross P/L", "Net P/L", "Net P/L %", "Exit UTC", "Exit Price", "Exit Bid", "Exit Ask", "Exit Spread", "Exit Reason", "Final SL", "Final TP", "Current Executable Exit Price", "Current Gross P/L", "Current Net P/L", "Current P/L % On Margin", "Current P/L Valuation UTC", "Current P/L Available", "Legacy Gross P/L USDT", "Legacy Net P/L USDT", "Legacy Fees USDT" }) Assert.Null(open[field]);
+        foreach (var field in new[] { "Gross P/L", "Net P/L", "P/L % On Margin", "Account Return %", "Exit UTC", "Exit Price", "Exit Bid", "Exit Ask", "Exit Spread", "Exit Reason", "Final SL", "Final TP", "Current Executable Exit Price", "Current Gross P/L", "Current Net P/L", "Current P/L % On Margin", "Current P/L Valuation UTC", "Current P/L Available", "Legacy Gross P/L USDT", "Legacy Net P/L USDT", "Legacy Fees USDT" }) Assert.Null(open[field]);
         using var scope = factory.Services.CreateScope();
         var persisted = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessions.SingleAsync(item => item.Id == id);
         Assert.Equal(PaperSessionStatus.Running, persisted.Status);

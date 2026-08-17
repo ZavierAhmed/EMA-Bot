@@ -28,8 +28,8 @@ public sealed class Mt5PaperTradeReportingTests : IClassFixture<EmaBotApiFactory
         var detailResponse = await controller.Detail("paper", shortTrade.Id, CancellationToken.None);
         var detail = detailResponse.Value ?? Assert.IsType<TradeDetailResponse>(Assert.IsType<OkObjectResult>(detailResponse.Result).Value);
 
-        Assert.Equal(-9.97m, shortSummary.NetPnl); Assert.Equal("USD", shortSummary.AccountCurrency); Assert.Equal("AccountEquityAtEntry", shortSummary.PnlPercentBasis); Assert.Null(shortSummary.NetRMultiple);
-        Assert.Equal(5.03m, longSummary.NetPnl); Assert.Equal(-9.97m / 105.03m * 100m, shortSummary.NetPnlPercent);
+        Assert.Equal(-9.97m, shortSummary.NetPnl); Assert.Equal("USD", shortSummary.AccountCurrency); Assert.Equal("MarginUsed", shortSummary.PnlPercentBasis); Assert.Null(shortSummary.NetRMultiple);
+        Assert.Equal(5.03m, longSummary.NetPnl); Assert.Equal(-9.97m / 35m * 100m, shortSummary.NetPnlPercent); Assert.Equal(-9.97m / 35m * 100m, shortSummary.PnlPercentOnMargin); Assert.Equal(-9.97m / 105.03m * 100m, shortSummary.AccountReturnPercent);
         Assert.Equal(.01m, detail.Lots); Assert.Equal(35m, detail.RequiredMargin); Assert.Equal(4353.245m, detail.EntryBid); Assert.Equal(4363.215m, detail.ExitAsk); Assert.Equal("FixedLots", detail.PaperPositionSizingMode);
 
         var winResponse = await controller.List("Paper", null, null, null, null, "Win", 50, CancellationToken.None);
