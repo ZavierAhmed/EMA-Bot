@@ -459,7 +459,20 @@ public sealed class MqlExecutionBridgeContractTests
     [Fact]
     public void AmbiguousSharedBridgeSource_IsNotPresent()
     {
-        Assert.False(File.Exists(ResolveMt5Source("EmaBotBridge.mq5")));
+        var directory = ResolveMt5EmaBotDirectory();
+        var ambiguousPath = Path.Combine(directory, "EmaBotBridge.mq5");
+        Assert.False(File.Exists(ambiguousPath));
+    }
+
+    private static string ResolveMt5EmaBotDirectory()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "mt5", "MQL5", "Experts", "EmaBot");
+            if (Directory.Exists(candidate)) return candidate;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate mt5/MQL5/Experts/EmaBot directory.");
     }
 
     private static string ResolveMt5Source(string fileName)
@@ -471,6 +484,33 @@ public sealed class MqlExecutionBridgeContractTests
         }
 
         throw new FileNotFoundException($"Could not locate mt5/MQL5/Experts/EmaBot/{fileName}.");
+    }
+
+
+
+    [Fact]
+    public void V2_OrderCheckSuccess_RequiresBooleanOrderCheckResult_NotTradeAcceptedRetcode()
+    {
+        // A successful MQL5 OrderCheck returns true. Its MqlTradeCheckResult.retcode may be
+        // 0 / comment "Done", which is NOT the OrderSend acceptance criterion.
+        // TRADE_RETCODE_DONE (10009) applies to MqlTradeResult from OrderSend, not OrderCheck.
+        // The v2 adapter must classify OrderCheck preflight success from the boolean OrderCheck
+        // return value, preserving retcode/comment only for diagnostics.
+        var source = File.ReadAllText(ResolveMt5Source("EmaBotExecutionBridgeV2.mq5"));
+        var handler = ExtractMethodBody(source, "void HandleExecutionOrder(");
+
+        // OrderCheck failure path is preserved: boolean false => rejected.
+        Assert.Contains("const bool checked=OrderCheck(request,check);", handler);
+        Assert.Contains("if(!checked)", handler);
+
+        // OrderCheck success path must return Accepted=true driven by the boolean, not TradeAccepted(retcode).
+        Assert.Contains("if(operation==\"OrderCheck\") { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,true,result,false); return; }", handler);
+
+        // The buggy form (Acceptance via TradeAccepted(check.retcode)) must no longer exist.
+        Assert.DoesNotContain("SendExecutionResult(operation,request_id,TradeAccepted(check.retcode),result,false)", handler);
+
+        // Actual OrderSend path is NOT weakened: still requires sent && TradeAccepted(result.retcode).
+        Assert.Contains("const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendExecutionResult(operation,request_id,accepted,result,false);", handler);
     }
 
     private static string ExtractMethodBody(string source, string signature)

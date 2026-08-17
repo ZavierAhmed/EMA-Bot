@@ -375,8 +375,9 @@ void HandleExecutionOrder(const string operation,const string request_id,const s
       request.position=(ulong)position; request.volume=PositionGetDouble(POSITION_VOLUME); const ENUM_POSITION_TYPE type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE); request.type=type==POSITION_TYPE_BUY ? ORDER_TYPE_SELL : ORDER_TYPE_BUY; request.price=request.type==ORDER_TYPE_BUY ? tick.ask : tick.bid;
    }
    else { request.volume=volume; request.type=side=="Buy" ? ORDER_TYPE_BUY : ORDER_TYPE_SELL; request.price=request.type==ORDER_TYPE_BUY ? tick.ask : tick.bid; request.sl=sl; request.tp=tp; }
-   if(!OrderCheck(request,check)) { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,false,result,false); return; }
-   if(operation=="OrderCheck") { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,TradeAccepted(check.retcode),result,false); return; }
+   const bool checked=OrderCheck(request,check);
+   if(!checked) { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,false,result,false); return; }
+   if(operation=="OrderCheck") { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,true,result,false); return; }
    const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendExecutionResult(operation,request_id,accepted,result,false);
 }
 void SendExecutionPosition(const string request_id,const string payload)
