@@ -32,3 +32,6 @@ frontend/dist/
 *.suo
 .DS_Store
 Thumbs.db
+
+# MetaTrader compiler logs
+*.mq5.compile.log
