@@ -71,25 +71,53 @@ public sealed class Mt5ExecutionBridgeServer : IHostedService, IMt5ExecutionBrid
     {
         while (!token.IsCancellationRequested)
         {
+            NamedPipeServerStream? pipe = null;
+            ExecutionConnection? connection = null;
+            var disconnectReason = "MT5 execution bridge client disconnected.";
+            var retryAfterDisconnect = false;
             try
             {
-                var pipe = new NamedPipeServerStream(_options.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                pipe = new NamedPipeServerStream(_options.PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
                 await pipe.WaitForConnectionAsync(token);
-                var connection = new ExecutionConnection(pipe, _options, _clock);
+                connection = new ExecutionConnection(pipe, _options, _clock);
+                pipe = null;
                 var hello = await connection.ReceiveHelloAsync(token);
-                if (!SecretsMatch(_options.HandshakeSecret!, hello.Secret)) { await connection.DisposeAsync(); continue; }
-                await connection.WriteAsync(Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.HelloAck, Mt5ExecutionOperation.Hello, null, new { protocolVersion = 2, serverVersion = "EMA-Bot" }, _clock), token);
-                lock (_sync) { _connection = connection; _status = new(true, true, _options.PipeName, hello.AccountFingerprint, hello.AccountServer, hello.AccountMode, null); }
-                Connected?.Invoke();
-                await connection.PumpAsync(token);
-                await connection.DisposeAsync();
-                lock (_sync) { if (ReferenceEquals(_connection, connection)) { _connection = null; _status = _status with { Connected = false, LastDisconnectReason = "MT5 execution bridge client disconnected." }; } }
+                if (!SecretsMatch(_options.HandshakeSecret!, hello.Secret))
+                {
+                    disconnectReason = "MT5 execution bridge handshake was rejected.";
+                    retryAfterDisconnect = true;
+                }
+                else
+                {
+                    await connection.WriteAsync(Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.HelloAck, Mt5ExecutionOperation.Hello, null, new { protocolVersion = 2, serverVersion = "EMA-Bot" }, _clock), token);
+                    lock (_sync) { _connection = connection; _status = new(true, true, _options.PipeName, hello.AccountFingerprint, hello.AccountServer, hello.AccountMode, null); }
+                    Connected?.Invoke();
+                    await connection.PumpAsync(token);
+                }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             catch (Exception exception)
             {
                 _logger.LogWarning(exception, "MT5 execution bridge v2 connection ended.");
-                lock (_sync) _status = _status with { Connected = false, LastDisconnectReason = "MT5 execution bridge connection ended." };
+                disconnectReason = "MT5 execution bridge connection ended.";
+                retryAfterDisconnect = true;
+            }
+            finally
+            {
+                if (connection is not null) await connection.DisposeAsync();
+                else pipe?.Dispose();
+
+                lock (_sync)
+                {
+                    if (ReferenceEquals(_connection, connection)) _connection = null;
+                    _status = _status with { Connected = false, LastDisconnectReason = disconnectReason };
+                }
+            }
+
+            if (retryAfterDisconnect)
+            {
+                try { await Task.Delay(TimeSpan.FromMilliseconds(250), token); }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
             }
         }
     }
@@ -100,6 +128,7 @@ public sealed class Mt5ExecutionBridgeServer : IHostedService, IMt5ExecutionBrid
     {
         private readonly NamedPipeServerStream _pipe; private readonly Mt5ExecutionBridgeOptions _options; private readonly TimeProvider _clock;
         private readonly ConcurrentDictionary<Guid, TaskCompletionSource<Mt5ExecutionEnvelope>> _pending = new(); private readonly SemaphoreSlim _writes = new(1, 1);
+        private int _disposed;
         public ExecutionConnection(NamedPipeServerStream pipe, Mt5ExecutionBridgeOptions options, TimeProvider clock) { _pipe = pipe; _options = options; _clock = clock; }
         public async Task<Mt5ExecutionHelloPayload> ReceiveHelloAsync(CancellationToken token)
         {
@@ -125,6 +154,14 @@ public sealed class Mt5ExecutionBridgeServer : IHostedService, IMt5ExecutionBrid
         private async Task<Mt5ExecutionEnvelope?> ReadAsync(CancellationToken token)
         { var header = new byte[4]; if (!await ReadExactlyAsync(header, true, token)) return null; var length = BitConverter.ToInt32(header); if (length <= 0 || length > _options.MaxFrameBytes) throw new Mt5ExecutionBridgeException("Execution bridge frame length is invalid."); var body = new byte[length]; await ReadExactlyAsync(body, false, token); return JsonSerializer.Deserialize<Mt5ExecutionEnvelope>(body, Mt5ExecutionBridgeProtocol.JsonOptions) ?? throw new Mt5ExecutionBridgeException("Execution bridge JSON is invalid."); }
         private async Task<bool> ReadExactlyAsync(byte[] buffer, bool cleanEnd, CancellationToken token) { var offset = 0; while (offset < buffer.Length) { var read = await _pipe.ReadAsync(buffer.AsMemory(offset), token); if (read == 0) { if (offset == 0 && cleanEnd) return false; throw new EndOfStreamException(); } offset += read; } return true; }
-        public ValueTask DisposeAsync() { _pipe.Dispose(); _writes.Dispose(); return ValueTask.CompletedTask; }
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _pipe.Dispose();
+                _writes.Dispose();
+            }
+            return ValueTask.CompletedTask;
+        }
     }
 }

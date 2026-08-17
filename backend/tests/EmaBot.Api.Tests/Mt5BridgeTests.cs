@@ -361,6 +361,68 @@ public sealed class Mt5BridgeServerTests
     }
 }
 
+public sealed class Mt5ExecutionBridgeServerTests
+{
+    [Fact]
+    public async Task InvalidHandshakeDisposesPipeAndAllowsTheNextClientToConnect()
+    {
+        var options = new Mt5ExecutionBridgeOptions
+        {
+            Enabled = true,
+            PipeName = $"ema-bot-execution-tests-{Guid.NewGuid():N}",
+            HandshakeSecret = "synthetic-execution-secret-that-is-at-least-32-characters"
+        };
+        await using var server = new Mt5ExecutionBridgeServer(Options.Create(options), TimeProvider.System, NullLogger<Mt5ExecutionBridgeServer>.Instance);
+        await server.StartAsync(CancellationToken.None);
+
+        await using (var invalid = new NamedPipeClientStream(".", options.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+        {
+            await invalid.ConnectAsync(2_000);
+            await invalid.WriteAsync(new byte[] { 0, 0, 0, 0 });
+            await invalid.FlushAsync();
+        }
+
+        await using var valid = new NamedPipeClientStream(".", options.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await valid.ConnectAsync(3_000);
+        await WriteAsync(valid, Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.Hello, Mt5ExecutionOperation.Hello, null,
+            new Mt5ExecutionHelloPayload(options.HandshakeSecret, "synthetic-execution-client", "fingerprint", "Synthetic-Server", "Demo", false, false), TimeProvider.System));
+
+        var acknowledgement = await ReadAsync(valid, CancellationToken.None);
+
+        Assert.Equal(Mt5ExecutionFrameKind.HelloAck, acknowledgement.Kind);
+        Assert.True(server.IsConnected);
+        Assert.Equal("Synthetic-Server", server.GetStatus().AccountServer);
+    }
+
+    private static async Task WriteAsync(Stream stream, Mt5ExecutionEnvelope envelope)
+    {
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, Mt5ExecutionBridgeProtocol.JsonOptions);
+        await stream.WriteAsync(BitConverter.GetBytes(bytes.Length));
+        await stream.WriteAsync(bytes);
+        await stream.FlushAsync();
+    }
+
+    private static async Task<Mt5ExecutionEnvelope> ReadAsync(Stream stream, CancellationToken token)
+    {
+        var header = new byte[4];
+        await ReadExactlyAsync(stream, header, token);
+        var body = new byte[BitConverter.ToInt32(header)];
+        await ReadExactlyAsync(stream, body, token);
+        return JsonSerializer.Deserialize<Mt5ExecutionEnvelope>(body, Mt5ExecutionBridgeProtocol.JsonOptions)!;
+    }
+
+    private static async Task ReadExactlyAsync(Stream stream, byte[] buffer, CancellationToken token)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(offset), token);
+            if (read == 0) throw new EndOfStreamException();
+            offset += read;
+        }
+    }
+}
+
 public sealed class Mt5BridgeApiTests : IClassFixture<EmaBotApiFactory>
 {
     private readonly EmaBotApiFactory _factory;
