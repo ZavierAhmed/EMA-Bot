@@ -6,12 +6,12 @@ before beginning this validation.
 
 1. Open MetaTrader 5, then choose **File -> Open Data Folder**.
 2. Open `MQL5\Experts\EmaBot` and copy
-   `mt5/MQL5/Experts/EmaBot/EmaBotBridge.mq5` there.
+   `mt5/MQL5/Experts/EmaBot/EmaBotBridgeV1.mq5` there.
 3. Open it in MetaEditor and compile with F7; confirm zero compile errors.
 4. Configure backend user-secrets with `Mt5Bridge:Enabled` set to `true` and a
    new, strong `Mt5Bridge:HandshakeSecret` (at least 32 characters).
 5. Start EMA-Bot and verify `GET /api/mt5/bridge/status` is `WaitingForClient`.
-6. Attach `EmaBotBridge` to any MT5 chart and enter pipe name
+6. Attach `EmaBotBridgeV1` to any MT5 chart and enter pipe name
    `ema-bot.mt5.bridge.v1` plus the exact same bridge secret. Never use an
    Exness trading password as this secret.
 7. Verify status becomes `Connected`, then confirm heartbeat timestamps update.

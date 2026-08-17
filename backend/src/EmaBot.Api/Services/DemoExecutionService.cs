@@ -15,8 +15,6 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
 
     public async Task<DemoExecutionReadiness> ReadinessAsync(CancellationToken token)
     {
-        if (!_options.Enabled) return new(false, "Demo execution is disabled.");
-        if (!_options.DemoOnly) return new(false, "Demo-only execution safety lock is not enabled.");
         if (!bridge.IsConnected) return new(false, "The MT5 execution bridge v2 is not connected.");
         try
         {
@@ -26,6 +24,8 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             if (!string.Equals(account.TradeMode, "Demo", StringComparison.OrdinalIgnoreCase)) return new(false, "MT5 account is not Demo.", account);
             if (!account.AccountTradeAllowed || !account.ExpertTradeAllowed) return new(false, "MT5 account or EA trading is disabled.", account);
             if (!string.Equals(account.AccountFingerprint, _options.ExpectedAccountFingerprint, StringComparison.Ordinal) || !string.Equals(account.Server, _options.ExpectedServer, StringComparison.Ordinal)) return new(false, "MT5 account fingerprint or server does not match the configured Demo target.", account);
+            if (!_options.Enabled) return new(false, "Demo execution is disabled.", account);
+            if (!_options.DemoOnly) return new(false, "Demo-only execution safety lock is not enabled.", account);
             return new(true, "Demo execution preflight passed.", account);
         }
         catch (Exception exception) when (exception is Mt5ExecutionBridgeException or Mt5ExecutionBridgeUnavailableException or Mt5ExecutionBridgeAmbiguousException)

@@ -104,7 +104,8 @@ writing and reading. It must not add EMA, signal, sizing, or execution policy.
 ## E7 implementation notes and golden JSON
 
 E7 implements the single-file, timer-driven MQL5 client at
-`mt5/MQL5/Experts/EmaBot/EmaBotBridge.mq5`. It opens only the local logical
+`mt5/MQL5/Experts/EmaBot/EmaBotBridgeV1.mq5`. Attach `EmaBotBridgeV1` to one
+MT5 chart for read-only market data on pipe `ema-bot.mt5.bridge.v1`. It opens only the local logical
 pipe as `\\.\pipe\<name>` in binary read/write mode, uses UTF-8 bytes without a
 terminating zero byte, and processes a bounded number of frames per timer tick.
 It reports only the selected instruments in Market Watch and never selects a

@@ -423,6 +423,73 @@ public sealed class Mt5ExecutionBridgeServerTests
     }
 }
 
+public sealed class MqlExecutionBridgeContractTests
+{
+    [Fact]
+    public void V1_ReadOnlyAdapter_HasExpectedSafetyContract()
+    {
+        var source = File.ReadAllText(ResolveMt5Source("EmaBotBridgeV1.mq5"));
+        var dispatch = ExtractMethodBody(source, "void HandleRequest(");
+
+        Assert.Contains("#define PROTOCOL_VERSION 1", source);
+        Assert.Contains("InpPipeName=\"ema-bot.mt5.bridge.v1\"", source);
+        Assert.Contains("Read-only EMA-Bot MT5 Named Pipe adapter", source);
+        Assert.DoesNotContain("InpEnableDemoExecution", source);
+        Assert.DoesNotContain("SubmitMarketOrder", source);
+        Assert.DoesNotContain("ClosePosition", source);
+        Assert.DoesNotContain("OrderCheck", source);
+        Assert.DoesNotContain("GetExecutionHistory", source);
+        Assert.DoesNotContain("if(operation==\"SubmitMarketOrder\"", dispatch);
+        Assert.DoesNotContain("if(operation==\"ClosePosition\"", dispatch);
+    }
+
+    [Fact]
+    public void V2_ExecutionAdapter_HasExpectedSafetyContract()
+    {
+        var source = File.ReadAllText(ResolveMt5Source("EmaBotExecutionBridgeV2.mq5"));
+        var sendEnvelope = ExtractMethodBody(source, "bool SendEnvelope(");
+
+        Assert.Contains("#define PROTOCOL_VERSION 2", source);
+        Assert.Contains("InpPipeName=\"ema-bot.mt5.bridge.v2\"", source);
+        Assert.Contains("InpEnableDemoExecution=false", source);
+        Assert.Contains("+(string)PROTOCOL_VERSION+", sendEnvelope);
+        Assert.DoesNotContain("\\\"protocolVersion\\\":1", sendEnvelope);
+    }
+
+    [Fact]
+    public void AmbiguousSharedBridgeSource_IsNotPresent()
+    {
+        Assert.False(File.Exists(ResolveMt5Source("EmaBotBridge.mq5")));
+    }
+
+    private static string ResolveMt5Source(string fileName)
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+        {
+            var candidate = Path.Combine(directory.FullName, "mt5", "MQL5", "Experts", "EmaBot", fileName);
+            if (File.Exists(candidate)) return candidate;
+        }
+
+        throw new FileNotFoundException($"Could not locate mt5/MQL5/Experts/EmaBot/{fileName}.");
+    }
+
+    private static string ExtractMethodBody(string source, string signature)
+    {
+        var start = source.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected MQL method signature '{signature}'.");
+        var openBrace = source.IndexOf('{', start);
+        Assert.True(openBrace >= 0);
+        var depth = 0;
+        for (var index = openBrace; index < source.Length; index++)
+        {
+            if (source[index] == '{') depth++;
+            else if (source[index] == '}' && --depth == 0) return source[start..(index + 1)];
+        }
+
+        throw new InvalidOperationException($"Could not extract MQL method body for '{signature}'.");
+    }
+}
+
 public sealed class Mt5BridgeApiTests : IClassFixture<EmaBotApiFactory>
 {
     private readonly EmaBotApiFactory _factory;

@@ -36,6 +36,25 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public async Task DisabledDemoExecution_StillReadOnlyValidatesTheMatchingAccount()
+    {
+        await using var database = NewDatabase();
+        var bridge = new FakeBridge();
+        var options = Options.Create(new DemoExecutionOptions { Enabled = false, DemoOnly = true, ExpectedAccountFingerprint = "demo-fingerprint", ExpectedServer = "Exness-Demo" });
+        var service = new DemoExecutionService(database, bridge, options, TimeProvider.System, NullLogger<DemoExecutionService>.Instance);
+
+        var readiness = await service.ReadinessAsync(CancellationToken.None);
+
+        Assert.False(readiness.Ready);
+        Assert.Equal("Demo execution is disabled.", readiness.Reason);
+        Assert.Equal("Demo", readiness.Account!.TradeMode);
+        Assert.True(readiness.Account.AccountTradeAllowed);
+        Assert.True(readiness.Account.ExpertTradeAllowed);
+        Assert.Equal(1, bridge.ExecutionAccountRequests);
+        Assert.Equal(0, bridge.SubmitCount);
+    }
+
+    [Fact]
     public void DemoExecutionModel_HasImmutableUniqueClientIdAndNoPaperRelationship()
     {
         using var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
@@ -118,6 +137,7 @@ public sealed class DemoExecutionFoundationTests
     {
         public event Action? Connected { add { } remove { } }
         public int SubmitCount { get; private set; }
+        public int ExecutionAccountRequests { get; private set; }
         public int HistoryRequests { get; private set; }
         public IReadOnlyList<Mt5ExecutionHistoryEvidence> History { get; init; } = [];
         public Mt5OrderResultPayload PositionResult { get; init; } = new(true, "Done", "open", 123, 456, 0.01m, 1.1m);
@@ -127,7 +147,7 @@ public sealed class DemoExecutionFoundationTests
         {
             object body = operation switch
             {
-                Mt5ExecutionOperation.GetExecutionAccount => new Mt5ExecutionAccountPayload("demo-fingerprint", "Exness-Demo", "Demo", true, true),
+                Mt5ExecutionOperation.GetExecutionAccount => Account(),
                 Mt5ExecutionOperation.OrderCheck => new Mt5OrderCheckPayload(true, "Done", "ok", 1m, 1.1m),
                 Mt5ExecutionOperation.SubmitMarketOrder => Submitted(),
                 Mt5ExecutionOperation.GetExecutionHistory => HistoryResponse(),
@@ -137,6 +157,7 @@ public sealed class DemoExecutionFoundationTests
             return Task.FromResult(Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.Response, operation, Guid.NewGuid(), body, TimeProvider.System));
         }
         private Mt5OrderResultPayload Submitted() { SubmitCount++; return new(true, "Done", "ok", 123, 456, 0.01m, 1.1m); }
+        private Mt5ExecutionAccountPayload Account() { ExecutionAccountRequests++; return new("demo-fingerprint", "Exness-Demo", "Demo", true, true); }
         private Mt5ExecutionHistoryPayload HistoryResponse() { HistoryRequests++; return new(History); }
     }
 }

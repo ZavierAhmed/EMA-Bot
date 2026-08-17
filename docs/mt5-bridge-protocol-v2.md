@@ -14,6 +14,12 @@ Historical entry/exit evidence can recover missing tickets and prove an ambiguou
 
 No strategy, Paper session, optimizer, or UI live-trading path invokes this endpoint. An Administrator must make an explicit API call to the manual endpoints under `/api/demo-executions`.
 
+## MT5 deployment
+
+- Attach `EmaBotBridgeV1` (`mt5/MQL5/Experts/EmaBot/EmaBotBridgeV1.mq5`) on pipe `ema-bot.mt5.bridge.v1` for read-only market data. That source has no broker-write operations.
+- Attach `EmaBotExecutionBridgeV2` (`mt5/MQL5/Experts/EmaBot/EmaBotExecutionBridgeV2.mq5`) on a separate chart on pipe `ema-bot.mt5.bridge.v2` for Demo execution validation. Keep `InpEnableDemoExecution=false` until an explicitly authorized Demo test.
+- Do not compile or deploy the v2 EA in place of the v1 EA. MT5 restart would otherwise leave market data on the wrong protocol adapter.
+
 ## Required validation before any Demo order
 
 1. Configure v2 and Demo execution explicitly with a long handshake secret held outside source control.

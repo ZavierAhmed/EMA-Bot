@@ -1,6 +1,6 @@
 # E10 MT5 broker-aware Paper live test
 
-1. Copy the updated `mt5/MQL5/Experts/EmaBot/EmaBotBridge.mq5` into the MT5
+1. Copy the updated `mt5/MQL5/Experts/EmaBot/EmaBotBridgeV1.mq5` into the MT5
    data folder, compile it in MetaEditor, and reattach the EA.
 2. Restart the API and confirm the bridge dashboard status is `Connected`.
 3. Confirm the E10 migration applied; confirm the existing `XAUUSDm` row and

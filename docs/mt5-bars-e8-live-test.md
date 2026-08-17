@@ -2,7 +2,7 @@
 
 This is read-only validation; do not start Paper, place an order, or execute a trade.
 
-1. Copy the updated `EmaBotBridge.mq5` into the MT5 data-folder `MQL5\Experts\EmaBot` directory and compile it with F7 (zero errors).
+1. Copy the updated `EmaBotBridgeV1.mq5` into the MT5 data-folder `MQL5\Experts\EmaBot` directory and compile it with F7 (zero errors).
 2. Reattach or restart the EA and confirm bridge status is `Connected`.
 3. Call `/api/mt5/market-data/latest?symbol=XAUUSDm&timeframe=3m&count=10`.
 4. Compare returned ascending completed bars with the MT5 XAUUSDm three-minute chart; the newest returned candle must not be current.
