@@ -20,6 +20,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<PaperTrade> PaperTrades => Set<PaperTrade>();
     public DbSet<PaperTradeEvent> PaperTradeEvents => Set<PaperTradeEvent>();
     public DbSet<PaperDecisionEvent> PaperDecisionEvents => Set<PaperDecisionEvent>();
+    public DbSet<DemoExecution> DemoExecutions => Set<DemoExecution>();
     public DbSet<StrategyOptimizationRun> StrategyOptimizationRuns => Set<StrategyOptimizationRun>();
     public DbSet<StrategyOptimizationCandidate> StrategyOptimizationCandidates => Set<StrategyOptimizationCandidate>();
     public DbSet<StrategyOptimizationMarketResult> StrategyOptimizationMarketResults => Set<StrategyOptimizationMarketResult>();
@@ -158,6 +159,27 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(item => item.RequiredMargin).HasPrecision(18, 8);
             entity.HasIndex(item => new { item.PaperSessionId, item.TimeUtc });
             entity.HasIndex(item => new { item.PaperSessionSymbolId, item.TimeUtc });
+        });
+        builder.Entity<DemoExecution>(entity =>
+        {
+            entity.Property(item => item.State).HasConversion<string>().HasMaxLength(32);
+            entity.Property(item => item.Provider).HasMaxLength(32);
+            entity.Property(item => item.ExpectedAccountFingerprint).HasMaxLength(128);
+            entity.Property(item => item.ExpectedServer).HasMaxLength(256);
+            entity.Property(item => item.BrokerSymbol).HasMaxLength(64).UseCollation("utf8mb4_bin");
+            entity.Property(item => item.Side).HasMaxLength(8);
+            entity.Property(item => item.VolumeLots).HasPrecision(18, 8);
+            entity.Property(item => item.RequestedStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.RequestedTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.CorrelationMarker).HasMaxLength(96);
+            entity.Property(item => item.FilledVolumeLots).HasPrecision(18, 8);
+            entity.Property(item => item.AverageFillPrice).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerRetcode).HasMaxLength(64);
+            entity.Property(item => item.BrokerMessage).HasMaxLength(1024);
+            entity.Property(item => item.ReconciliationNote).HasMaxLength(1024);
+            entity.HasIndex(item => item.ClientExecutionId).IsUnique();
+            entity.HasIndex(item => item.PositionTicket);
+            entity.HasIndex(item => item.State);
         });
         builder.Entity<StrategyOptimizationRun>(entity =>
         {

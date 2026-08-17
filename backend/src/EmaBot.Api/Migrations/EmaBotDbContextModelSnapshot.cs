@@ -570,6 +570,38 @@ namespace EmaBot.Api.Migrations
                     b.ToTable("MonitoredSymbols");
                 });
 
+            modelBuilder.Entity("EmaBot.Api.Models.DemoExecution", b =>
+                {
+                    b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("int");
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    b.Property<decimal?>("AverageFillPrice").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("BrokerMessage").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<string>("BrokerRetcode").HasMaxLength(64).HasColumnType("varchar(64)");
+                    b.Property<string>("BrokerSymbol").IsRequired().HasMaxLength(64).HasColumnType("varchar(64)").UseCollation("utf8mb4_bin");
+                    b.Property<DateTimeOffset?>("BrokerAcceptedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset?>("ClosedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<Guid>("ClientExecutionId").HasColumnType("char(36)");
+                    b.Property<string>("CorrelationMarker").IsRequired().HasMaxLength(96).HasColumnType("varchar(96)");
+                    b.Property<DateTimeOffset>("CreatedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<long?>("DealTicket").HasColumnType("bigint");
+                    b.Property<string>("ExpectedAccountFingerprint").IsRequired().HasMaxLength(128).HasColumnType("varchar(128)");
+                    b.Property<string>("ExpectedServer").IsRequired().HasMaxLength(256).HasColumnType("varchar(256)");
+                    b.Property<decimal?>("FilledVolumeLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<long>("MagicNumber").HasColumnType("bigint");
+                    b.Property<long?>("PositionTicket").HasColumnType("bigint");
+                    b.Property<DateTimeOffset?>("PreflightAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("Provider").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<DateTimeOffset?>("ReconciledAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("ReconciliationNote").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<decimal?>("RequestedStopLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("RequestedTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("Side").IsRequired().HasMaxLength(8).HasColumnType("varchar(8)");
+                    b.Property<string>("State").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<DateTimeOffset?>("SubmittedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<decimal>("VolumeLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("PositionTicket"); b.HasIndex("State"); b.ToTable("DemoExecutions");
+                });
+
             modelBuilder.Entity("EmaBot.Api.Models.PaperDecisionEvent", b =>
                 {
                     b.Property<int>("Id")

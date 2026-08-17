@@ -20,6 +20,10 @@ builder.Services.AddOptions<Mt5BridgeOptions>().Bind(builder.Configuration.GetSe
 builder.Services.AddSingleton<IValidateOptions<Mt5BridgeOptions>, Mt5BridgeOptionsValidator>();
 builder.Services.AddOptions<Mt5MarketDataOptions>().Bind(builder.Configuration.GetSection(Mt5MarketDataOptions.SectionName)).ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<Mt5MarketDataOptions>, Mt5MarketDataOptionsValidator>();
+builder.Services.AddOptions<Mt5ExecutionBridgeOptions>().Bind(builder.Configuration.GetSection(Mt5ExecutionBridgeOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<Mt5ExecutionBridgeOptions>, Mt5ExecutionBridgeOptionsValidator>();
+builder.Services.AddOptions<DemoExecutionOptions>().Bind(builder.Configuration.GetSection(DemoExecutionOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<DemoExecutionOptions>, DemoExecutionOptionsValidator>();
 
 // A real connection string is supplied through user-secrets or environment variables.
 // The credential-free fallback keeps the API startable so /api/health can report an unavailable database.
@@ -103,6 +107,9 @@ builder.Services.AddSingleton<IMarketQuoteProvider, Mt5BridgeMarketQuoteProvider
 builder.Services.AddSingleton<IMarketProviderCapabilities, MarketProviderCapabilityService>();
 builder.Services.AddSingleton<Mt5BridgeServer>();
 builder.Services.AddSingleton<IMt5BridgeRequestClient>(provider => provider.GetRequiredService<Mt5BridgeServer>());
+builder.Services.AddSingleton<Mt5ExecutionBridgeServer>();
+builder.Services.AddSingleton<IMt5ExecutionBridgeClient>(provider => provider.GetRequiredService<Mt5ExecutionBridgeServer>());
+builder.Services.AddScoped<DemoExecutionService>();
 builder.Services.AddSingleton<IMt5AccountReader, Mt5BridgeAccountReader>();
 builder.Services.AddSingleton<IMt5TradeCalculator, Mt5BridgeTradeCalculator>();
 builder.Services.AddSingleton<Mt5BridgeHistoricalMarketDataProvider>();
@@ -116,6 +123,8 @@ builder.Services.AddHostedService<DatabaseInitializer>();
 builder.Services.AddSingleton<PaperTradingCoordinator>();
 builder.Services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<PaperTradingCoordinator>());
 builder.Services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<Mt5BridgeServer>());
+builder.Services.AddSingleton<IHostedService>(provider => provider.GetRequiredService<Mt5ExecutionBridgeServer>());
+builder.Services.AddHostedService<DemoExecutionRecoveryService>();
 
 var app = builder.Build();
 

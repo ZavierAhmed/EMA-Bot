@@ -370,3 +370,6 @@ Only this document is added.  E1 must start from the classifications and
 contracts above, retain existing deterministic behavior as a baseline, and
 make an explicit database migration decision only when a concrete additive
 model has been reviewed.
+# E11.5 — Demo execution foundation
+
+The original v1 MT5 pipe remains read-only. E11.5 adds an independently disabled v2 execution pipe and a durable `DemoExecutions` ledger for explicit administrator-only Demo order intent, preflight, broker acknowledgement, close, and reconciliation. It is not connected to Paper or strategy execution. See `mt5-bridge-protocol-v2.md` and `e11.5-demo-execution-validation.md`.
