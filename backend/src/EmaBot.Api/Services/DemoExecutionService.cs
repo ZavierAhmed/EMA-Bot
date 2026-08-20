@@ -26,9 +26,11 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             if (!string.Equals(account.AccountFingerprint, _options.ExpectedAccountFingerprint, StringComparison.Ordinal) || !string.Equals(account.Server, _options.ExpectedServer, StringComparison.Ordinal)) return new(false, "MT5 account fingerprint or server does not match the configured Demo target.", account);
             if (!_options.Enabled) return new(false, "Demo execution is disabled.", account);
             if (!_options.DemoOnly) return new(false, "Demo-only execution safety lock is not enabled.", account);
+            if (!account.DemoExecutionEnabled) return new(false, "MT5 EA Demo execution is disabled.", account);
+            if (!account.DemoExecutionAllowed) return new(false, "MT5 EA Demo execution safety gate failed.", account);
             return new(true, "Demo execution preflight passed.", account);
         }
-        catch (Exception exception) when (exception is Mt5ExecutionBridgeException or Mt5ExecutionBridgeUnavailableException or Mt5ExecutionBridgeAmbiguousException)
+        catch (Exception exception) when (exception is Mt5ExecutionBridgeException or Mt5ExecutionBridgeRejectedException or Mt5ExecutionBridgeUnavailableException or Mt5ExecutionBridgeAmbiguousException)
         { return new(false, "The MT5 execution bridge preflight failed."); }
     }
 
@@ -52,7 +54,9 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         var order = ToOrder(execution);
         try
         {
-            var preflight = (await bridge.SendAsync(Mt5ExecutionOperation.OrderCheck, order, token)).DeserializePayload<Mt5OrderCheckPayload>();
+            Mt5OrderCheckPayload? preflight;
+            try { preflight = (await bridge.SendAsync(Mt5ExecutionOperation.OrderCheck, order, token)).DeserializePayload<Mt5OrderCheckPayload>(); }
+            catch (Mt5ExecutionBridgeRejectedException exception) { return await Reject(execution, exception.Message, token, exception.Code); }
             if (preflight is not { Accepted: true }) return await Reject(execution, preflight?.Message ?? "MT5 order preflight rejected the request.", token, preflight?.Retcode);
             execution.State = DemoExecutionState.PreflightPassed; execution.PreflightAtUtc = clock.GetUtcNow(); execution.BrokerRetcode = preflight.Retcode; execution.BrokerMessage = preflight.Message;
             await database.SaveChangesAsync(token);
@@ -64,6 +68,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             await database.SaveChangesAsync(token);
             return execution;
         }
+        catch (Mt5ExecutionBridgeRejectedException exception) { return await Reject(execution, exception.Message, token, exception.Code); }
         catch (Exception exception) when (IsAmbiguous(exception))
         { return await RequireReconciliationAsync(execution, "Submit result is ambiguous; no automatic retry will occur.", token); }
     }
@@ -81,6 +86,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             if (execution.PositionTicket is { } positionTicket && execution.PositionIdentifier is > 0) return await ReconcileFromExactPositionAsync(execution, positionTicket, execution.PositionIdentifier.Value, token);
             return await ReconcileFromHistoryAsync(execution, token);
         }
+        catch (Mt5ExecutionBridgeRejectedException exception) { return await RequireReconciliationAsync(execution, $"MT5 rejected reconciliation evidence ({exception.Code}); no state was inferred.", token); }
         catch (Exception exception) when (IsAmbiguous(exception)) { return await RequireReconciliationAsync(execution, "Reconciliation is inconclusive.", token); }
     }
 
@@ -103,6 +109,12 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
                 return await RequireReconciliationAsync(execution, "MT5 rejected the close; the position may still be open and no automatic close retry will occur.", token);
             }
             ApplyCloseResult(execution, result); await database.SaveChangesAsync(token); return execution;
+        }
+        catch (Mt5ExecutionBridgeRejectedException exception)
+        {
+            execution.BrokerMessage = exception.Message;
+            execution.BrokerRetcode = exception.Code;
+            return await RequireReconciliationAsync(execution, "MT5 rejected the close; the position may still be open and no automatic close retry will occur.", token);
         }
         catch (Exception exception) when (IsAmbiguous(exception)) { return await RequireReconciliationAsync(execution, "Close result is ambiguous; no automatic retry will occur.", token); }
     }

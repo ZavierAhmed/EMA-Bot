@@ -20,7 +20,7 @@ public sealed record Mt5ExecutionEnvelope(int ProtocolVersion, Mt5ExecutionFrame
 }
 public sealed record Mt5ExecutionHelloPayload(string Secret, string ClientVersion, string AccountFingerprint, string AccountServer, string AccountMode, bool AccountTradeAllowed, bool ExpertTradeAllowed);
 public sealed record Mt5ExecutionErrorPayload(string Code, string Message, bool Retryable, int? NativeCode = null);
-public sealed record Mt5ExecutionAccountPayload(string AccountFingerprint, string Server, string TradeMode, bool AccountTradeAllowed, bool ExpertTradeAllowed);
+public sealed record Mt5ExecutionAccountPayload(string AccountFingerprint, string Server, string TradeMode, bool AccountTradeAllowed, bool ExpertTradeAllowed, bool DemoExecutionEnabled = false, bool DemoExecutionAllowed = false);
 public sealed record Mt5OrderRequest(string ClientExecutionId, string BrokerSymbol, string Side, decimal VolumeLots, decimal? StopLoss, decimal? TakeProfit, long MagicNumber, string CorrelationMarker, long? PositionTicket = null);
 public sealed record Mt5OrderCheckPayload(bool Accepted, string? Retcode, string? Message, decimal? Bid, decimal? Ask);
 public sealed record Mt5OrderResultPayload(bool Accepted, string? Retcode, string? Message, long? PositionTicket, long? DealTicket, decimal? FilledVolumeLots, decimal? AverageFillPrice, bool IsClosed = false, long? OrderTicket = null, long? PositionIdentifier = null, bool IsPartial = false, bool IsPositionOpen = false);
@@ -41,5 +41,11 @@ public sealed record Mt5ClosePositionRequest(long PositionTicket, long PositionI
 public sealed record Mt5SubmitOrderResultPayload(bool Accepted, string? Retcode, string? Message, long? OrderTicket, long? EntryDealTicket, long? PositionIdentifier, long? PositionTicket, decimal? FilledVolumeLots, decimal? AverageFillPrice, bool IsPartial = false, bool IsPositionOpen = false);
 public sealed record Mt5ClosePositionResultPayload(bool Accepted, string? Retcode, string? Message, long? ExitDealTicket, decimal? ClosedVolumeLots, decimal? AverageClosePrice, bool IsClosed = false);
 public sealed class Mt5ExecutionBridgeException(string message) : Exception(message);
+public sealed class Mt5ExecutionBridgeRejectedException(string code, string message, bool retryable, int? nativeCode = null) : Exception(message)
+{
+    public string Code { get; } = code;
+    public bool Retryable { get; } = retryable;
+    public int? NativeCode { get; } = nativeCode;
+}
 public sealed class Mt5ExecutionBridgeUnavailableException(string message) : InvalidOperationException(message);
 public sealed class Mt5ExecutionBridgeAmbiguousException(string message) : TimeoutException(message);

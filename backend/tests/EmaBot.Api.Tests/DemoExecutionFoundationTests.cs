@@ -69,6 +69,36 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public async Task Readiness_WhenEaExecutionDisabled_IsFalse()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { AccountResult = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, false, false) };
+
+        var readiness = await Service(database, bridge).ReadinessAsync(default);
+
+        Assert.False(readiness.Ready); Assert.Equal("MT5 EA Demo execution is disabled.", readiness.Reason);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenEaSafetyGateFails_IsFalse()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { AccountResult = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, false) };
+
+        var readiness = await Service(database, bridge).ReadinessAsync(default);
+
+        Assert.False(readiness.Ready); Assert.Equal("MT5 EA Demo execution safety gate failed.", readiness.Reason);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenBothDotNetAndEaGatesPass_IsTrue()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge();
+
+        var readiness = await Service(database, bridge).ReadinessAsync(default);
+
+        Assert.True(readiness.Ready); Assert.Equal("Demo execution preflight passed.", readiness.Reason);
+    }
+
+    [Fact]
     public void DemoExecutionModel_HasImmutableUniqueClientIdAndNoPaperRelationship()
     {
         using var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
@@ -281,7 +311,7 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
-    public async Task SubmitBridgeUnavailableAfterSubmitting_RequiresReconciliationAndNeverRetries()
+    public async Task TransportFailureAfterSubmitting_RemainsReconciliationRequired()
     {
         await using var database = NewDatabase(); var bridge = new FakeBridge { SubmitException = new Mt5ExecutionBridgeUnavailableException("disconnected") }; var service = Service(database, bridge); var execution = await service.SubmitAsync(new(Guid.NewGuid(), "XAUUSD", "Buy", 0.01m, null, null), default);
 
@@ -306,6 +336,36 @@ public sealed class DemoExecutionFoundationTests
         var execution = await service.SubmitAsync(new(Guid.NewGuid(), "XAUUSD", "Buy", 0.01m, null, null), default);
 
         Assert.Equal(DemoExecutionState.BrokerAccepted, execution.State); Assert.Equal(123, execution.PositionTicket); Assert.Null(execution.PositionIdentifier); Assert.Equal(1, bridge.SubmitCount);
+    }
+
+    [Fact]
+    public async Task OrderCheckDemoSafetyGate_IsRejectedBeforeSubmitAndNotReconciliationRequired()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { OrderCheckException = new Mt5ExecutionBridgeRejectedException("DemoSafetyGate", "EA demo execution is disabled.", false) };
+
+        var execution = await Service(database, bridge).SubmitAsync(new(Guid.NewGuid(), "XAUUSD", "Buy", 0.01m, null, null), default);
+
+        Assert.Equal(DemoExecutionState.Rejected, execution.State); Assert.NotEqual(DemoExecutionState.ReconciliationRequired, execution.State); Assert.Equal("DemoSafetyGate", execution.BrokerRetcode); Assert.Equal("EA demo execution is disabled.", execution.BrokerMessage); Assert.Null(execution.PreflightAtUtc); Assert.Null(execution.SubmittedAtUtc); Assert.Equal(0, bridge.SubmitCount);
+    }
+
+    [Fact]
+    public async Task ExplicitOrderCheckBridgeRejection_NeverCallsSubmitMarketOrder()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { OrderCheckException = new Mt5ExecutionBridgeRejectedException("OwnershipRejected", "preflight denied", false) };
+
+        var execution = await Service(database, bridge).SubmitAsync(new(Guid.NewGuid(), "XAUUSD", "Buy", 0.01m, null, null), default);
+
+        Assert.Equal(DemoExecutionState.Rejected, execution.State); Assert.Equal("OwnershipRejected", execution.BrokerRetcode); Assert.Equal(0, bridge.SubmitCount);
+    }
+
+    [Fact]
+    public async Task ExplicitCloseBridgeRejection_RemainsRecoverableAndNeverBecomesRejected()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { CloseException = new Mt5ExecutionBridgeRejectedException("DemoSafetyGate", "EA gate rejected close.", false) }; var execution = Uncertain(); execution.State = DemoExecutionState.Open; execution.PositionTicket = 300; execution.PositionIdentifier = 301; execution.EntryDealTicket = 200; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).CloseAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.ReconciliationRequired, result!.State); Assert.NotEqual(DemoExecutionState.Rejected, result.State); Assert.Equal(200, result.EntryDealTicket); Assert.Equal(300, result.PositionTicket); Assert.Equal(301, result.PositionIdentifier); Assert.Equal("DemoSafetyGate", result.BrokerRetcode); Assert.Equal(1, bridge.CloseRequests); Assert.Equal(0, bridge.SubmitCount);
     }
 
     [Fact]
@@ -354,6 +414,8 @@ public sealed class DemoExecutionFoundationTests
         public IReadOnlyList<Mt5PositionHistoryDeal> PositionHistory { get; init; } = [];
         public Mt5ClosePositionResultPayload CloseResult { get; init; } = new(true, "Done", "closed", 789, 0.01m, 1.1m, true);
         public Mt5SubmitOrderResultPayload SubmitResult { get; init; } = new(true, "Done", "ok", 100, 200, 123, 123, 0.01m, 1.1m, false, true);
+        public Mt5ExecutionAccountPayload AccountResult { get; init; } = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true);
+        public Exception? OrderCheckException { get; init; }
         public Exception? SubmitException { get; init; }
         public Exception? CloseException { get; init; }
         public Mt5ExecutionHistoryRequest? LastHistoryRequest { get; private set; }
@@ -365,7 +427,7 @@ public sealed class DemoExecutionFoundationTests
             object body = operation switch
             {
                 Mt5ExecutionOperation.GetExecutionAccount => Account(),
-                Mt5ExecutionOperation.OrderCheck => new Mt5OrderCheckPayload(true, "Done", "ok", 1m, 1.1m),
+                Mt5ExecutionOperation.OrderCheck => OrderCheck(),
                 Mt5ExecutionOperation.SubmitMarketOrder => Submitted(),
                 Mt5ExecutionOperation.GetExecutionHistory => HistoryResponse((Mt5ExecutionHistoryRequest)payload!),
                 Mt5ExecutionOperation.GetPosition => PositionResponse(),
@@ -377,7 +439,8 @@ public sealed class DemoExecutionFoundationTests
             return Task.FromResult(Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.Response, operation, Guid.NewGuid(), body, TimeProvider.System));
         }
         private Mt5SubmitOrderResultPayload Submitted() { SubmitCount++; if (SubmitException is not null) throw SubmitException; return SubmitResult; }
-        private Mt5ExecutionAccountPayload Account() { ExecutionAccountRequests++; return new("demo-fingerprint", "Exness-Demo", "Demo", true, true); }
+        private Mt5OrderCheckPayload OrderCheck() { if (OrderCheckException is not null) throw OrderCheckException; return new(true, "Done", "ok", 1m, 1.1m); }
+        private Mt5ExecutionAccountPayload Account() { ExecutionAccountRequests++; return AccountResult; }
         private Mt5ExecutionHistoryPayload HistoryResponse(Mt5ExecutionHistoryRequest request) { HistoryRequests++; LastHistoryRequest = request; return new(History); }
         private Mt5ExactDealPayload ExactDealResponse(Mt5ExactDealRequest request) { LastExactDealRequest = request; return ExactDeal ?? throw new Mt5ExecutionBridgeException("No exact deal fixture configured."); }
         private Mt5ExecutionPositionPayload PositionResponse() { PositionRequests++; return PositionResult; }

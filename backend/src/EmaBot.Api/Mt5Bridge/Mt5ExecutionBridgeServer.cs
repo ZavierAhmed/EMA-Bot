@@ -139,7 +139,18 @@ public sealed class Mt5ExecutionBridgeServer : IHostedService, IMt5ExecutionBrid
         }
         public async Task PumpAsync(CancellationToken token)
         {
-            try { while (!token.IsCancellationRequested) { var envelope = await ReadAsync(token) ?? throw new EndOfStreamException(); if (envelope.ProtocolVersion != 2) throw new Mt5ExecutionBridgeException("Unsupported execution bridge protocol version."); if (envelope.Kind is Mt5ExecutionFrameKind.Response or Mt5ExecutionFrameKind.Error && envelope.RequestId is { } id && _pending.TryRemove(id, out var waiter)) { if (envelope.Kind == Mt5ExecutionFrameKind.Response) waiter.TrySetResult(envelope); else waiter.TrySetException(new Mt5ExecutionBridgeException(envelope.DeserializePayload<Mt5ExecutionErrorPayload>()?.Message ?? "MT5 execution bridge rejected the request.")); } } }
+            try
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    var envelope = await ReadAsync(token) ?? throw new EndOfStreamException();
+                    if (envelope.ProtocolVersion != 2) throw new Mt5ExecutionBridgeException("Unsupported execution bridge protocol version.");
+                    if (envelope.Kind is not (Mt5ExecutionFrameKind.Response or Mt5ExecutionFrameKind.Error) || envelope.RequestId is not { } id || !_pending.TryRemove(id, out var waiter)) continue;
+                    if (envelope.Kind == Mt5ExecutionFrameKind.Response) { waiter.TrySetResult(envelope); continue; }
+                    var error = envelope.DeserializePayload<Mt5ExecutionErrorPayload>() ?? new("Unknown", "MT5 execution bridge rejected the request.", false);
+                    waiter.TrySetException(new Mt5ExecutionBridgeRejectedException(error.Code, error.Message, error.Retryable, error.NativeCode));
+                }
+            }
             finally { foreach (var pair in _pending) if (_pending.TryRemove(pair.Key, out var pending)) pending.TrySetException(new Mt5ExecutionBridgeAmbiguousException("MT5 execution bridge disconnected after a request.")); }
         }
         public async Task<Mt5ExecutionEnvelope> RequestAsync(Mt5ExecutionOperation operation, object? payload, CancellationToken token)

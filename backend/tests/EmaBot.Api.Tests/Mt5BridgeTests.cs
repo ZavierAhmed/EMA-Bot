@@ -394,6 +394,25 @@ public sealed class Mt5ExecutionBridgeServerTests
         Assert.Equal("Synthetic-Server", server.GetStatus().AccountServer);
     }
 
+    [Fact]
+    public async Task ExplicitErrorResponse_UsesStructuredExecutionRejection()
+    {
+        var options = new Mt5ExecutionBridgeOptions { Enabled = true, PipeName = $"ema-bot-execution-tests-{Guid.NewGuid():N}", HandshakeSecret = "synthetic-execution-secret-that-is-at-least-32-characters" };
+        await using var server = new Mt5ExecutionBridgeServer(Options.Create(options), TimeProvider.System, NullLogger<Mt5ExecutionBridgeServer>.Instance);
+        await server.StartAsync(CancellationToken.None);
+        await using var client = new NamedPipeClientStream(".", options.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(3_000);
+        await WriteAsync(client, Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.Hello, Mt5ExecutionOperation.Hello, null, new Mt5ExecutionHelloPayload(options.HandshakeSecret, "synthetic-execution-client", "fingerprint", "Synthetic-Server", "Demo", false, false), TimeProvider.System));
+        Assert.Equal(Mt5ExecutionFrameKind.HelloAck, (await ReadAsync(client, CancellationToken.None)).Kind);
+
+        var pending = server.SendAsync(Mt5ExecutionOperation.OrderCheck, new { }, CancellationToken.None);
+        var request = await ReadAsync(client, CancellationToken.None);
+        await WriteAsync(client, Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.Error, request.Operation, request.RequestId, new Mt5ExecutionErrorPayload("DemoSafetyGate", "Synthetic gate rejection.", false, 42), TimeProvider.System));
+
+        var exception = await Assert.ThrowsAsync<Mt5ExecutionBridgeRejectedException>(async () => await pending);
+        Assert.Equal("DemoSafetyGate", exception.Code); Assert.Equal("Synthetic gate rejection.", exception.Message); Assert.False(exception.Retryable); Assert.Equal(42, exception.NativeCode);
+    }
+
     private static async Task WriteAsync(Stream stream, Mt5ExecutionEnvelope envelope)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, Mt5ExecutionBridgeProtocol.JsonOptions);
@@ -523,9 +542,14 @@ public sealed class MqlExecutionBridgeContractTests
         var exactDeal = ExtractMethodBody(source, "void SendExactDeal(");
         var positionHistory = ExtractMethodBody(source, "void SendPositionHistory(");
         var resolve = ExtractMethodBody(source, "ulong ResolvePositionIdentifierFromDeal(");
+        var executionAccount = ExtractMethodBody(source, "void SendExecutionAccount(");
 
         Assert.Contains("if(operation==\"GetExactDeal\") { SendExactDeal(request_id,payload); return; }", dispatch);
         Assert.Contains("if(operation==\"GetPositionHistory\") { SendPositionHistory(request_id,payload); return; }", dispatch);
+        Assert.Contains("demoExecutionEnabled", executionAccount);
+        Assert.Contains("InpEnableDemoExecution", executionAccount);
+        Assert.Contains("demoExecutionAllowed", executionAccount);
+        Assert.Contains("DemoExecutionAllowed()", executionAccount);
         Assert.Contains("StringLen(marker)>31", source);
         Assert.Contains("HistoryDealSelect(deal_ticket)", resolve);
         Assert.True(resolve.IndexOf("HistoryDealSelect(deal_ticket)", StringComparison.Ordinal) < resolve.IndexOf("HistoryDealGetInteger(deal_ticket,DEAL_POSITION_ID)", StringComparison.Ordinal));
