@@ -504,13 +504,58 @@ public sealed class MqlExecutionBridgeContractTests
         Assert.Contains("if(!checked)", handler);
 
         // OrderCheck success path must return Accepted=true driven by the boolean, not TradeAccepted(retcode).
-        Assert.Contains("if(operation==\"OrderCheck\") { result.retcode=check.retcode; result.comment=check.comment; SendExecutionResult(operation,request_id,true,result,false); return; }", handler);
+        Assert.Contains("if(operation==\"OrderCheck\") { SendOrderCheckResult(operation,request_id,true,check); return; }", handler);
 
         // The buggy form (Acceptance via TradeAccepted(check.retcode)) must no longer exist.
-        Assert.DoesNotContain("SendExecutionResult(operation,request_id,TradeAccepted(check.retcode),result,false)", handler);
+        Assert.DoesNotContain("TradeAccepted(check.retcode)", handler);
 
         // Actual OrderSend path is NOT weakened: still requires sent && TradeAccepted(result.retcode).
-        Assert.Contains("const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendExecutionResult(operation,request_id,accepted,result,false);", handler);
+        Assert.Contains("const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendSubmitResult(operation,request_id,accepted,result,symbol,magic,side);", handler);
+    }
+
+    [Fact]
+    public void V2_NativeExecutionIdentityContract_UsesNativeFieldsAndBrokerSafeMarkers()
+    {
+        var source = File.ReadAllText(ResolveMt5Source("EmaBotExecutionBridgeV2.mq5"));
+        var dispatch = ExtractMethodBody(source, "void HandleRequest(");
+        var close = ExtractMethodBody(source, "void HandleClosePosition(");
+        var position = ExtractMethodBody(source, "void SendExecutionPosition(");
+        var exactDeal = ExtractMethodBody(source, "void SendExactDeal(");
+        var positionHistory = ExtractMethodBody(source, "void SendPositionHistory(");
+        var resolve = ExtractMethodBody(source, "ulong ResolvePositionIdentifierFromDeal(");
+
+        Assert.Contains("if(operation==\"GetExactDeal\") { SendExactDeal(request_id,payload); return; }", dispatch);
+        Assert.Contains("if(operation==\"GetPositionHistory\") { SendPositionHistory(request_id,payload); return; }", dispatch);
+        Assert.Contains("StringLen(marker)>31", source);
+        Assert.Contains("HistoryDealSelect(deal_ticket)", resolve);
+        Assert.True(resolve.IndexOf("HistoryDealSelect(deal_ticket)", StringComparison.Ordinal) < resolve.IndexOf("HistoryDealGetInteger(deal_ticket,DEAL_POSITION_ID)", StringComparison.Ordinal));
+        Assert.Contains("POSITION_IDENTIFIER", close);
+        Assert.Contains("POSITION_MAGIC", close);
+        Assert.Contains("POSITION_SYMBOL", close);
+        Assert.Contains("identifier<=0", close);
+        Assert.Contains("actual_identifier!=identifier", close);
+        Assert.DoesNotContain("POSITION_COMMENT)!=marker", close);
+        Assert.Contains("POSITION_IDENTIFIER", position);
+        Assert.Contains("POSITION_MAGIC", position);
+        Assert.Contains("POSITION_SYMBOL", position);
+        Assert.Contains("identifier<=0", position);
+        Assert.Contains("actual_identifier!=identifier", position);
+        Assert.DoesNotContain("POSITION_COMMENT)!=marker", position);
+        Assert.Contains("expectedVolumeLots", exactDeal);
+        Assert.Contains("expectedOrderTicket", exactDeal);
+        Assert.Contains("actual_order!=expected_order", exactDeal);
+        Assert.Contains("actual_magic!=magic", exactDeal);
+        Assert.Contains("actual_symbol!=symbol", exactDeal);
+        Assert.Contains("deal_side!=side", exactDeal);
+        Assert.Contains("!is_entry", exactDeal);
+        Assert.Contains("HistoryDealSelect((ulong)entry_deal)", positionHistory);
+        Assert.True(positionHistory.IndexOf("HistoryDealSelect((ulong)entry_deal)", StringComparison.Ordinal) < positionHistory.IndexOf("HistorySelect((datetime)from,(datetime)to)", StringComparison.Ordinal));
+        Assert.Contains("entry_identifier!=identifier", positionHistory);
+        Assert.Contains("entry_magic!=magic", positionHistory);
+        Assert.Contains("entry_symbol!=symbol", positionHistory);
+        Assert.Contains("entry_side!=side", positionHistory);
+        Assert.Contains("entry_semantics!=DEAL_ENTRY_IN", positionHistory);
+        Assert.Contains("ResolveCurrentPositionTicket(position_id", source);
     }
 
     private static string ExtractMethodBody(string source, string signature)

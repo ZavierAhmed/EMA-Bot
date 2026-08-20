@@ -89,8 +89,8 @@ public sealed class Mt5ExecutionBridgeServer : IHostedService, IMt5ExecutionBrid
                 }
                 else
                 {
-                    await connection.WriteAsync(Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.HelloAck, Mt5ExecutionOperation.Hello, null, new { protocolVersion = 2, serverVersion = "EMA-Bot" }, _clock), token);
                     lock (_sync) { _connection = connection; _status = new(true, true, _options.PipeName, hello.AccountFingerprint, hello.AccountServer, hello.AccountMode, null); }
+                    await connection.WriteAsync(Mt5ExecutionEnvelope.Create(Mt5ExecutionFrameKind.HelloAck, Mt5ExecutionOperation.Hello, null, new { protocolVersion = 2, serverVersion = "EMA-Bot" }, _clock), token);
                     Connected?.Invoke();
                     await connection.PumpAsync(token);
                 }

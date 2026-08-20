@@ -46,7 +46,7 @@ public sealed class DemoExecutionOptions
         if (string.IsNullOrWhiteSpace(options.ExpectedAccountFingerprint)) errors.Add("DemoExecution:ExpectedAccountFingerprint is required when enabled.");
         if (string.IsNullOrWhiteSpace(options.ExpectedServer)) errors.Add("DemoExecution:ExpectedServer is required when enabled.");
         if (options.MagicNumber <= 0) errors.Add("DemoExecution:MagicNumber must be positive.");
-        if (string.IsNullOrWhiteSpace(options.CorrelationPrefix) || options.CorrelationPrefix.Length > 24) errors.Add("DemoExecution:CorrelationPrefix is invalid.");
+        if (string.IsNullOrWhiteSpace(options.CorrelationPrefix) || !DemoExecutionMarker.IsPrefixValid(options.CorrelationPrefix)) errors.Add($"DemoExecution:CorrelationPrefix must be 1-{DemoExecutionMarker.MaximumPrefixLength} alphanumeric characters so every generated marker fits {DemoExecutionMarker.BrokerSafeMaxLength} broker-safe characters.");
         return errors;
     }
 }
