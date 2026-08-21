@@ -21,6 +21,10 @@ public sealed class DemoExecution
     public decimal VolumeLots { get; set; }
     public decimal? RequestedStopLoss { get; set; }
     public decimal? RequestedTakeProfit { get; set; }
+    // Broker-derived protection only.  Requested* remain the immutable entry request.
+    public decimal? CurrentStopLoss { get; set; }
+    public decimal? CurrentTakeProfit { get; set; }
+    public DateTimeOffset? ProtectionObservedAtUtc { get; set; }
     public long MagicNumber { get; set; }
     public string CorrelationMarker { get; set; } = string.Empty;
     public long? PositionTicket { get; set; }
@@ -45,4 +49,34 @@ public sealed class DemoExecution
     public DateTimeOffset? ReconciledAtUtc { get; set; }
     public string? ReconciliationNote { get; set; }
     public string? ReconciliationSource { get; set; }
+    public List<DemoExecutionManagementAction> ManagementActions { get; set; } = [];
+}
+
+public enum DemoExecutionManagementActionKind { ModifyProtection }
+public enum DemoExecutionManagementActionState { Created, Submitting, Applied, Rejected, ReconciliationRequired }
+
+// An auditable, idempotent ledger for one protection write.  It intentionally does
+// not change the lifecycle of the underlying broker execution.
+public sealed class DemoExecutionManagementAction
+{
+    public int Id { get; set; }
+    public Guid ClientManagementActionId { get; set; }
+    public int DemoExecutionId { get; set; }
+    public DemoExecutionManagementActionKind Kind { get; set; }
+    public DemoExecutionManagementActionState State { get; set; }
+    public decimal? RequestedStopLoss { get; set; }
+    public decimal? RequestedTakeProfit { get; set; }
+    public decimal? ObservedBeforeStopLoss { get; set; }
+    public decimal? ObservedBeforeTakeProfit { get; set; }
+    public decimal? AppliedStopLoss { get; set; }
+    public decimal? AppliedTakeProfit { get; set; }
+    public string? BrokerRetcode { get; set; }
+    public string? BrokerMessage { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; }
+    public DateTimeOffset? SubmittedAtUtc { get; set; }
+    public DateTimeOffset? CompletedAtUtc { get; set; }
+    public DateTimeOffset? ReconciledAtUtc { get; set; }
+    public string? ReconciliationNote { get; set; }
+    public string? ReconciliationSource { get; set; }
+    public DemoExecution? DemoExecution { get; set; }
 }

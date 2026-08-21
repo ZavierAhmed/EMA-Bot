@@ -586,6 +586,8 @@ namespace EmaBot.Api.Migrations
                     b.Property<DateTimeOffset?>("ClosedAtUtc").HasColumnType("datetime(6)");
                     b.Property<Guid>("ClientExecutionId").HasColumnType("char(36)");
                     b.Property<string>("CorrelationMarker").IsRequired().HasMaxLength(96).HasColumnType("varchar(96)");
+                    b.Property<decimal?>("CurrentStopLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("CurrentTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
                     b.Property<DateTimeOffset>("CreatedAtUtc").HasColumnType("datetime(6)");
                     b.Property<long?>("DealTicket").HasColumnType("bigint");
                     b.Property<long?>("EntryDealTicket").HasColumnType("bigint");
@@ -597,6 +599,7 @@ namespace EmaBot.Api.Migrations
                     b.Property<long?>("OrderTicket").HasColumnType("bigint");
                     b.Property<long?>("PositionIdentifier").HasColumnType("bigint");
                     b.Property<long?>("PositionTicket").HasColumnType("bigint");
+                    b.Property<DateTimeOffset?>("ProtectionObservedAtUtc").HasColumnType("datetime(6)");
                     b.Property<DateTimeOffset?>("PreflightAtUtc").HasColumnType("datetime(6)");
                     b.Property<string>("Provider").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
                     b.Property<DateTimeOffset?>("ReconciledAtUtc").HasColumnType("datetime(6)");
@@ -609,6 +612,37 @@ namespace EmaBot.Api.Migrations
                     b.Property<DateTimeOffset?>("SubmittedAtUtc").HasColumnType("datetime(6)");
                     b.Property<decimal>("VolumeLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
                     b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("PositionIdentifier"); b.HasIndex("PositionTicket"); b.HasIndex("State"); b.ToTable("DemoExecutions");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoExecutionManagementAction", b =>
+                {
+                    b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("int");
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    b.Property<decimal?>("AppliedStopLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("AppliedTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("BrokerMessage").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<string>("BrokerRetcode").HasMaxLength(64).HasColumnType("varchar(64)");
+                    b.Property<Guid>("ClientManagementActionId").HasColumnType("char(36)");
+                    b.Property<DateTimeOffset?>("CompletedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset>("CreatedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<int>("DemoExecutionId").HasColumnType("int");
+                    b.Property<string>("Kind").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<decimal?>("ObservedBeforeStopLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("ObservedBeforeTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<DateTimeOffset?>("ReconciledAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("ReconciliationNote").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<string>("ReconciliationSource").HasMaxLength(64).HasColumnType("varchar(64)");
+                    b.Property<decimal?>("RequestedStopLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("RequestedTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("State").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<DateTimeOffset?>("SubmittedAtUtc").HasColumnType("datetime(6)");
+                    b.HasKey("Id"); b.HasIndex("ClientManagementActionId").IsUnique(); b.HasIndex("DemoExecutionId", "State"); b.ToTable("DemoExecutionManagementActions");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoExecutionManagementAction", b =>
+                {
+                    b.HasOne("EmaBot.Api.Models.DemoExecution", "DemoExecution").WithMany("ManagementActions").HasForeignKey("DemoExecutionId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                    b.Navigation("DemoExecution");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.DemoStrategyIntent", b =>
@@ -655,6 +689,11 @@ namespace EmaBot.Api.Migrations
                     b.Property<DateTimeOffset?>("SubmittedAtUtc").HasColumnType("datetime(6)");
                     b.Property<DateTimeOffset?>("UpdatedAtUtc").HasColumnType("datetime(6)");
                     b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("DemoExecutionId"); b.HasIndex("DemoStrategySessionSymbolId", "Status"); b.HasIndex("DemoStrategySessionId", "DemoStrategySessionSymbolId", "SignalTimeUtc", "Direction").IsUnique(); b.ToTable("DemoStrategyIntents");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoExecution", b =>
+                {
+                    b.Navigation("ManagementActions");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySession", b =>

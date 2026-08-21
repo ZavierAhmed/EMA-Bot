@@ -21,6 +21,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<PaperTradeEvent> PaperTradeEvents => Set<PaperTradeEvent>();
     public DbSet<PaperDecisionEvent> PaperDecisionEvents => Set<PaperDecisionEvent>();
     public DbSet<DemoExecution> DemoExecutions => Set<DemoExecution>();
+    public DbSet<DemoExecutionManagementAction> DemoExecutionManagementActions => Set<DemoExecutionManagementAction>();
     public DbSet<DemoStrategySession> DemoStrategySessions => Set<DemoStrategySession>();
     public DbSet<DemoStrategySessionSymbol> DemoStrategySessionSymbols => Set<DemoStrategySessionSymbol>();
     public DbSet<DemoStrategyIntent> DemoStrategyIntents => Set<DemoStrategyIntent>();
@@ -174,6 +175,8 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(item => item.VolumeLots).HasPrecision(18, 8);
             entity.Property(item => item.RequestedStopLoss).HasPrecision(18, 8);
             entity.Property(item => item.RequestedTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.CurrentStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.CurrentTakeProfit).HasPrecision(18, 8);
             entity.Property(item => item.CorrelationMarker).HasMaxLength(96);
             entity.Property(item => item.FilledVolumeLots).HasPrecision(18, 8);
             entity.Property(item => item.AverageFillPrice).HasPrecision(18, 8);
@@ -187,6 +190,24 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(item => item.PositionTicket);
             entity.HasIndex(item => item.PositionIdentifier);
             entity.HasIndex(item => item.State);
+            entity.HasMany(item => item.ManagementActions).WithOne(item => item.DemoExecution!).HasForeignKey(item => item.DemoExecutionId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<DemoExecutionManagementAction>(entity =>
+        {
+            entity.Property(item => item.Kind).HasConversion<string>().HasMaxLength(32);
+            entity.Property(item => item.State).HasConversion<string>().HasMaxLength(32);
+            entity.Property(item => item.RequestedStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.RequestedTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.ObservedBeforeStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.ObservedBeforeTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.AppliedStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.AppliedTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerRetcode).HasMaxLength(64);
+            entity.Property(item => item.BrokerMessage).HasMaxLength(1024);
+            entity.Property(item => item.ReconciliationNote).HasMaxLength(1024);
+            entity.Property(item => item.ReconciliationSource).HasMaxLength(64);
+            entity.HasIndex(item => item.ClientManagementActionId).IsUnique();
+            entity.HasIndex(item => new { item.DemoExecutionId, item.State });
         });
         builder.Entity<DemoStrategySession>(entity =>
         {

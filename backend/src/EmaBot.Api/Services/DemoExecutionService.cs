@@ -1,6 +1,7 @@
 using EmaBot.Api.Data;
 using EmaBot.Api.Models;
 using EmaBot.Api.Mt5Bridge;
+using System.Collections.Concurrent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -8,6 +9,7 @@ namespace EmaBot.Api.Services;
 
 public sealed record DemoExecutionReadiness(bool Ready, string Reason, Mt5ExecutionAccountPayload? Account = null);
 public sealed record SubmitDemoOrder(Guid ClientExecutionId, string BrokerSymbol, string Side, decimal VolumeLots, decimal? StopLoss, decimal? TakeProfit);
+public sealed record ModifyDemoProtection(Guid ClientManagementActionId, Guid ClientExecutionId, decimal? StopLoss, decimal? TakeProfit);
 
 public interface IDemoExecutionService
 {
@@ -15,11 +17,15 @@ public interface IDemoExecutionService
     Task<DemoExecution> SubmitAsync(SubmitDemoOrder request, CancellationToken token);
     Task<DemoExecution?> ReconcileAsync(Guid id, CancellationToken token);
     Task<DemoExecution?> CloseAsync(Guid id, CancellationToken token);
+    Task<DemoExecutionManagementAction> ModifyProtectionAsync(ModifyDemoProtection request, CancellationToken token);
+    Task<DemoExecutionManagementAction?> ReconcileManagementActionAsync(Guid clientManagementActionId, CancellationToken token);
+    Task<DemoExecutionManagementAction?> FailClosedManagementActionAsync(Guid clientManagementActionId, CancellationToken token);
     Task<DemoExecution?> GetAsync(Guid id, CancellationToken token);
 }
 
 public sealed class DemoExecutionService(EmaBotDbContext database, IMt5ExecutionBridgeClient bridge, IOptions<DemoExecutionOptions> options, TimeProvider clock, ILogger<DemoExecutionService> logger) : IDemoExecutionService
 {
+    private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> ManagementLocks = new();
     private readonly DemoExecutionOptions _options = options.Value;
 
     public async Task<DemoExecutionReadiness> ReadinessAsync(CancellationToken token)
@@ -130,6 +136,119 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
 
     public Task<DemoExecution?> GetAsync(Guid id, CancellationToken token) => database.DemoExecutions.AsNoTracking().SingleOrDefaultAsync(item => item.ClientExecutionId == id, token);
 
+    public async Task<DemoExecutionManagementAction> ModifyProtectionAsync(ModifyDemoProtection request, CancellationToken token)
+    {
+        if (request.ClientManagementActionId == Guid.Empty || request.ClientExecutionId == Guid.Empty || request.StopLoss is <= 0m || request.TakeProfit is <= 0m || request.StopLoss is null && request.TakeProfit is null)
+            throw new ArgumentException("The protection management request is invalid.");
+        var mutex = ManagementLocks.GetOrAdd(request.ClientManagementActionId, _ => new SemaphoreSlim(1, 1));
+        await mutex.WaitAsync(token);
+        try
+        {
+            var existing = await database.DemoExecutionManagementActions.SingleOrDefaultAsync(item => item.ClientManagementActionId == request.ClientManagementActionId, token);
+            if (existing is not null) return existing;
+            var execution = await database.DemoExecutions.SingleOrDefaultAsync(item => item.ClientExecutionId == request.ClientExecutionId, token) ?? throw new KeyNotFoundException("Demo execution not found.");
+            var action = new DemoExecutionManagementAction
+            {
+                ClientManagementActionId = request.ClientManagementActionId, DemoExecutionId = execution.Id,
+                Kind = DemoExecutionManagementActionKind.ModifyProtection, State = DemoExecutionManagementActionState.Created,
+                RequestedStopLoss = request.StopLoss, RequestedTakeProfit = request.TakeProfit, CreatedAtUtc = clock.GetUtcNow()
+            };
+            database.DemoExecutionManagementActions.Add(action);
+            try { await database.SaveChangesAsync(token); }
+            catch (DbUpdateException)
+            {
+                database.Entry(action).State = EntityState.Detached;
+                return await database.DemoExecutionManagementActions.SingleAsync(item => item.ClientManagementActionId == request.ClientManagementActionId, token);
+            }
+            if (execution.State != DemoExecutionState.Open || execution.PositionTicket is not > 0 || execution.PositionIdentifier is not > 0)
+                return await RejectManagementAsync(action, "An open execution with exact native position ticket and identifier is required.", token);
+            var readiness = await ReadinessAsync(token);
+            if (!readiness.Ready) return await RejectManagementAsync(action, readiness.Reason, token);
+            var position = await ReadExactOwnedPositionAsync(execution, token);
+            if (position is null || position.IsClosed)
+            {
+                if (position?.IsClosed == true) await ReconcileAsync(execution.ClientExecutionId, token);
+                return await RejectManagementAsync(action, "The exact owned native position is not currently open.", token);
+            }
+            ApplyExactOpenProtectionObservation(execution, position);
+            if (position.StopLoss is not > 0m || position.TakeProfit is not > 0m)
+                return await RejectManagementAsync(action, "The exact native position does not have both protections; management will never clear a protection.", token);
+            var requestedStopLoss = request.StopLoss ?? position.StopLoss.Value;
+            var requestedTakeProfit = request.TakeProfit ?? position.TakeProfit.Value;
+            if (!DemoExecutionProtectionPrices.TryCanonicalize(requestedStopLoss, position, out var stopLoss) || !DemoExecutionProtectionPrices.TryCanonicalize(requestedTakeProfit, position, out var takeProfit))
+                return await RejectManagementAsync(action, "The requested protection is not on the exact broker price grid.", token);
+            action.ObservedBeforeStopLoss = position.StopLoss; action.ObservedBeforeTakeProfit = position.TakeProfit;
+            // Persist the complete final pair.  Reconciliation must never need to infer
+            // which untouched protection value was intended.
+            action.RequestedStopLoss = stopLoss; action.RequestedTakeProfit = takeProfit;
+            if (!ValidProtectionPair(execution.Side, stopLoss, takeProfit)) return await RejectManagementAsync(action, "The requested protection pair has an invalid stop side.", token);
+            if (!DemoExecutionProtectionPrices.MeetsKnownBrokerDistances(execution.Side, stopLoss, takeProfit, position)) return await RejectManagementAsync(action, "The requested protection violates known broker stop or freeze distance requirements.", token);
+            if (!IsMonotonic(execution.Side, position.StopLoss.Value, position.TakeProfit.Value, stopLoss, takeProfit)) return await RejectManagementAsync(action, "Protection management may not weaken the current native stop or target.", token);
+            if (DemoExecutionProtectionPrices.Equivalent(stopLoss, position.StopLoss.Value, position) && DemoExecutionProtectionPrices.Equivalent(takeProfit, position.TakeProfit.Value, position))
+            {
+                ApplyManagementResult(execution, action, null, null, stopLoss, takeProfit, "NoChange");
+                action.State = DemoExecutionManagementActionState.Applied; action.CompletedAtUtc = clock.GetUtcNow();
+                await database.SaveChangesAsync(token); return action;
+            }
+            action.State = DemoExecutionManagementActionState.Submitting; action.SubmittedAtUtc = clock.GetUtcNow();
+            await database.SaveChangesAsync(token); // durable before the one potentially ambiguous native write.
+            try
+            {
+                var native = (await bridge.SendAsync(Mt5ExecutionOperation.ModifyPositionProtection, new Mt5ModifyPositionProtectionRequest(execution.PositionTicket.Value, execution.PositionIdentifier.Value, execution.MagicNumber, execution.BrokerSymbol, execution.Side, stopLoss, takeProfit), token)).DeserializePayload<Mt5ModifyPositionProtectionResultPayload>();
+                if (native is not { Accepted: true }) return await RejectManagementAsync(action, native?.Message ?? "MT5 rejected the protection modification.", token, native?.Retcode);
+                if (native.PositionTicket != execution.PositionTicket || native.PositionIdentifier != execution.PositionIdentifier || native.StopLoss is not > 0m || native.TakeProfit is not > 0m || !DemoExecutionProtectionPrices.Equivalent(stopLoss, native.StopLoss.Value, position) || !DemoExecutionProtectionPrices.Equivalent(takeProfit, native.TakeProfit.Value, position))
+                    return await RequireManagementReconciliationAsync(action, "MT5 accepted the modification but did not return exact broker-derived protection evidence.", token);
+                ApplyManagementResult(execution, action, native.Retcode, native.Message, native.StopLoss.Value, native.TakeProfit.Value, "ModifyPositionProtection");
+                action.State = DemoExecutionManagementActionState.Applied; action.CompletedAtUtc = clock.GetUtcNow();
+                await database.SaveChangesAsync(token); return action;
+            }
+            catch (Mt5ExecutionBridgeRejectedException exception) { return await RejectManagementAsync(action, exception.Message, token, exception.Code); }
+            catch (Exception exception) when (IsAmbiguous(exception)) { return await RequireManagementReconciliationAsync(action, "Protection modification result is ambiguous; no automatic retry will occur.", token); }
+        }
+        finally { mutex.Release(); }
+    }
+
+    public async Task<DemoExecutionManagementAction?> ReconcileManagementActionAsync(Guid clientManagementActionId, CancellationToken token)
+    {
+        var action = await database.DemoExecutionManagementActions.Include(item => item.DemoExecution).SingleOrDefaultAsync(item => item.ClientManagementActionId == clientManagementActionId, token);
+        if (action is null || action.State is DemoExecutionManagementActionState.Applied or DemoExecutionManagementActionState.Rejected) return action;
+        if (action.State == DemoExecutionManagementActionState.Created) return await FailClosedManagementActionAsync(clientManagementActionId, token);
+        var execution = action.DemoExecution!;
+        try
+        {
+            var position = await ReadExactOwnedPositionAsync(execution, token);
+            action.ReconciledAtUtc = clock.GetUtcNow(); action.ReconciliationSource = "ExactPositionTicket";
+            if (position?.IsClosed == true)
+            {
+                await ReconcileAsync(execution.ClientExecutionId, token);
+                action.ReconciliationNote = "The exact native position is closed; no protection modification was retried.";
+                action.State = DemoExecutionManagementActionState.ReconciliationRequired;
+                await database.SaveChangesAsync(token); return action;
+            }
+            if (position is not null) ApplyExactOpenProtectionObservation(execution, position);
+            if (position is { StopLoss: > 0m, TakeProfit: > 0m }
+                && action.RequestedStopLoss is { } requestedStopLoss
+                && action.RequestedTakeProfit is { } requestedTakeProfit
+                && DemoExecutionProtectionPrices.Equivalent(requestedStopLoss, position.StopLoss.Value, position)
+                && DemoExecutionProtectionPrices.Equivalent(requestedTakeProfit, position.TakeProfit.Value, position))
+            {
+                ApplyManagementResult(execution, action, null, null, position.StopLoss.Value, position.TakeProfit.Value, "ExactPositionTicket");
+                action.State = DemoExecutionManagementActionState.Applied; action.CompletedAtUtc = clock.GetUtcNow();
+            }
+            else { action.State = DemoExecutionManagementActionState.ReconciliationRequired; action.ReconciliationNote = "Exact native position evidence does not prove the requested protection modification; no retry will occur."; }
+            await database.SaveChangesAsync(token); return action;
+        }
+        catch (Exception exception) when (IsAmbiguous(exception)) { return await RequireManagementReconciliationAsync(action, "Protection reconciliation is inconclusive; no retry will occur.", token); }
+        catch (Mt5ExecutionBridgeRejectedException exception) { return await RequireManagementReconciliationAsync(action, $"MT5 rejected protection reconciliation evidence ({exception.Code}); no retry will occur.", token); }
+    }
+
+    public async Task<DemoExecutionManagementAction?> FailClosedManagementActionAsync(Guid clientManagementActionId, CancellationToken token)
+    {
+        var action = await database.DemoExecutionManagementActions.SingleOrDefaultAsync(item => item.ClientManagementActionId == clientManagementActionId, token);
+        if (action is null || action.State != DemoExecutionManagementActionState.Created) return action;
+        return await RejectManagementAsync(action, "Application recovery found an unsubmitted management action; it was failed closed and will never be submitted late.", token);
+    }
+
     // Trusted ownership chain: persisted exact entry deal -> DEAL_POSITION_ID ->
     // current position by identifier.  A truncated broker comment never invalidates
     // otherwise exact native identity.
@@ -183,6 +302,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             execution.PositionIdentifier = payload.PositionIdentifier;
             execution.FilledVolumeLots = payload.VolumeLots;
             execution.AverageFillPrice = payload.OpenPrice ?? execution.AverageFillPrice;
+            ApplyExactOpenProtectionObservation(execution, payload);
             execution.ReconciledAtUtc = clock.GetUtcNow(); execution.ReconciliationSource = "ExactPositionTicket"; execution.ReconciliationNote = "Reconciled from the exact owned broker position ticket with native ownership fields.";
             execution.State = execution.FilledVolumeLots < execution.VolumeLots ? DemoExecutionState.PartiallyFilled : DemoExecutionState.Open;
             await database.SaveChangesAsync(token); return execution;
@@ -269,6 +389,43 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
     private static decimal? WeightedAverage(IEnumerable<Mt5ExecutionHistoryEvidence> values) { var rows = values.ToArray(); var total = rows.Sum(item => item.ExecutedVolumeLots); return total == 0m ? null : rows.Where(item => item.ExecutionPrice is not null).Sum(item => item.ExecutionPrice!.Value * item.ExecutedVolumeLots) / total; }
     private async Task<DemoExecution> Reject(DemoExecution item, string message, CancellationToken token, string? retcode = null) { item.State = DemoExecutionState.Rejected; item.BrokerMessage = message; item.BrokerRetcode = retcode; await database.SaveChangesAsync(token); return item; }
     private async Task<DemoExecution> RequireReconciliationAsync(DemoExecution item, string note, CancellationToken token) { item.State = DemoExecutionState.ReconciliationRequired; item.ReconciliationNote = note; await database.SaveChangesAsync(token); logger.LogWarning("Demo execution {ClientExecutionId} requires reconciliation: {Reason}", item.ClientExecutionId, note); return item; }
+    private async Task<Mt5ExecutionPositionPayload?> ReadExactOwnedPositionAsync(DemoExecution execution, CancellationToken token)
+    {
+        if (execution.PositionTicket is not > 0 || execution.PositionIdentifier is not > 0) return null;
+        var payload = (await bridge.SendAsync(Mt5ExecutionOperation.GetPosition, new Mt5ExecutionPositionRequest(execution.PositionTicket.Value, execution.PositionIdentifier.Value, execution.MagicNumber, execution.BrokerSymbol, execution.Side), token)).DeserializePayload<Mt5ExecutionPositionPayload>();
+        if (payload is null || !payload.Accepted) return null;
+        if (payload.IsClosed) return payload;
+        return payload.PositionTicket == execution.PositionTicket && payload.PositionIdentifier == execution.PositionIdentifier && payload.MagicNumber == execution.MagicNumber && string.Equals(payload.BrokerSymbol, execution.BrokerSymbol, StringComparison.Ordinal) && string.Equals(payload.Side, execution.Side, StringComparison.OrdinalIgnoreCase) && payload.VolumeLots is > 0m ? payload : null;
+    }
+    private async Task<DemoExecutionManagementAction> RejectManagementAsync(DemoExecutionManagementAction action, string message, CancellationToken token, string? retcode = null)
+    {
+        action.State = DemoExecutionManagementActionState.Rejected; action.BrokerMessage = message; action.BrokerRetcode = retcode; action.CompletedAtUtc = clock.GetUtcNow();
+        await database.SaveChangesAsync(token); return action;
+    }
+    private async Task<DemoExecutionManagementAction> RequireManagementReconciliationAsync(DemoExecutionManagementAction action, string note, CancellationToken token)
+    {
+        action.State = DemoExecutionManagementActionState.ReconciliationRequired; action.ReconciliationNote = note; action.ReconciledAtUtc = clock.GetUtcNow();
+        await database.SaveChangesAsync(token); logger.LogWarning("Demo management action {ClientManagementActionId} requires reconciliation: {Reason}", action.ClientManagementActionId, note); return action;
+    }
+    private void ApplyManagementResult(DemoExecution execution, DemoExecutionManagementAction action, string? retcode, string? message, decimal stopLoss, decimal takeProfit, string source)
+    {
+        action.AppliedStopLoss = stopLoss; action.AppliedTakeProfit = takeProfit; action.BrokerRetcode = retcode; action.BrokerMessage = message;
+        execution.CurrentStopLoss = stopLoss; execution.CurrentTakeProfit = takeProfit; execution.ProtectionObservedAtUtc = clock.GetUtcNow();
+        action.ReconciliationSource = source;
+    }
+    // Only an exact native ownership read may replace the broker-observed values.
+    // In particular, an omitted native SL or TP clears the stale local observation.
+    private void ApplyExactOpenProtectionObservation(DemoExecution execution, Mt5ExecutionPositionPayload payload)
+    {
+        execution.CurrentStopLoss = payload.StopLoss is > 0m ? payload.StopLoss : null;
+        execution.CurrentTakeProfit = payload.TakeProfit is > 0m ? payload.TakeProfit : null;
+        execution.ProtectionObservedAtUtc = clock.GetUtcNow();
+    }
+    private static bool IsMonotonic(string side, decimal currentStop, decimal currentTarget, decimal newStop, decimal newTarget) =>
+        string.Equals(side, "Buy", StringComparison.OrdinalIgnoreCase) ? newStop >= currentStop && newTarget >= currentTarget :
+        string.Equals(side, "Sell", StringComparison.OrdinalIgnoreCase) && newStop <= currentStop && newTarget <= currentTarget;
+    private static bool ValidProtectionPair(string side, decimal stopLoss, decimal takeProfit) =>
+        stopLoss > 0m && takeProfit > 0m && (string.Equals(side, "Buy", StringComparison.OrdinalIgnoreCase) ? stopLoss < takeProfit : string.Equals(side, "Sell", StringComparison.OrdinalIgnoreCase) && stopLoss > takeProfit);
     private void ApplySubmitResult(DemoExecution item, Mt5SubmitOrderResultPayload result) { item.OrderTicket = result.OrderTicket ?? item.OrderTicket; item.EntryDealTicket = result.EntryDealTicket ?? item.EntryDealTicket; item.DealTicket ??= result.EntryDealTicket; item.PositionIdentifier = result.PositionIdentifier ?? item.PositionIdentifier; item.PositionTicket = result.PositionTicket ?? item.PositionTicket; item.FilledVolumeLots = result.FilledVolumeLots ?? item.FilledVolumeLots; item.AverageFillPrice = result.AverageFillPrice ?? item.AverageFillPrice; item.BrokerRetcode = result.Retcode; item.BrokerMessage = result.Message; item.BrokerAcceptedAtUtc ??= clock.GetUtcNow(); item.State = result.IsPositionOpen && result.PositionTicket is > 0 && result.PositionIdentifier is > 0 ? DemoExecutionState.Open : result.IsPartial || result.FilledVolumeLots is { } filled && filled > 0m && filled < item.VolumeLots ? DemoExecutionState.PartiallyFilled : DemoExecutionState.BrokerAccepted; }
     private void ApplyCloseResult(DemoExecution item, Mt5ClosePositionResultPayload result) { item.ExitDealTicket = result.ExitDealTicket ?? item.ExitDealTicket; item.ClosedVolumeLots = result.ClosedVolumeLots ?? item.ClosedVolumeLots; item.AverageClosePrice = result.AverageClosePrice ?? item.AverageClosePrice; item.BrokerRetcode = result.Retcode; item.BrokerMessage = result.Message; if (result.IsClosed) { item.State = DemoExecutionState.Closed; item.BrokerClosedAtUtc ??= clock.GetUtcNow(); item.ClosedAtUtc ??= clock.GetUtcNow(); } }
     private static Mt5OrderRequest ToOrder(DemoExecution item) => new(item.ClientExecutionId.ToString("D"), item.BrokerSymbol, item.Side, item.VolumeLots, item.RequestedStopLoss, item.RequestedTakeProfit, item.MagicNumber, item.CorrelationMarker, item.PositionTicket);

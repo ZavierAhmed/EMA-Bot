@@ -125,6 +125,26 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public async Task ExactPositionRead_MissingStopClearsPreviouslyObservedCurrentStop()
+    {
+        await using var database = NewDatabase(); var execution = Uncertain(); execution.PositionTicket = 300; execution.PositionIdentifier = 400; execution.CurrentStopLoss = 1890m; execution.CurrentTakeProfit = 2100m; var bridge = new FakeBridge { PositionResult = new(true, false, 300, 400, 20260817, "XAUUSD", "Buy", .01m, 2000m, null, null, 2100m) }; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Null(result!.CurrentStopLoss); Assert.Equal(2100m, result.CurrentTakeProfit); Assert.NotNull(result.ProtectionObservedAtUtc);
+    }
+
+    [Fact]
+    public async Task ExactPositionRead_MissingTargetClearsPreviouslyObservedCurrentTarget()
+    {
+        await using var database = NewDatabase(); var execution = Uncertain(); execution.PositionTicket = 300; execution.PositionIdentifier = 400; execution.CurrentStopLoss = 1890m; execution.CurrentTakeProfit = 2100m; var bridge = new FakeBridge { PositionResult = new(true, false, 300, 400, 20260817, "XAUUSD", "Buy", .01m, 2000m, null, 1890m, null) }; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(1890m, result!.CurrentStopLoss); Assert.Null(result.CurrentTakeProfit); Assert.NotNull(result.ProtectionObservedAtUtc);
+    }
+
+    [Fact]
     public async Task MissingTicket_WithNoHistory_RemainsReconciliationRequired()
     {
         await using var database = NewDatabase(); var bridge = new FakeBridge(); var service = Service(database, bridge); var execution = Uncertain(); database.DemoExecutions.Add(execution); await database.SaveChangesAsync();

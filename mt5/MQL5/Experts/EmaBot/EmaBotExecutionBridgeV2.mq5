@@ -219,6 +219,7 @@ void HandleRequest(const string operation,const string request_id,const string p
    if(operation=="OrderCheck") { HandleExecutionOrder("OrderCheck",request_id,payload); return; }
    if(operation=="SubmitMarketOrder") { HandleExecutionOrder("SubmitMarketOrder",request_id,payload); return; }
    if(operation=="ClosePosition") { HandleClosePosition(request_id,payload); return; }
+   if(operation=="ModifyPositionProtection") { HandleModifyPositionProtection(request_id,payload); return; }
    if(operation=="GetPosition") { SendExecutionPosition(request_id,payload); return; }
    if(operation=="GetExecutionHistory") { SendExecutionHistory(request_id,payload); return; }
    if(operation=="GetExactDeal") { SendExactDeal(request_id,payload); return; }
@@ -457,6 +458,82 @@ void HandleClosePosition(const string request_id,const string payload)
    const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode); SendCloseResult("ClosePosition",request_id,accepted,result);
 }
 
+// Protection modification is purpose-specific and exact-position-only.  It never
+// uses POSITION_COMMENT or a marker: ticket + identifier + magic + symbol + original
+// side must all match the currently-open native position before TRADE_ACTION_SLTP.
+// An accepted OrderSend is never retrospectively rewritten as a rejection.  Missing
+// immediate proof is deliberately returned as accepted with null evidence so .NET
+// reconciles the exact position without issuing another SL/TP write.
+void SendModifyProtectionResult(const string request_id,const bool accepted,const MqlTradeResult &result,const ulong position,const long identifier,const string symbol,const long magic,const string side)
+{
+   if(!accepted)
+   {
+      const string failed="{\"accepted\":false,\"retcode\":\""+(string)result.retcode+"\",\"message\":\""+JsonEscape(result.comment)+"\",\"positionTicket\":null,\"positionIdentifier\":null,\"stopLoss\":null,\"takeProfit\":null}";
+      SendResponse("ModifyPositionProtection",request_id,failed); return;
+   }
+   if(!PositionSelectByTicket(position)) { SendResponse("ModifyPositionProtection",request_id,"{\"accepted\":true,\"retcode\":\""+(string)result.retcode+"\",\"message\":\""+JsonEscape(result.comment)+"\",\"positionTicket\":null,\"positionIdentifier\":null,\"stopLoss\":null,\"takeProfit\":null}"); return; }
+   const long actual_identifier=(long)PositionGetInteger(POSITION_IDENTIFIER);
+   const long actual_magic=(long)PositionGetInteger(POSITION_MAGIC);
+   const string actual_symbol=PositionGetString(POSITION_SYMBOL);
+   const ENUM_POSITION_TYPE type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   const bool direction_agrees=(type==POSITION_TYPE_BUY && side=="Buy") || (type==POSITION_TYPE_SELL && side=="Sell");
+   if(actual_identifier!=identifier || actual_magic!=magic || actual_symbol!=symbol || !direction_agrees) { SendResponse("ModifyPositionProtection",request_id,"{\"accepted\":true,\"retcode\":\""+(string)result.retcode+"\",\"message\":\""+JsonEscape(result.comment)+"\",\"positionTicket\":null,\"positionIdentifier\":null,\"stopLoss\":null,\"takeProfit\":null}"); return; }
+   const double sl=PositionGetDouble(POSITION_SL),tp=PositionGetDouble(POSITION_TP);
+   const string response="{\"accepted\":true,\"retcode\":\""+(string)result.retcode+"\",\"message\":\""+JsonEscape(result.comment)+"\",\"positionTicket\":"+(string)position+",\"positionIdentifier\":"+(string)actual_identifier+",\"stopLoss\":"+OptionalNumber(sl)+",\"takeProfit\":"+OptionalNumber(tp)+"}";
+   SendResponse("ModifyPositionProtection",request_id,response);
+}
+
+void HandleModifyPositionProtection(const string request_id,const string payload)
+{
+   string symbol,side,ticket_raw,identifier_raw,magic_raw,sl_raw,tp_raw;
+   if(!DemoExecutionAllowed()) { SendError("ModifyPositionProtection",request_id,"DemoSafetyGate","Demo execution is disabled or the expected Demo account safety checks failed.",false); return; }
+   if(!GetTopLevelRaw(payload,"positionTicket",ticket_raw) || !GetTopLevelRaw(payload,"positionIdentifier",identifier_raw) || !GetTopLevelRaw(payload,"magicNumber",magic_raw) || !GetTopLevelString(payload,"brokerSymbol",symbol) || !GetTopLevelString(payload,"side",side) || !GetTopLevelRaw(payload,"stopLoss",sl_raw) || !GetTopLevelRaw(payload,"takeProfit",tp_raw) || identifier_raw=="null" || sl_raw=="null" || tp_raw=="null") { SendError("ModifyPositionProtection",request_id,"InvalidRequest","Exact ownership and both protection values are required.",false); return; }
+   const ulong ticket=(ulong)StringToInteger(ticket_raw);
+   const long identifier=(long)StringToInteger(identifier_raw),magic=(long)StringToInteger(magic_raw);
+   const double sl=StringToDouble(sl_raw),tp=StringToDouble(tp_raw);
+   if(ticket==0 || identifier<=0 || magic!=InpMagicNumber || sl<=0.0 || tp<=0.0 || (side!="Buy" && side!="Sell")) { SendError("ModifyPositionProtection",request_id,"InvalidRequest","Protection ownership or price fields are invalid.",false); return; }
+   if(!PositionSelectByTicket(ticket)) { SendError("ModifyPositionProtection",request_id,"OwnershipRejected","The exact owned position ticket was not found.",false); return; }
+   const long actual_identifier=(long)PositionGetInteger(POSITION_IDENTIFIER),actual_magic=(long)PositionGetInteger(POSITION_MAGIC);
+   const string actual_symbol=PositionGetString(POSITION_SYMBOL);
+   const ENUM_POSITION_TYPE type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   const bool direction_agrees=(type==POSITION_TYPE_BUY && side=="Buy") || (type==POSITION_TYPE_SELL && side=="Sell");
+   if(actual_identifier!=identifier || actual_magic!=magic || actual_symbol!=symbol || !direction_agrees) { SendError("ModifyPositionProtection",request_id,"OwnershipRejected","The exact position failed native ownership checks.",false); return; }
+   MqlTick tick; if(!SymbolInfoTick(symbol,tick) || tick.bid<=0.0 || tick.ask<=0.0 || tick.ask<tick.bid) { SendError("ModifyPositionProtection",request_id,"SymbolUnavailable","No valid current quote is available.",true); return; }
+   long stops=0,freeze=0; double point=0.0;
+   if(!SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL,stops) || !SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL,freeze) || !SymbolInfoDouble(symbol,SYMBOL_POINT,point) || point<=0.0) { SendError("ModifyPositionProtection",request_id,"SymbolUnavailable","Native broker protection constraints are unavailable.",true); return; }
+   double tick_size=0.0;
+   if(!SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE,tick_size) || tick_size<=0.0) tick_size=point;
+   if(tick_size<=0.0) { SendError("ModifyPositionProtection",request_id,"SymbolUnavailable","The native broker price grid is unavailable.",true); return; }
+   const double grid_tolerance=tick_size/1000000.0;
+   const bool grid_valid=MathAbs(sl-MathRound(sl/tick_size)*tick_size)<=grid_tolerance && MathAbs(tp-MathRound(tp/tick_size)*tick_size)<=grid_tolerance;
+   if(!grid_valid) { SendError("ModifyPositionProtection",request_id,"InvalidProtection","Protection values are not aligned to the native broker price grid.",false); return; }
+   const double stop_distance=(double)stops*point,freeze_distance=(double)freeze*point;
+   const bool side_valid=type==POSITION_TYPE_BUY ? sl<tick.bid && tp>tick.ask : sl>tick.ask && tp<tick.bid;
+   const bool stops_valid=type==POSITION_TYPE_BUY ? tick.bid-sl>=stop_distance && tp-tick.ask>=stop_distance : sl-tick.ask>=stop_distance && tick.bid-tp>=stop_distance;
+   const bool freeze_valid=type==POSITION_TYPE_BUY ? tick.bid-sl>=freeze_distance && tp-tick.ask>=freeze_distance : sl-tick.ask>=freeze_distance && tick.bid-tp>=freeze_distance;
+   if(!side_valid) { SendError("ModifyPositionProtection",request_id,"InvalidProtection","Protection values are on the invalid side of the current executable quote.",false); return; }
+   if(!stops_valid) { SendError("ModifyPositionProtection",request_id,"StopsLevel","Protection values violate the broker stops level.",false); return; }
+   if(!freeze_valid) { SendError("ModifyPositionProtection",request_id,"FreezeLevel","Protection values violate the broker freeze level.",false); return; }
+   // Re-read exact native ownership and protection immediately before the write.
+   // This closes the race where another actor changed the position after the first
+   // ownership read: protection management is monotonic at the broker boundary.
+   if(!PositionSelectByTicket(ticket)) { SendError("ModifyPositionProtection",request_id,"OwnershipRejected","The exact owned position ticket was not found before modification.",false); return; }
+   const long native_identifier=(long)PositionGetInteger(POSITION_IDENTIFIER),native_magic=(long)PositionGetInteger(POSITION_MAGIC);
+   const string native_symbol=PositionGetString(POSITION_SYMBOL);
+   const ENUM_POSITION_TYPE native_type=(ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   const bool native_direction_agrees=(native_type==POSITION_TYPE_BUY && side=="Buy") || (native_type==POSITION_TYPE_SELL && side=="Sell");
+   if(native_identifier!=identifier || native_magic!=magic || native_symbol!=symbol || !native_direction_agrees) { SendError("ModifyPositionProtection",request_id,"OwnershipRejected","The exact position changed before modification.",false); return; }
+   const double current_sl=PositionGetDouble(POSITION_SL),current_tp=PositionGetDouble(POSITION_TP);
+   if(current_sl<=0.0 || current_tp<=0.0) { SendError("ModifyPositionProtection",request_id,"InvalidProtection","The exact native position no longer has both protections.",false); return; }
+   const bool monotonic_valid=native_type==POSITION_TYPE_BUY ? sl+grid_tolerance>=current_sl && tp+grid_tolerance>=current_tp : sl-grid_tolerance<=current_sl && tp-grid_tolerance<=current_tp;
+   if(!monotonic_valid) { SendError("ModifyPositionProtection",request_id,"Monotonicity","Protection modification would weaken the current native protection.",false); return; }
+   MqlTradeRequest request={}; MqlTradeCheckResult check={}; MqlTradeResult result={};
+   request.action=TRADE_ACTION_SLTP; request.position=ticket; request.symbol=symbol; request.magic=(ulong)magic; request.sl=sl; request.tp=tp;
+   if(!OrderCheck(request,check)) { MqlTradeResult failed={}; failed.retcode=check.retcode; failed.comment=check.comment; SendModifyProtectionResult(request_id,false,failed,ticket,identifier,symbol,magic,side); return; }
+   const bool sent=OrderSend(request,result); const bool accepted=sent && TradeAccepted(result.retcode);
+   SendModifyProtectionResult(request_id,accepted,result,ticket,identifier,symbol,magic,side);
+}
+
 // Native GetPosition ownership: exact ticket + identifier + magic + symbol + side.
 // The comment is returned only as a diagnostic and never validated.
 void SendExecutionPosition(const string request_id,const string payload)
@@ -475,7 +552,10 @@ void SendExecutionPosition(const string request_id,const string payload)
    const bool direction_agrees=(type==POSITION_TYPE_BUY && side=="Buy") || (type==POSITION_TYPE_SELL && side=="Sell");
    if(actual_identifier!=identifier || actual_magic!=magic || actual_symbol!=symbol || !direction_agrees) { SendError("GetPosition",request_id,"OwnershipRejected","The exact position ticket failed native ownership checks.",false); return; }
    const string actual_side=type==POSITION_TYPE_BUY ? "Buy" : "Sell";
-   const string result="{\"accepted\":true,\"isClosed\":false,\"positionTicket\":"+(string)ticket+",\"positionIdentifier\":"+(string)actual_identifier+",\"magicNumber\":"+(string)actual_magic+",\"brokerSymbol\":\""+JsonEscape(actual_symbol)+"\",\"side\":\""+actual_side+"\",\"volumeLots\":"+Number(PositionGetDouble(POSITION_VOLUME))+",\"openPrice\":"+Number(PositionGetDouble(POSITION_PRICE_OPEN))+",\"nativeComment\":\""+JsonEscape(PositionGetString(POSITION_COMMENT))+"\"}";
+   long digits=0,stops=0,freeze=0; double tick_size=0.0,point=0.0; MqlTick tick;
+   SymbolInfoInteger(actual_symbol,SYMBOL_DIGITS,digits); SymbolInfoInteger(actual_symbol,SYMBOL_TRADE_STOPS_LEVEL,stops); SymbolInfoInteger(actual_symbol,SYMBOL_TRADE_FREEZE_LEVEL,freeze); SymbolInfoDouble(actual_symbol,SYMBOL_TRADE_TICK_SIZE,tick_size); SymbolInfoDouble(actual_symbol,SYMBOL_POINT,point);
+   const bool quote_ok=SymbolInfoTick(actual_symbol,tick) && tick.bid>0.0 && tick.ask>0.0 && tick.ask>=tick.bid;
+   const string result="{\"accepted\":true,\"isClosed\":false,\"positionTicket\":"+(string)ticket+",\"positionIdentifier\":"+(string)actual_identifier+",\"magicNumber\":"+(string)actual_magic+",\"brokerSymbol\":\""+JsonEscape(actual_symbol)+"\",\"side\":\""+actual_side+"\",\"volumeLots\":"+Number(PositionGetDouble(POSITION_VOLUME))+",\"openPrice\":"+Number(PositionGetDouble(POSITION_PRICE_OPEN))+",\"nativeComment\":\""+JsonEscape(PositionGetString(POSITION_COMMENT))+"\",\"stopLoss\":"+OptionalNumber(PositionGetDouble(POSITION_SL))+",\"takeProfit\":"+OptionalNumber(PositionGetDouble(POSITION_TP))+",\"bid\":"+(quote_ok ? Number(tick.bid) : "null")+",\"ask\":"+(quote_ok ? Number(tick.ask) : "null")+",\"digits\":"+(string)digits+",\"tickSize\":"+OptionalNumber(tick_size)+",\"pointSize\":"+OptionalNumber(point)+",\"stopsLevelPoints\":"+(string)stops+",\"freezeLevelPoints\":"+(string)freeze+"}";
    SendResponse("GetPosition",request_id,result);
 }
 

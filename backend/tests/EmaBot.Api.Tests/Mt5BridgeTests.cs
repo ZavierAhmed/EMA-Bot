@@ -582,6 +582,33 @@ public sealed class MqlExecutionBridgeContractTests
         Assert.Contains("ResolveCurrentPositionTicket(position_id", source);
     }
 
+    [Fact]
+    public void V2_ModifyProtection_IsExactOwnedDemoOnlyAndPreservesBothProtections()
+    {
+        var source = File.ReadAllText(ResolveMt5Source("EmaBotExecutionBridgeV2.mq5"));
+        var dispatch = ExtractMethodBody(source, "void HandleRequest(");
+        var modify = ExtractMethodBody(source, "void HandleModifyPositionProtection(");
+        var result = ExtractMethodBody(source, "void SendModifyProtectionResult(");
+
+        Assert.Contains("if(operation==\"ModifyPositionProtection\")", dispatch);
+        Assert.Contains("DemoExecutionAllowed()", modify);
+        Assert.Contains("positionTicket", modify); Assert.Contains("positionIdentifier", modify);
+        Assert.Contains("magicNumber", modify); Assert.Contains("brokerSymbol", modify); Assert.Contains("side", modify);
+        Assert.Contains("POSITION_IDENTIFIER", modify); Assert.Contains("POSITION_MAGIC", modify); Assert.Contains("POSITION_SYMBOL", modify);
+        Assert.Contains("TRADE_ACTION_SLTP", modify); Assert.Contains("request.sl=sl; request.tp=tp", modify);
+        Assert.Contains("SYMBOL_TRADE_STOPS_LEVEL", modify); Assert.Contains("SYMBOL_TRADE_FREEZE_LEVEL", modify);
+        Assert.Contains("SYMBOL_TRADE_TICK_SIZE", modify); Assert.Contains("grid_valid", modify);
+        Assert.Contains("current_sl=PositionGetDouble(POSITION_SL)", modify); Assert.Contains("current_tp=PositionGetDouble(POSITION_TP)", modify);
+        Assert.Contains("monotonic_valid", modify);
+        Assert.True(modify.IndexOf("current_sl=PositionGetDouble(POSITION_SL)", StringComparison.Ordinal) < modify.IndexOf("OrderCheck(request,check)", StringComparison.Ordinal));
+        Assert.True(modify.IndexOf("grid_valid", StringComparison.Ordinal) < modify.IndexOf("OrderCheck(request,check)", StringComparison.Ordinal));
+        Assert.DoesNotContain("POSITION_COMMENT", modify);
+        Assert.Contains("if(!accepted)", result);
+        Assert.Contains("PositionSelectByTicket(position)", result);
+        Assert.Contains("actual_magic!=magic", result); Assert.Contains("actual_symbol!=symbol", result);
+        Assert.Contains("\\\"accepted\\\":true", result); Assert.Contains("\\\"stopLoss\\\":null", result);
+    }
+
     private static string ExtractMethodBody(string source, string signature)
     {
         var start = source.IndexOf(signature, StringComparison.Ordinal);
