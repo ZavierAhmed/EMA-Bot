@@ -276,9 +276,11 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         if (payload.IsPositionOpen && payload.PositionTicket is > 0)
         {
             execution.PositionTicket = payload.PositionTicket;
-            execution.State = execution.FilledVolumeLots < execution.VolumeLots ? DemoExecutionState.PartiallyFilled : DemoExecutionState.Open;
-            execution.ReconciliationNote = "Reconciled from the exact native entry deal with exactly one live native position match.";
-            await database.SaveChangesAsync(token); return execution;
+            // An entry deal only proves the entry.  Re-read its exact current native
+            // position before adopting Open so current broker SL/TP are evidence,
+            // including during restart-safe management recovery.
+            await database.SaveChangesAsync(token);
+            return await ReconcileFromExactPositionAsync(execution, payload.PositionTicket.Value, payload.PositionIdentifier.Value, token, payload.DealTicket);
         }
         // The entry deal is proven but no current position was proven open, so native
         // position history by the trusted identifier decides between Closed and
@@ -286,7 +288,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         return await ReconcilePositionHistoryAsync(execution, payload.PositionIdentifier!.Value, payload.DealTicket, token);
     }
 
-    private async Task<DemoExecution> ReconcileFromExactPositionAsync(DemoExecution execution, long positionTicket, long positionIdentifier, CancellationToken token)
+    private async Task<DemoExecution> ReconcileFromExactPositionAsync(DemoExecution execution, long positionTicket, long positionIdentifier, CancellationToken token, long? trustedEntryDealTicket = null)
     {
         var request = new Mt5ExecutionPositionRequest(positionTicket, positionIdentifier, execution.MagicNumber, execution.BrokerSymbol, execution.Side);
         var payload = (await bridge.SendAsync(Mt5ExecutionOperation.GetPosition, request, token)).DeserializePayload<Mt5ExecutionPositionPayload>();
@@ -307,7 +309,9 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             execution.State = execution.FilledVolumeLots < execution.VolumeLots ? DemoExecutionState.PartiallyFilled : DemoExecutionState.Open;
             await database.SaveChangesAsync(token); return execution;
         }
-        return await ReconcileFromHistoryAsync(execution, token);
+        return trustedEntryDealTicket is { } entryDealTicket
+            ? await ReconcilePositionHistoryAsync(execution, positionIdentifier, entryDealTicket, token)
+            : await ReconcileFromHistoryAsync(execution, token);
     }
 
     // Native position history by the exact trusted PositionIdentifier.  This is the
@@ -339,8 +343,9 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         {
             var exit = exits[^1];
             execution.ExitDealTicket = exit.DealTicket; execution.ClosedVolumeLots = closedVolume; execution.AverageClosePrice = WeightedAverage(exits);
+            var reasonConflicted = ApplyExactPositionHistoryExitReason(execution, exit);
             execution.BrokerClosedAtUtc = exit.ExecutedAtUtc; execution.ClosedAtUtc = exit.ExecutedAtUtc;
-            execution.State = DemoExecutionState.Closed; execution.ReconciliationSource = "NativePositionHistory"; execution.ReconciliationNote = "Exact native entry and identifier ownership proven; exit deals by exact PositionIdentifier conclusively balance the filled entry volume.";
+            execution.State = DemoExecutionState.Closed; execution.ReconciliationSource = "NativePositionHistory"; execution.ReconciliationNote = reasonConflicted ? "Exact native position history proved closure, but terminal exit-reason evidence is conflicted and unusable for automated strategy decisions." : "Exact native entry and identifier ownership proven; exit deals by exact PositionIdentifier conclusively balance the filled entry volume.";
             await database.SaveChangesAsync(token); return execution;
         }
         return await RequireReconciliationAsync(execution, "No current position exists and native position history could not conclusively establish full closure; the execution can never become Open on this path.", token);
@@ -372,7 +377,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         execution.ReconciledAtUtc = clock.GetUtcNow(); execution.ReconciliationSource = "BoundedHistory";
         if (exits.Length > 0 && closedVolume >= execution.FilledVolumeLots)
         {
-            var exit = exits[^1]; execution.ExitDealTicket = exit.DealTicket; execution.ClosedVolumeLots = closedVolume; execution.AverageClosePrice = WeightedAverage(exits); execution.BrokerClosedAtUtc = exit.ExecutedAtUtc; execution.ClosedAtUtc = exit.ExecutedAtUtc; execution.State = DemoExecutionState.Closed; execution.ReconciliationNote = "Bounded broker history conclusively matched owned entry and exit deals.";
+            var exit = exits[^1]; execution.ExitDealTicket = exit.DealTicket; execution.ClosedVolumeLots = closedVolume; execution.AverageClosePrice = WeightedAverage(exits); var reasonConflicted = ApplyBoundedHistoryExitReason(execution, exit); execution.BrokerClosedAtUtc = exit.ExecutedAtUtc; execution.ClosedAtUtc = exit.ExecutedAtUtc; execution.State = DemoExecutionState.Closed; execution.ReconciliationNote = reasonConflicted ? "Bounded broker history proved closure, but terminal exit-reason evidence is conflicted and unusable for automated strategy decisions." : "Bounded broker history conclusively matched owned entry and exit deals.";
         }
         else if (execution.FilledVolumeLots < execution.VolumeLots)
         {
@@ -386,6 +391,34 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         await database.SaveChangesAsync(token); return execution;
     }
     private static bool IsStrictMatch(DemoExecution execution, Mt5ExecutionHistoryEvidence item, DateTimeOffset from, DateTimeOffset to) => item.MagicNumber == execution.MagicNumber && DemoExecutionMarker.MatchesPersistedMarker(execution.CorrelationMarker, item.CorrelationMarker) && string.Equals(item.BrokerSymbol, execution.BrokerSymbol, StringComparison.Ordinal) && item.ExecutedAtUtc >= from.AddMinutes(-5) && item.ExecutedAtUtc <= to.AddMinutes(5) && (item.IsExit || string.Equals(item.Side, execution.Side, StringComparison.OrdinalIgnoreCase)) && item.ExecutedVolumeLots > 0m && item.ExecutedVolumeLots <= execution.VolumeLots;
+    // Exact PositionIdentifier history is anchored by a separately proven exact
+    // entry. Its selected exit may be manual and therefore carry another magic.
+    private static bool ApplyExactPositionHistoryExitReason(DemoExecution execution, Mt5PositionHistoryDeal exit) =>
+        ApplyNativeExitReason(execution, exit.DealTicket, exit.NativeReason);
+
+    // Bounded discovery is weaker: its deterministic match must retain the existing
+    // magic/marker/symbol ownership checks before its terminal exit can classify a reason.
+    private static bool ApplyBoundedHistoryExitReason(DemoExecution execution, Mt5ExecutionHistoryEvidence exit)
+    {
+        var oppositeSide = string.Equals(execution.Side, "Buy", StringComparison.OrdinalIgnoreCase) ? "Sell" : "Buy";
+        var strictExit = exit.DealTicket is > 0
+            && exit.MagicNumber == execution.MagicNumber
+            && DemoExecutionMarker.MatchesPersistedMarker(execution.CorrelationMarker, exit.CorrelationMarker)
+            && string.Equals(exit.BrokerSymbol, execution.BrokerSymbol, StringComparison.Ordinal)
+            && (string.Equals(exit.EntryType, "OutBy", StringComparison.OrdinalIgnoreCase) || string.Equals(exit.Side, oppositeSide, StringComparison.OrdinalIgnoreCase));
+        return strictExit && ApplyNativeExitReason(execution, exit.DealTicket, exit.NativeReason);
+    }
+
+    // A native reason is kept only from the terminal exit already selected by its
+    // caller. Missing evidence never erases a proven value; differing evidence marks
+    // the classification permanently unusable while closure can remain conclusive.
+    private static bool ApplyNativeExitReason(DemoExecution execution, long? exitDealTicket, string? nativeReason)
+    {
+        if (exitDealTicket is not > 0 || string.IsNullOrWhiteSpace(nativeReason)) return execution.NativeExitReasonConflicted;
+        if (execution.NativeExitReason is null) { execution.NativeExitReason = nativeReason; return execution.NativeExitReasonConflicted; }
+        if (!string.Equals(execution.NativeExitReason, nativeReason, StringComparison.Ordinal)) execution.NativeExitReasonConflicted = true;
+        return execution.NativeExitReasonConflicted;
+    }
     private static decimal? WeightedAverage(IEnumerable<Mt5ExecutionHistoryEvidence> values) { var rows = values.ToArray(); var total = rows.Sum(item => item.ExecutedVolumeLots); return total == 0m ? null : rows.Where(item => item.ExecutionPrice is not null).Sum(item => item.ExecutionPrice!.Value * item.ExecutedVolumeLots) / total; }
     private async Task<DemoExecution> Reject(DemoExecution item, string message, CancellationToken token, string? retcode = null) { item.State = DemoExecutionState.Rejected; item.BrokerMessage = message; item.BrokerRetcode = retcode; await database.SaveChangesAsync(token); return item; }
     private async Task<DemoExecution> RequireReconciliationAsync(DemoExecution item, string note, CancellationToken token) { item.State = DemoExecutionState.ReconciliationRequired; item.ReconciliationNote = note; await database.SaveChangesAsync(token); logger.LogWarning("Demo execution {ClientExecutionId} requires reconciliation: {Reason}", item.ClientExecutionId, note); return item; }

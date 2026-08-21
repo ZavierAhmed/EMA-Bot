@@ -69,15 +69,17 @@ public sealed class DemoStrategyCoordinator(
                     }
                     else Finish(intent, DemoStrategyIntentStatus.Expired, "The application restarted before this entry window completed; it will never be submitted late.");
                 }
-                // B2 deliberately does not recover autonomous management across a
-                // restart.  Existing native protection remains broker authoritative.
+                // Recovery always starts fail-closed.  The following exact read-only
+                // pass may reactivate a row, but Resume itself can never write a
+                // protection or send a close.
                 foreach (var management in await database.DemoStrategyPositionManagement.Where(item => item.DemoStrategySessionId == session.Id && item.State != DemoStrategyPositionManagementState.Closed).ToListAsync(token))
                 {
                     management.State = DemoStrategyPositionManagementState.SuspendedAfterRestart;
-                    management.LastReason = "SuspendedAfterRestart: E11.6B2 never resumes pre-interruption automated management.";
+                    management.LastReason = "SuspendedAfterRestart: exact read-only management recovery is required before any later live quote can manage this position.";
                     management.UpdatedAtUtc = DateTimeOffset.UtcNow;
                 }
                 await database.SaveChangesAsync(token);
+                await RecoverManagementAfterResumeAsync(database, session, scope.ServiceProvider.GetRequiredService<IDemoExecutionService>(), token);
             }
             // A successful start outlives its HTTP/request caller.  The request token is used
             // above for startup I/O only; session stop, host stop, and stream failure own this
@@ -431,6 +433,99 @@ public sealed class DemoStrategyCoordinator(
         await database.SaveChangesAsync(token);
         var result = await service.ModifyProtectionAsync(new ModifyDemoProtection(actionId, executionForManagement.ClientExecutionId, desiredStop, desiredTarget), token);
         ApplyProtectionOutcome(management, result, false); await database.SaveChangesAsync(token);
+    }
+
+    // Resume recovery is intentionally limited to the existing reconciliation APIs.
+    // It never reconstructs a baseline, replays downtime prices, or delegates a write.
+    private async Task RecoverManagementAfterResumeAsync(EmaBotDbContext database, DemoStrategySession session, IDemoExecutionService service, CancellationToken token)
+    {
+        var managementRows = await database.DemoStrategyPositionManagement
+            .Include(item => item.DemoStrategyIntent).Include(item => item.DemoExecution).Include(item => item.DemoStrategySessionSymbol)
+            .Where(item => item.DemoStrategySessionId == session.Id && item.State != DemoStrategyPositionManagementState.Closed)
+            .ToListAsync(token);
+        foreach (var management in managementRows)
+        {
+            if (!RecoveryOwnershipIsExact(management, session))
+            {
+                SuspendRecovery(management, "Resume recovery could not prove the durable session, symbol, intent, and execution linkage.");
+                continue;
+            }
+
+            var execution = await service.ReconcileAsync(management.DemoExecution!.ClientExecutionId, token);
+            if (execution?.State == DemoExecutionState.Closed)
+            {
+                management.State = DemoStrategyPositionManagementState.Closed;
+                management.OppositeCloseState = DemoStrategyOppositeCloseState.Closed;
+                management.LastReason = "Resume recovery exact reconciliation proved the linked broker position Closed.";
+                management.LastManagedAtUtc = DateTimeOffset.UtcNow;
+                management.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                continue;
+            }
+
+            var candidates = await database.DemoStrategyIntents.Include(item => item.DemoExecution)
+                .Where(item => item.DemoStrategySessionId == session.Id && item.DemoStrategySessionSymbolId == management.DemoStrategySessionSymbolId && item.DemoExecutionId != null
+                    && (item.DemoExecution!.State == DemoExecutionState.Open || item.DemoExecution.State == DemoExecutionState.PreflightPassed || item.DemoExecution.State == DemoExecutionState.Submitting || item.DemoExecution.State == DemoExecutionState.BrokerAccepted || item.DemoExecution.State == DemoExecutionState.PartiallyFilled || item.DemoExecution.State == DemoExecutionState.CloseRequested || item.DemoExecution.State == DemoExecutionState.ReconciliationRequired))
+                .ToListAsync(token);
+            if (candidates.Count != 1 || candidates[0].DemoExecutionId != management.DemoExecutionId)
+            {
+                SuspendRecovery(management, "Resume recovery found zero or multiple plausible current executions for the durable session symbol.");
+                continue;
+            }
+
+            if (execution?.State != DemoExecutionState.Open || execution.PositionTicket is not > 0 || execution.PositionIdentifier is not > 0 || execution.CurrentStopLoss is not > 0m || execution.CurrentTakeProfit is not > 0m)
+            {
+                SuspendRecovery(management, "Resume recovery could not prove an exact open native position with broker-derived SL and TP.");
+                continue;
+            }
+
+            if (management.PendingProtectionActionId is { } actionId)
+            {
+                var action = await service.ReconcileManagementActionAsync(actionId, token);
+                if (action?.State is DemoExecutionManagementActionState.Applied or DemoExecutionManagementActionState.Rejected)
+                    ApplyProtectionOutcome(management, action, true);
+                else
+                {
+                    management.State = DemoStrategyPositionManagementState.ProtectionReconciliationRequired;
+                    management.LastReason = "Resume recovery could not conclusively reconcile the persisted B1 protection action; no replacement action was created.";
+                    management.UpdatedAtUtc = DateTimeOffset.UtcNow;
+                    continue;
+                }
+            }
+
+            if (management.OppositeCloseState == DemoStrategyOppositeCloseState.Pending)
+            {
+                management.State = DemoStrategyPositionManagementState.ClosePending;
+                management.LastReason = "Resume recovery preserved the durable pending opposite-close directive; a later new executable quote may delegate it once.";
+            }
+            else if (management.OppositeCloseState is DemoStrategyOppositeCloseState.CloseRequested or DemoStrategyOppositeCloseState.ReconciliationRequired)
+            {
+                management.State = DemoStrategyPositionManagementState.CloseRequested;
+                management.LastReason = "Resume recovery preserved a previously attempted opposite close; reconciliation only, never automatic resubmission.";
+            }
+            else
+            {
+                management.State = DemoStrategyPositionManagementState.Active;
+                management.LastReason = "Resume recovery proved exact native ownership and broker-derived protection; durable management progress was preserved.";
+            }
+            management.UpdatedAtUtc = DateTimeOffset.UtcNow;
+        }
+        await database.SaveChangesAsync(token);
+    }
+
+    private static bool RecoveryOwnershipIsExact(DemoStrategyPositionManagement management, DemoStrategySession session) =>
+        management.DemoStrategySessionId == session.Id
+        && management.DemoStrategySessionSymbol?.DemoStrategySessionId == session.Id
+        && management.DemoStrategyIntent?.DemoStrategySessionId == session.Id
+        && management.DemoStrategyIntent?.DemoStrategySessionSymbolId == management.DemoStrategySessionSymbolId
+        && management.DemoStrategyIntent?.DemoExecutionId == management.DemoExecutionId
+        && management.DemoExecution is not null
+        && string.Equals(management.DemoExecution.BrokerSymbol, management.DemoStrategySessionSymbol.BrokerSymbol, StringComparison.Ordinal);
+
+    private static void SuspendRecovery(DemoStrategyPositionManagement management, string reason)
+    {
+        management.State = DemoStrategyPositionManagementState.SuspendedAfterRestart;
+        management.LastReason = reason;
+        management.UpdatedAtUtc = DateTimeOffset.UtcNow;
     }
 
     private static void ApplyProtectionOutcome(DemoStrategyPositionManagement management, DemoExecutionManagementAction action, bool reconciled)

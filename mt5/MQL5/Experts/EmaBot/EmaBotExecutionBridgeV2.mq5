@@ -585,11 +585,12 @@ void SendExactDeal(const string request_id,const string payload)
    const double actual_price=HistoryDealGetDouble((ulong)exact_deal,DEAL_PRICE);
    const long actual_time_msc=(long)HistoryDealGetInteger((ulong)exact_deal,DEAL_TIME_MSC);
    const string actual_comment=HistoryDealGetString((ulong)exact_deal,DEAL_COMMENT);
+   const string native_reason=DealReasonName((ENUM_DEAL_REASON)HistoryDealGetInteger((ulong)exact_deal,DEAL_REASON));
    const bool is_entry=entry==DEAL_ENTRY_IN;
    const bool is_exit=entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY || entry==DEAL_ENTRY_INOUT;
    if(actual_magic!=magic || actual_symbol!=symbol || deal_side!=side || !is_entry || volume<=0.0 || volume>expected_volume || position_id<=0 || (expected_order>0 && actual_order!=expected_order)) { SendError("GetExactDeal",request_id,"OwnershipRejected","The exact deal failed native ownership checks.",false); return; }
    const ulong current_ticket=ResolveCurrentPositionTicket(position_id,actual_symbol,actual_magic,deal_side);
-   const string payload_result="{\"dealTicket\":"+(string)exact_deal+",\"orderTicket\":"+(actual_order>0 ? (string)actual_order : "null")+",\"positionIdentifier\":"+(string)position_id+",\"positionTicket\":"+(current_ticket>0 ? (string)current_ticket : "null")+",\"brokerSymbol\":\""+JsonEscape(actual_symbol)+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)actual_magic+",\"executedVolumeLots\":"+Number(volume)+",\"executionPrice\":"+Number(actual_price)+",\"executedAtUtc\":\""+IsoUtcMilliseconds(actual_time_msc)+"\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"isPositionOpen\":"+(current_ticket>0 ? "true" : "false")+",\"nativeComment\":\""+JsonEscape(actual_comment)+"\"}";
+   const string payload_result="{\"dealTicket\":"+(string)exact_deal+",\"orderTicket\":"+(actual_order>0 ? (string)actual_order : "null")+",\"positionIdentifier\":"+(string)position_id+",\"positionTicket\":"+(current_ticket>0 ? (string)current_ticket : "null")+",\"brokerSymbol\":\""+JsonEscape(actual_symbol)+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)actual_magic+",\"executedVolumeLots\":"+Number(volume)+",\"executionPrice\":"+Number(actual_price)+",\"executedAtUtc\":\""+IsoUtcMilliseconds(actual_time_msc)+"\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"isPositionOpen\":"+(current_ticket>0 ? "true" : "false")+",\"nativeComment\":\""+JsonEscape(actual_comment)+"\",\"nativeReason\":\""+JsonEscape(native_reason)+"\"}";
    SendResponse("GetExactDeal",request_id,payload_result);
 }
 
@@ -629,7 +630,7 @@ void SendPositionHistory(const string request_id,const string payload)
       const bool is_exit=entry==DEAL_ENTRY_OUT || entry==DEAL_ENTRY_OUT_BY || entry==DEAL_ENTRY_INOUT;
       const string deal_side=type==DEAL_TYPE_BUY ? "Buy" : "Sell";
       if(matched++>0) items+=",";
-      items+="{\"dealTicket\":"+(string)deal+",\"orderTicket\":"+(string)HistoryDealGetInteger(deal,DEAL_ORDER)+",\"positionIdentifier\":"+(string)identifier+",\"brokerSymbol\":\""+JsonEscape(HistoryDealGetString(deal,DEAL_SYMBOL))+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)HistoryDealGetInteger(deal,DEAL_MAGIC)+",\"executedVolumeLots\":"+Number(HistoryDealGetDouble(deal,DEAL_VOLUME))+",\"executionPrice\":"+Number(HistoryDealGetDouble(deal,DEAL_PRICE))+",\"executedAtUtc\":\""+IsoUtcMilliseconds((long)HistoryDealGetInteger(deal,DEAL_TIME_MSC))+"\",\"entryType\":\""+DealEntryName(entry)+"\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"nativeComment\":\""+JsonEscape(HistoryDealGetString(deal,DEAL_COMMENT))+"\"}";
+      items+="{\"dealTicket\":"+(string)deal+",\"orderTicket\":"+(string)HistoryDealGetInteger(deal,DEAL_ORDER)+",\"positionIdentifier\":"+(string)identifier+",\"brokerSymbol\":\""+JsonEscape(HistoryDealGetString(deal,DEAL_SYMBOL))+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)HistoryDealGetInteger(deal,DEAL_MAGIC)+",\"executedVolumeLots\":"+Number(HistoryDealGetDouble(deal,DEAL_VOLUME))+",\"executionPrice\":"+Number(HistoryDealGetDouble(deal,DEAL_PRICE))+",\"executedAtUtc\":\""+IsoUtcMilliseconds((long)HistoryDealGetInteger(deal,DEAL_TIME_MSC))+"\",\"entryType\":\""+DealEntryName(entry)+"\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"nativeComment\":\""+JsonEscape(HistoryDealGetString(deal,DEAL_COMMENT))+"\",\"nativeReason\":\""+JsonEscape(DealReasonName((ENUM_DEAL_REASON)HistoryDealGetInteger(deal,DEAL_REASON)))+"\"}";
    }
    items+="]";
    SendResponse("GetPositionHistory",request_id,"{\"positionIdentifier\":"+(string)identifier+",\"deals\":"+items+"}");
@@ -653,13 +654,31 @@ void SendExecutionHistory(const string request_id,const string payload)
       const double volume=HistoryDealGetDouble(deal,DEAL_VOLUME); if(volume<=0.0 || volume>expected_volume+0.00000001) continue;
        const long position_id=(long)HistoryDealGetInteger(deal,DEAL_POSITION_ID); const long order_ticket=(long)HistoryDealGetInteger(deal,DEAL_ORDER); const long time_msc=(long)HistoryDealGetInteger(deal,DEAL_TIME_MSC); const ulong position_ticket=ResolveCurrentPositionTicket(position_id,symbol,magic,deal_side);
       if(matched++>0) items+=",";
-       items+="{\"orderTicket\":"+(order_ticket>0 ? (string)order_ticket : "null")+",\"dealTicket\":"+(string)deal+",\"positionIdentifier\":"+(position_id>0 ? (string)position_id : "null")+",\"positionTicket\":"+(position_ticket>0 ? (string)position_ticket : "null")+",\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)magic+",\"correlationMarker\":\""+JsonEscape(marker)+"\",\"executedVolumeLots\":"+Number(volume)+",\"executionPrice\":"+Number(HistoryDealGetDouble(deal,DEAL_PRICE))+",\"executedAtUtc\":\""+IsoUtcMilliseconds(time_msc)+"\",\"entryType\":\""+DealEntryName(entry)+"\",\"dealState\":\"HistoryDeal\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"isPartial\":"+(entry==DEAL_ENTRY_INOUT ? "true" : "false")+"}";
+       items+="{\"orderTicket\":"+(order_ticket>0 ? (string)order_ticket : "null")+",\"dealTicket\":"+(string)deal+",\"positionIdentifier\":"+(position_id>0 ? (string)position_id : "null")+",\"positionTicket\":"+(position_ticket>0 ? (string)position_ticket : "null")+",\"brokerSymbol\":\""+JsonEscape(symbol)+"\",\"side\":\""+deal_side+"\",\"magicNumber\":"+(string)magic+",\"correlationMarker\":\""+JsonEscape(marker)+"\",\"executedVolumeLots\":"+Number(volume)+",\"executionPrice\":"+Number(HistoryDealGetDouble(deal,DEAL_PRICE))+",\"executedAtUtc\":\""+IsoUtcMilliseconds(time_msc)+"\",\"entryType\":\""+DealEntryName(entry)+"\",\"dealState\":\"HistoryDeal\",\"isEntry\":"+(is_entry ? "true" : "false")+",\"isExit\":"+(is_exit ? "true" : "false")+",\"isPartial\":"+(entry==DEAL_ENTRY_INOUT ? "true" : "false")+",\"nativeReason\":\""+JsonEscape(DealReasonName((ENUM_DEAL_REASON)HistoryDealGetInteger(deal,DEAL_REASON)))+"\"}";
    }
    items+="]"; SendResponse("GetExecutionHistory",request_id,"{\"evidence\":"+items+"}");
 }
 string DealEntryName(const ENUM_DEAL_ENTRY entry)
 {
    if(entry==DEAL_ENTRY_IN) return "Entry"; if(entry==DEAL_ENTRY_OUT) return "Exit"; if(entry==DEAL_ENTRY_INOUT) return "InOut"; if(entry==DEAL_ENTRY_OUT_BY) return "OutBy"; return "Unknown";
+}
+
+// DEAL_REASON is native historical evidence.  It never derives from a comment,
+// expected request, or inferred price relationship.
+string DealReasonName(const ENUM_DEAL_REASON reason)
+{
+   if(reason==DEAL_REASON_CLIENT) return "Client";
+   if(reason==DEAL_REASON_MOBILE) return "Mobile";
+   if(reason==DEAL_REASON_WEB) return "Web";
+   if(reason==DEAL_REASON_EXPERT) return "Expert";
+   if(reason==DEAL_REASON_SL) return "SL";
+   if(reason==DEAL_REASON_TP) return "TP";
+   if(reason==DEAL_REASON_SO) return "StopOut";
+   if(reason==DEAL_REASON_ROLLOVER) return "Rollover";
+   if(reason==DEAL_REASON_VMARGIN) return "VMargin";
+   if(reason==DEAL_REASON_SPLIT) return "Split";
+   if(reason==DEAL_REASON_CORPORATE_ACTION) return "CorporateAction";
+   return "Unknown:"+(string)(long)reason;
 }
 
 void SendHeartbeat()

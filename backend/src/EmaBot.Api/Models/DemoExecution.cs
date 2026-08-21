@@ -33,6 +33,11 @@ public sealed class DemoExecution
     public long? DealTicket { get; set; }
     public long? EntryDealTicket { get; set; }
     public long? ExitDealTicket { get; set; }
+    // Native DEAL_REASON from the exact exit deal only. It is evidence, not intent.
+    public string? NativeExitReason { get; set; }
+    // Once exact terminal evidence conflicts, the audit value remains but can never
+    // become automatic strategy evidence without manual review.
+    public bool NativeExitReasonConflicted { get; set; }
     public decimal? FilledVolumeLots { get; set; }
     public decimal? AverageFillPrice { get; set; }
     public decimal? ClosedVolumeLots { get; set; }

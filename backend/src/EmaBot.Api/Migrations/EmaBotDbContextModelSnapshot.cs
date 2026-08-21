@@ -596,6 +596,8 @@ namespace EmaBot.Api.Migrations
                     b.Property<string>("ExpectedServer").IsRequired().HasMaxLength(256).HasColumnType("varchar(256)");
                     b.Property<decimal?>("FilledVolumeLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
                     b.Property<long>("MagicNumber").HasColumnType("bigint");
+                    b.Property<string>("NativeExitReason").HasMaxLength(64).HasColumnType("varchar(64)");
+                    b.Property<bool>("NativeExitReasonConflicted").HasDefaultValue(false).HasColumnType("tinyint(1)");
                     b.Property<long?>("OrderTicket").HasColumnType("bigint");
                     b.Property<long?>("PositionIdentifier").HasColumnType("bigint");
                     b.Property<long?>("PositionTicket").HasColumnType("bigint");
@@ -717,8 +719,10 @@ namespace EmaBot.Api.Migrations
                     b.Property<DateTimeOffset?>("InterruptedAtUtc").HasColumnType("datetime(6)");
                     b.Property<string>("Interval").IsRequired().HasMaxLength(8).HasColumnType("varchar(8)");
                     b.Property<decimal>("MaxStopDistancePercent").HasPrecision(8, 4).HasColumnType("decimal(8,4)");
+                    b.Property<int>("MaxReentryAgeBars").HasDefaultValue(6).HasColumnType("int");
                     b.Property<decimal>("MinEmaGapPercent").HasPrecision(8, 4).HasColumnType("decimal(8,4)");
                     b.Property<decimal>("RiskReward").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<bool>("SameTrendReentryEnabled").HasColumnType("tinyint(1)");
                     b.Property<DateTimeOffset?>("StartedAtUtc").HasColumnType("datetime(6)");
                     b.Property<string>("Status").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
                     b.Property<DateTimeOffset?>("StoppedAtUtc").HasColumnType("datetime(6)");

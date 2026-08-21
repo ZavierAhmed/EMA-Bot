@@ -561,17 +561,147 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
     }
 
     [Fact]
-    public async Task ResumeSuspendsPreInterruptionManagementAndNewExecutionCanBeManaged()
+    public async Task ResumeReconcilesAlreadyClosedManagementWithoutWriteAndNewExecutionCanBeManaged()
     {
         await using var harness = new Harness(enabled: true, managementEnabled: true);
         var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted, trailingStopEnabled: true); await harness.AddPendingOppositeManagementAsync(session, "Buy");
         await harness.SetOnlyExecutionStateAsync(DemoExecutionState.Closed);
         await harness.Coordinator.StartSessionAsync(session.Id, true, default);
-        Assert.Equal(DemoStrategyPositionManagementState.SuspendedAfterRestart, (await harness.ManagementAsync())!.State);
+        Assert.Equal(DemoStrategyPositionManagementState.Closed, (await harness.ManagementAsync())!.State);
 
         await harness.AddLinkedExecutionAsync(session, DemoExecutionState.Open, "Buy");
         await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 105m, 105.2m));
         Assert.Equal(2, await harness.ManagementRowsAsync()); Assert.Single(harness.Recorder.Modifications);
+    }
+
+    [Fact]
+    public async Task ResumeExactOpenManagement_PreservesDurableProgressAndIssuesOnlyReadsUntilNewBid()
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted, trailingStopEnabled: true);
+        await harness.AddPendingOppositeManagementAsync(session, "Buy");
+        await harness.UpdateManagementAsync(item =>
+        {
+            item.State = DemoStrategyPositionManagementState.Active;
+            item.OppositeCloseState = DemoStrategyOppositeCloseState.None;
+            item.OriginalEntryPrice = 100m; item.OriginalTakeProfit = 110m;
+            item.BestFavorablePrice = 105m; item.BestFavorableProgressPercent = 50m;
+            item.HighestAttemptedLockPercent = 20m; item.HighestAppliedLockPercent = 20m;
+            item.TakeProfitExtensionState = DemoStrategyTargetExtensionState.NotAttempted;
+        });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+
+        var recovered = (await harness.ManagementAsync())!;
+        Assert.Equal(DemoStrategyPositionManagementState.Active, recovered.State);
+        Assert.Equal(100m, recovered.OriginalEntryPrice); Assert.Equal(110m, recovered.OriginalTakeProfit);
+        Assert.Equal(50m, recovered.BestFavorableProgressPercent); Assert.Equal(20m, recovered.HighestAppliedLockPercent);
+        Assert.Equal(1, harness.Recorder.ReconcileCalls); Assert.Empty(harness.Recorder.Modifications); Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Empty(harness.Recorder.Submissions);
+
+        // A downtime candle, including its high/low/close, is not a management quote.
+        await harness.DeliverAsync(new MarketBarUpdate("XAUUSDm", "3m", harness.Start.AddHours(1), harness.Start.AddHours(1), harness.Start.AddHours(1).AddMinutes(3).AddMilliseconds(-1), 109m, 120m, 80m, 119m, 1m, true));
+        Assert.Equal(50m, (await harness.ManagementAsync())!.BestFavorableProgressPercent);
+        Assert.Empty(harness.Recorder.Modifications);
+
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(2), 106m, 106.2m));
+        Assert.Single(harness.Recorder.Modifications);
+    }
+
+    [Theory]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task ResumeRecovery_IsReadOnlyWhenEitherManagementGateIsOff(bool enabled, bool managementEnabled)
+    {
+        await using var harness = new Harness(enabled: enabled, managementEnabled: managementEnabled);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted, trailingStopEnabled: true);
+        await harness.AddPendingOppositeManagementAsync(session, "Buy");
+        await harness.UpdateManagementAsync(item => { item.State = DemoStrategyPositionManagementState.Active; item.OppositeCloseState = DemoStrategyOppositeCloseState.None; });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 107m, 107.2m));
+
+        Assert.Equal(DemoStrategyPositionManagementState.Active, (await harness.ManagementAsync())!.State);
+        Assert.Empty(harness.Recorder.Modifications); Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Empty(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task ResumePendingProtection_ReconcilesSameActionWithoutReplacementOrWrite()
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true) { Recorder = { ReconciledActionState = DemoExecutionManagementActionState.Applied } };
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted, trailingStopEnabled: true);
+        await harness.AddPendingOppositeManagementAsync(session, "Buy");
+        var actionId = Guid.NewGuid();
+        await harness.UpdateManagementAsync(item => { item.State = DemoStrategyPositionManagementState.ProtectionReconciliationRequired; item.OppositeCloseState = DemoStrategyOppositeCloseState.None; item.PendingProtectionActionId = actionId; item.PendingProtectionLockPercent = 40m; });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+
+        var management = (await harness.ManagementAsync())!;
+        Assert.Equal(DemoStrategyPositionManagementState.Active, management.State); Assert.Null(management.PendingProtectionActionId); Assert.Equal(40m, management.HighestAppliedLockPercent);
+        Assert.Empty(harness.Recorder.Modifications); Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Empty(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task ResumeAmbiguousPendingProtection_RetainsSameActionAndRemainsFailClosed()
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted, trailingStopEnabled: true);
+        await harness.AddPendingOppositeManagementAsync(session, "Buy");
+        var actionId = Guid.NewGuid();
+        await harness.UpdateManagementAsync(item => { item.OppositeCloseState = DemoStrategyOppositeCloseState.None; item.PendingProtectionActionId = actionId; item.PendingProtectionLockPercent = 40m; });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 107m, 107.2m));
+
+        var management = (await harness.ManagementAsync())!;
+        Assert.Equal(DemoStrategyPositionManagementState.ProtectionReconciliationRequired, management.State); Assert.Equal(actionId, management.PendingProtectionActionId);
+        Assert.Empty(harness.Recorder.Modifications); Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Empty(harness.Recorder.Submissions);
+    }
+
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ResumeWithoutBothPositiveNativeIdentifiers_RemainsSuspendedWithoutWrite(bool missingTicket, bool missingIdentifier)
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted);
+        await harness.AddPendingOppositeManagementAsync(session, "Buy");
+        await harness.UpdateManagementAsync(item => { item.State = DemoStrategyPositionManagementState.Active; item.OppositeCloseState = DemoStrategyOppositeCloseState.None; });
+        await harness.UpdateExecutionAsync(item => { if (missingTicket) item.PositionTicket = null; if (missingIdentifier) item.PositionIdentifier = null; });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+
+        Assert.Equal(DemoStrategyPositionManagementState.SuspendedAfterRestart, (await harness.ManagementAsync())!.State);
+        Assert.Empty(harness.Recorder.Modifications); Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Empty(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task ResumePendingOppositeClose_PreservesDirectiveAndFirstNewShortAskClosesOnce()
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true) { Recorder = { CloseResultState = DemoExecutionState.Closed } };
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted);
+        await harness.AddPendingOppositeManagementAsync(session, "Sell");
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+        Assert.Equal(DemoStrategyOppositeCloseState.Pending, (await harness.ManagementAsync())!.OppositeCloseState); Assert.Equal(0, harness.Recorder.CloseCalls);
+
+        await harness.DeliverAsync(harness.Live(harness.Start.AddHours(1), null, 93m));
+        Assert.Equal(1, harness.Recorder.CloseCalls); Assert.Equal(DemoStrategyPositionManagementState.Closed, (await harness.ManagementAsync())!.State);
+    }
+
+    [Theory]
+    [InlineData(DemoStrategyOppositeCloseState.CloseRequested)]
+    [InlineData(DemoStrategyOppositeCloseState.ReconciliationRequired)]
+    public async Task ResumePreviouslyAttemptedOppositeClose_ReconcilesOnlyAndNeverResubmits(DemoStrategyOppositeCloseState closeState)
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted);
+        await harness.AddPendingOppositeManagementAsync(session, "Buy");
+        await harness.UpdateManagementAsync(item => { item.State = DemoStrategyPositionManagementState.CloseRequested; item.OppositeCloseState = closeState; });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 107m, 107.2m));
+
+        Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Empty(harness.Recorder.Modifications); Assert.Equal(DemoStrategyPositionManagementState.CloseRequested, (await harness.ManagementAsync())!.State);
     }
 
     [Fact]
@@ -676,6 +806,8 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         public async Task<DemoStrategyPositionManagement?> ManagementAsync() { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategyPositionManagement.AsNoTracking().SingleOrDefaultAsync(); }
         public async Task<int> ManagementRowsAsync() { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategyPositionManagement.CountAsync(); }
         public async Task SetOnlyExecutionStateAsync(DemoExecutionState state) { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var execution = await db.DemoExecutions.SingleAsync(); execution.State = state; await db.SaveChangesAsync(); }
+        public async Task UpdateExecutionAsync(Action<DemoExecution> update) { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var execution = await db.DemoExecutions.SingleAsync(); update(execution); await db.SaveChangesAsync(); }
+        public async Task UpdateManagementAsync(Action<DemoStrategyPositionManagement> update) { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var management = await db.DemoStrategyPositionManagement.SingleAsync(); update(management); await db.SaveChangesAsync(); }
         public async ValueTask DisposeAsync() { await Coordinator.StopAsync(default); await provider.DisposeAsync(); }
 
         private static IReadOnlyList<Candle> Series(DateTimeOffset start, bool shortSetup)

@@ -82,6 +82,21 @@ public sealed class DemoStrategyManagementPlannerTests
     }
 
     [Fact]
+    public void SessionCreationSnapshotsReentrySettingsWithoutImplementingReentry()
+    {
+        var settings = new TradingSettings { SameTrendReentryEnabled = true, MaxReentryAgeBars = 5 };
+        var session = new DemoStrategySession { Interval = "3m", SameTrendReentryEnabled = settings.SameTrendReentryEnabled, MaxReentryAgeBars = settings.MaxReentryAgeBars };
+        settings.SameTrendReentryEnabled = false; settings.MaxReentryAgeBars = 9;
+
+        Assert.True(session.SameTrendReentryEnabled); Assert.Equal(5, session.MaxReentryAgeBars);
+        var source = FindSource("backend", "src", "EmaBot.Api", "Controllers", "DemoStrategySessionsController.cs");
+        Assert.Contains("SameTrendReentryEnabled = settings.SameTrendReentryEnabled", source);
+        Assert.Contains("MaxReentryAgeBars = settings.MaxReentryAgeBars", source);
+        Assert.Contains("session.SameTrendReentryEnabled", source);
+        Assert.Contains("session.MaxReentryAgeBars", source);
+    }
+
+    [Fact]
     public void CurrentMigrationSnapshot_ConstructsAndMapsManagementSessionRelationship()
     {
         var snapshotType = typeof(EmaBotDbContext).Assembly.GetType("EmaBot.Api.Migrations.EmaBotDbContextModelSnapshot", throwOnError: true)!;
@@ -89,6 +104,11 @@ public sealed class DemoStrategyManagementPlannerTests
         var management = snapshot.Model.FindEntityType(typeof(DemoStrategyPositionManagement));
 
         Assert.NotNull(management);
+        Assert.NotNull(snapshot.Model.FindEntityType(typeof(DemoExecution))!.FindProperty(nameof(DemoExecution.NativeExitReason)));
+        Assert.NotNull(snapshot.Model.FindEntityType(typeof(DemoExecution))!.FindProperty(nameof(DemoExecution.NativeExitReasonConflicted)));
+        var session = snapshot.Model.FindEntityType(typeof(DemoStrategySession));
+        Assert.NotNull(session!.FindProperty(nameof(DemoStrategySession.SameTrendReentryEnabled)));
+        Assert.NotNull(session.FindProperty(nameof(DemoStrategySession.MaxReentryAgeBars)));
         var relationship = Assert.Single(management!.GetForeignKeys(), item => item.PrincipalEntityType.Name == typeof(DemoStrategySession).FullName);
         Assert.Equal(nameof(DemoStrategyPositionManagement.DemoStrategySessionId), Assert.Single(relationship.Properties).Name);
         Assert.Equal(DeleteBehavior.Cascade, relationship.DeleteBehavior);

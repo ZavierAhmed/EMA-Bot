@@ -583,6 +583,26 @@ public sealed class MqlExecutionBridgeContractTests
     }
 
     [Fact]
+    public void V2_NativeExitReason_IsAdditiveExactHistoryEvidence()
+    {
+        var source = File.ReadAllText(ResolveMt5Source("EmaBotExecutionBridgeV2.mq5"));
+        var exactDeal = ExtractMethodBody(source, "void SendExactDeal(");
+        var positionHistory = ExtractMethodBody(source, "void SendPositionHistory(");
+        var history = ExtractMethodBody(source, "void SendExecutionHistory(");
+        var reason = ExtractMethodBody(source, "string DealReasonName(");
+
+        Assert.Equal(2, Mt5ExecutionBridgeProtocol.ProtocolVersion);
+        Assert.Contains("DEAL_REASON", exactDeal); Assert.Contains("nativeReason", exactDeal);
+        Assert.Contains("DEAL_REASON", positionHistory); Assert.Contains("nativeReason", positionHistory);
+        Assert.Contains("DEAL_REASON", history); Assert.Contains("nativeReason", history);
+        Assert.Contains("DEAL_REASON_SL", reason); Assert.Contains("\"SL\"", reason);
+        Assert.Contains("DEAL_REASON_TP", reason); Assert.Contains("\"TP\"", reason);
+        Assert.Contains("DEAL_REASON_EXPERT", reason); Assert.Contains("\"Expert\"", reason);
+        Assert.Contains("DEAL_REASON_SO", reason); Assert.Contains("\"StopOut\"", reason);
+        Assert.Contains("Unknown:", reason);
+    }
+
+    [Fact]
     public void V2_ModifyProtection_IsExactOwnedDemoOnlyAndPreservesBothProtections()
     {
         var source = File.ReadAllText(ResolveMt5Source("EmaBotExecutionBridgeV2.mq5"));

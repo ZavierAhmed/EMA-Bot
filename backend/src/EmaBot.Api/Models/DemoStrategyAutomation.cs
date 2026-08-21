@@ -31,6 +31,8 @@ public sealed class DemoStrategySession
     public bool UseAdaptiveInitialStop { get; set; }
     public bool TrailingStopEnabled { get; set; }
     public bool ExitOnOppositeCrossover { get; set; }
+    public bool SameTrendReentryEnabled { get; set; }
+    public int MaxReentryAgeBars { get; set; } = 6;
     public List<DemoStrategySessionSymbol> Symbols { get; set; } = [];
     public List<DemoStrategyIntent> Intents { get; set; } = [];
     public List<DemoStrategyPositionManagement> PositionManagement { get; set; } = [];

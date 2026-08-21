@@ -236,7 +236,7 @@ public sealed class DemoExecutionFoundationTests
     [Fact]
     public async Task ExactEntryReconciliation_PrefersEntryDealTicketOverLegacyDealTicket()
     {
-        await using var database = NewDatabase(); var bridge = new FakeBridge { ExactDeal = new(200, 100, 300, 301, "XAUUSD", "Buy", 20260817, 0.01m, 2000m, DateTimeOffset.UtcNow.AddMinutes(-1), true, false, true) }; var execution = Uncertain(); execution.EntryDealTicket = 200; execution.DealTicket = 999; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+        await using var database = NewDatabase(); var bridge = new FakeBridge { ExactDeal = new(200, 100, 300, 301, "XAUUSD", "Buy", 20260817, 0.01m, 2000m, DateTimeOffset.UtcNow.AddMinutes(-1), true, false, true), PositionResult = new(true, false, 301, 300, 20260817, "XAUUSD", "Buy", 0.01m, 2000m, StopLoss: 1990m, TakeProfit: 2010m) }; var execution = Uncertain(); execution.EntryDealTicket = 200; execution.DealTicket = 999; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
 
         var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
 
@@ -308,6 +308,133 @@ public sealed class DemoExecutionFoundationTests
         var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
 
         Assert.Equal(DemoExecutionState.ReconciliationRequired, result!.State); Assert.Equal(0, bridge.SubmitCount);
+    }
+
+    [Fact]
+    public async Task FirstExactExitReason_PersistsWithoutConflict()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), "SL")] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("SL", result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted); Assert.Equal(201, result.ExitDealTicket);
+    }
+
+    [Fact]
+    public async Task LaterNullReason_DoesNotEraseProvenReasonOrCreateConflict()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.NativeExitReason = "SL";
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), null)] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("SL", result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Fact]
+    public async Task LaterSameExactReason_DoesNotCreateConflict()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.NativeExitReason = "SL";
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), "SL")] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("SL", result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Fact]
+    public async Task LaterDifferentExactReason_PreservesAuditValueButMarksConflict()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.NativeExitReason = "SL";
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), "TP")] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("SL", result.NativeExitReason); Assert.True(result.NativeExitReasonConflicted); Assert.Contains("closure", result.ReconciliationNote, StringComparison.OrdinalIgnoreCase); Assert.Contains("unusable", result.ReconciliationNote, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ConflictFlag_IsSticky()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.NativeExitReason = "SL"; execution.NativeExitReasonConflicted = true;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), null)] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("SL", result.NativeExitReason); Assert.True(result.NativeExitReasonConflicted);
+    }
+
+    [Theory]
+    [InlineData("Client")]
+    [InlineData("Mobile")]
+    [InlineData("Web")]
+    public async Task ExactPositionHistory_ManualExitWithDifferentMagic_PersistsNativeReason(string nativeReason)
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), nativeReason) with { MagicNumber = 0 }] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal(nativeReason, result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Theory]
+    [InlineData("WrongPosition")]
+    [InlineData("WrongSymbol")]
+    public async Task ExactPositionHistory_MismatchedOwnershipNeverSetsReason(string mismatch)
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100;
+        var exit = PositionHistoryExit(entryAt.AddSeconds(1), "Client");
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), mismatch == "WrongPosition" ? exit with { PositionIdentifier = 999 } : exit with { BrokerSymbol = "OTHERm" }] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.NotEqual(DemoExecutionState.Closed, result!.State); Assert.Null(result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Fact]
+    public async Task BoundedHistory_StillRequiresItsExistingStrictOwnership()
+    {
+        await using var database = NewDatabase(); var execution = Uncertain(); execution.EntryDealTicket = null; execution.DealTicket = null;
+        var at = DateTimeOffset.UtcNow.AddSeconds(-10);
+        var bridge = new FakeBridge { History = [Evidence(100, 200, 300), Evidence(101, 201, 300) with { Side = "Sell", MagicNumber = 0, ExecutedAtUtc = at.AddSeconds(1), EntryType = "Exit", IsEntry = false, IsExit = true, NativeReason = "Client" }] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.NotEqual("Client", result!.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Fact]
+    public async Task EntryDealNativeReason_NeverBecomesExitReason()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt) with { NativeReason = "SL" }, PositionHistory = [PositionHistoryEntry(entryAt)] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.NotEqual(DemoExecutionState.Closed, result!.State); Assert.Null(result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Theory]
+    [InlineData("SL", false, true)]
+    [InlineData("SL", true, false)]
+    [InlineData("TP", false, false)]
+    [InlineData("Client", false, false)]
+    [InlineData(null, false, false)]
+    public void ReentryEvidence_RequiresUnconflictedStopLossOnly(string? nativeReason, bool conflicted, bool expected)
+    {
+        var execution = Uncertain(); execution.NativeExitReason = nativeReason; execution.NativeExitReasonConflicted = conflicted;
+        Assert.Equal(expected, DemoStrategyReentryEvidence.IsEligibleExitReason(execution));
     }
 
     [Fact]
@@ -404,6 +531,7 @@ public sealed class DemoExecutionFoundationTests
     private static Mt5ExecutionHistoryEvidence Evidence(long order, long deal, long position) => new(order, deal, position, position, "XAUUSD", "Buy", 20260817, "EMA-fixed", 0.01m, 2000m, DateTimeOffset.UtcNow.AddSeconds(-10), "Entry", "HistoryDeal", true, false, false);
     private static Mt5ExactDealPayload ExactDeal(DateTimeOffset at) => new(200, 100, 300, null, "XAUUSD", "Buy", 20260817, 0.01m, 2000m, at, true, false, false);
     private static Mt5PositionHistoryDeal PositionHistoryEntry(DateTimeOffset at) => new(200, 100, 300, "XAUUSD", "Buy", 20260817, 0.01m, 2000m, at, "Entry", true, false);
+    private static Mt5PositionHistoryDeal PositionHistoryExit(DateTimeOffset at, string? nativeReason) => new(201, 101, 300, "XAUUSD", "Sell", 20260817, 0.01m, 2001m, at, "Exit", false, true, NativeReason: nativeReason);
     private static Mt5ExactDealPayload InvalidExactDeal(string violation)
     {
         var valid = ExactDeal(DateTimeOffset.UtcNow.AddMinutes(-1)) with { PositionTicket = 301, IsPositionOpen = true };

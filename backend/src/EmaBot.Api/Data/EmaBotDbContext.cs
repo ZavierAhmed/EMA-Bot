@@ -185,6 +185,8 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(item => item.AverageClosePrice).HasPrecision(18, 8);
             entity.Property(item => item.BrokerRetcode).HasMaxLength(64);
             entity.Property(item => item.BrokerMessage).HasMaxLength(1024);
+            entity.Property(item => item.NativeExitReason).HasMaxLength(64);
+            entity.Property(item => item.NativeExitReasonConflicted).HasDefaultValue(false);
             entity.Property(item => item.ReconciliationNote).HasMaxLength(1024);
             entity.Property(item => item.ReconciliationSource).HasMaxLength(64);
             entity.HasIndex(item => item.ClientExecutionId).IsUnique();
@@ -219,6 +221,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(session => session.RiskReward).HasPrecision(18, 8);
             entity.Property(session => session.MinEmaGapPercent).HasPrecision(8, 4);
             entity.Property(session => session.MaxStopDistancePercent).HasPrecision(8, 4);
+            entity.Property(session => session.MaxReentryAgeBars).HasDefaultValue(6);
             entity.HasIndex(session => session.Status);
             entity.HasMany(session => session.Symbols).WithOne(symbol => symbol.DemoStrategySession!).HasForeignKey(symbol => symbol.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
             entity.HasMany(session => session.Intents).WithOne(intent => intent.DemoStrategySession!).HasForeignKey(intent => intent.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
