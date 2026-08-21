@@ -232,6 +232,10 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(symbol => symbol.Symbol).HasMaxLength(32);
             entity.Property(symbol => symbol.BrokerSymbol).HasMaxLength(64).UseCollation("utf8mb4_bin");
             entity.HasIndex(symbol => new { symbol.DemoStrategySessionId, symbol.Symbol }).IsUnique();
+            entity.Property(symbol => symbol.TrendRegimeDirection).HasConversion<string>().HasMaxLength(8);
+            entity.Property(symbol => symbol.ReentryReason).HasMaxLength(1024);
+            entity.HasIndex(symbol => symbol.ReentrySourceDemoExecutionId);
+            entity.HasOne(symbol => symbol.ReentrySourceDemoExecution).WithMany().HasForeignKey(symbol => symbol.ReentrySourceDemoExecutionId).OnDelete(DeleteBehavior.Restrict);
             entity.HasMany(symbol => symbol.Intents).WithOne(intent => intent.DemoStrategySessionSymbol!).HasForeignKey(intent => intent.DemoStrategySessionSymbolId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<DemoStrategyIntent>(entity =>
@@ -250,10 +254,12 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(intent => intent.IntendedTakeProfit).HasPrecision(18, 8);
             entity.Property(intent => intent.IntendedVolumeLots).HasPrecision(18, 8);
             entity.Property(intent => intent.Reason).HasMaxLength(1024);
+            entity.HasIndex(intent => intent.ReentrySourceDemoExecutionId).IsUnique();
             entity.HasIndex(intent => intent.ClientExecutionId).IsUnique();
             entity.HasIndex(intent => new { intent.DemoStrategySessionId, intent.DemoStrategySessionSymbolId, intent.SignalTimeUtc, intent.Direction }).IsUnique();
             entity.HasIndex(intent => new { intent.DemoStrategySessionSymbolId, intent.Status });
             entity.HasOne(intent => intent.DemoExecution).WithMany().HasForeignKey(intent => intent.DemoExecutionId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(intent => intent.ReentrySourceDemoExecution).WithMany().HasForeignKey(intent => intent.ReentrySourceDemoExecutionId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<DemoStrategyPositionManagement>(entity =>
         {

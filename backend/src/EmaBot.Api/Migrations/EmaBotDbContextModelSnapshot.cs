@@ -650,15 +650,17 @@ namespace EmaBot.Api.Migrations
             modelBuilder.Entity("EmaBot.Api.Models.DemoStrategyIntent", b =>
                 {
                     b.HasOne("EmaBot.Api.Models.DemoExecution", "DemoExecution").WithMany().HasForeignKey("DemoExecutionId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("EmaBot.Api.Models.DemoExecution", "ReentrySourceDemoExecution").WithMany().HasForeignKey("ReentrySourceDemoExecutionId").OnDelete(DeleteBehavior.Restrict);
                     b.HasOne("EmaBot.Api.Models.DemoStrategySession", "DemoStrategySession").WithMany("Intents").HasForeignKey("DemoStrategySessionId").OnDelete(DeleteBehavior.Cascade).IsRequired();
                     b.HasOne("EmaBot.Api.Models.DemoStrategySessionSymbol", "DemoStrategySessionSymbol").WithMany("Intents").HasForeignKey("DemoStrategySessionSymbolId").OnDelete(DeleteBehavior.Cascade).IsRequired();
-                    b.Navigation("DemoExecution"); b.Navigation("DemoStrategySession"); b.Navigation("DemoStrategySessionSymbol");
+                    b.Navigation("DemoExecution"); b.Navigation("ReentrySourceDemoExecution"); b.Navigation("DemoStrategySession"); b.Navigation("DemoStrategySessionSymbol");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySessionSymbol", b =>
                 {
+                    b.HasOne("EmaBot.Api.Models.DemoExecution", "ReentrySourceDemoExecution").WithMany().HasForeignKey("ReentrySourceDemoExecutionId").OnDelete(DeleteBehavior.Restrict);
                     b.HasOne("EmaBot.Api.Models.DemoStrategySession", "DemoStrategySession").WithMany("Symbols").HasForeignKey("DemoStrategySessionId").OnDelete(DeleteBehavior.Cascade).IsRequired();
-                    b.Navigation("DemoStrategySession");
+                    b.Navigation("ReentrySourceDemoExecution"); b.Navigation("DemoStrategySession");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.DemoStrategyPositionManagement", b =>
@@ -684,7 +686,10 @@ namespace EmaBot.Api.Migrations
                     b.Property<DateTimeOffset>("ExpectedEntryOpenUtc").HasColumnType("datetime(6)");
                     b.Property<decimal>("IntendedVolumeLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
                     b.Property<decimal?>("IntendedTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<bool>("IsReentry").HasColumnType("tinyint(1)");
                     b.Property<string>("Reason").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<int?>("ReentryAgeBars").HasColumnType("int");
+                    b.Property<int?>("ReentrySourceDemoExecutionId").HasColumnType("int");
                     b.Property<decimal?>("SignalEma100").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
                     b.Property<decimal?>("SignalEma15").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
                     b.Property<decimal?>("SignalEma9").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
@@ -698,8 +703,9 @@ namespace EmaBot.Api.Migrations
                     b.Property<string>("StopSourceType").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
                     b.Property<DateTimeOffset>("StopSourceTimeUtc").HasColumnType("datetime(6)");
                     b.Property<DateTimeOffset?>("SubmittedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset?>("TrendRegimeCrossoverTimeUtc").HasColumnType("datetime(6)");
                     b.Property<DateTimeOffset?>("UpdatedAtUtc").HasColumnType("datetime(6)");
-                    b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("DemoExecutionId"); b.HasIndex("DemoStrategySessionSymbolId", "Status"); b.HasIndex("DemoStrategySessionId", "DemoStrategySessionSymbolId", "SignalTimeUtc", "Direction").IsUnique(); b.ToTable("DemoStrategyIntents");
+                    b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("DemoExecutionId"); b.HasIndex("DemoStrategySessionSymbolId", "Status"); b.HasIndex("DemoStrategySessionId", "DemoStrategySessionSymbolId", "SignalTimeUtc", "Direction").IsUnique(); b.HasIndex("ReentrySourceDemoExecutionId").IsUnique(); b.ToTable("DemoStrategyIntents");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.DemoExecution", b =>
@@ -775,8 +781,15 @@ namespace EmaBot.Api.Migrations
                     b.Property<int>("DemoStrategySessionId").HasColumnType("int");
                     b.Property<DateTimeOffset?>("LastMarketEventUtc").HasColumnType("datetime(6)");
                     b.Property<DateTimeOffset?>("LastProcessedClosedCandleUtc").HasColumnType("datetime(6)");
+                    b.Property<bool>("ReentryConsumed").HasColumnType("tinyint(1)");
+                    b.Property<bool>("ReentryEligible").HasColumnType("tinyint(1)");
+                    b.Property<DateTimeOffset?>("ReentryEligibleAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("ReentryReason").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<int?>("ReentrySourceDemoExecutionId").HasColumnType("int");
                     b.Property<string>("Symbol").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
-                    b.HasKey("Id"); b.HasIndex("DemoStrategySessionId", "Symbol").IsUnique(); b.ToTable("DemoStrategySessionSymbols");
+                    b.Property<DateTimeOffset?>("TrendRegimeCrossoverTimeUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("TrendRegimeDirection").HasMaxLength(8).HasColumnType("varchar(8)");
+                    b.HasKey("Id"); b.HasIndex("DemoStrategySessionId", "Symbol").IsUnique(); b.HasIndex("ReentrySourceDemoExecutionId"); b.ToTable("DemoStrategySessionSymbols");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.PaperDecisionEvent", b =>

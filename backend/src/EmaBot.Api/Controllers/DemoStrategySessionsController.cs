@@ -4,6 +4,7 @@ using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Mt5Bridge;
 using EmaBot.Api.Services;
+using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -12,8 +13,8 @@ using Microsoft.Extensions.Options;
 namespace EmaBot.Api.Controllers;
 
 public sealed record CreateDemoStrategySessionRequest(string Interval, IReadOnlyList<string> Symbols);
-public sealed record DemoStrategyIntentResponse(int Id, string Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, DateTimeOffset ExpectedEntryOpenUtc, decimal StructuralStopLoss, decimal? IntendedTakeProfit, decimal IntendedVolumeLots, Guid ClientExecutionId, string Status, int? DemoExecutionId, string? Reason);
-public sealed record DemoStrategySymbolResponse(string Symbol, string BrokerSymbol, DateTimeOffset? LastProcessedClosedCandleUtc, DateTimeOffset? LastMarketEventUtc, IReadOnlyList<DemoStrategyIntentResponse> RecentIntents);
+public sealed record DemoStrategyIntentResponse(int Id, string Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, DateTimeOffset ExpectedEntryOpenUtc, decimal StructuralStopLoss, decimal? IntendedTakeProfit, decimal IntendedVolumeLots, Guid ClientExecutionId, string Status, int? DemoExecutionId, bool IsReentry, int? ReentrySourceDemoExecutionId, DateTimeOffset? TrendRegimeCrossoverTimeUtc, int? ReentryAgeBars, string? Reason);
+public sealed record DemoStrategySymbolResponse(string Symbol, string BrokerSymbol, DateTimeOffset? LastProcessedClosedCandleUtc, DateTimeOffset? LastMarketEventUtc, SignalDirection? TrendRegimeDirection, DateTimeOffset? TrendRegimeCrossoverTimeUtc, bool ReentryEligible, bool ReentryConsumed, int? ReentrySourceDemoExecutionId, DateTimeOffset? ReentryEligibleAtUtc, string? ReentryReason, IReadOnlyList<DemoStrategyIntentResponse> RecentIntents);
 public sealed record DemoStrategySessionResponse(int Id, string Interval, string Status, DateTimeOffset CreatedAtUtc, DateTimeOffset? StartedAtUtc, DateTimeOffset? StoppedAtUtc, DateTimeOffset? InterruptedAtUtc, string? FailureMessage, bool AutomationEnabled, bool ManagementEnabled, bool TrailingStopEnabled, bool ExitOnOppositeCrossover, bool SameTrendReentryEnabled, int MaxReentryAgeBars, decimal FixedLots, decimal RiskReward, IReadOnlyList<DemoStrategySymbolResponse> Symbols, DemoStrategyRuntimeSnapshot? Runtime);
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/demo-strategy-sessions")]
@@ -91,6 +92,6 @@ public sealed class DemoStrategySessionsController(EmaBotDbContext database, Tra
     {
         var runtime = coordinator.GetRuntimeSnapshot(); if (runtime?.SessionId != session.Id) runtime = null;
         return new(session.Id, session.Interval, session.Status.ToString(), session.CreatedAtUtc, session.StartedAtUtc, session.StoppedAtUtc, session.InterruptedAtUtc, session.FailureMessage, automation.Value.Enabled, automation.Value.ManagementEnabled, session.TrailingStopEnabled, session.ExitOnOppositeCrossover, session.SameTrendReentryEnabled, session.MaxReentryAgeBars, session.FixedLots, session.RiskReward,
-            session.Symbols.Select(symbol => new DemoStrategySymbolResponse(symbol.Symbol, symbol.BrokerSymbol, symbol.LastProcessedClosedCandleUtc, symbol.LastMarketEventUtc, symbol.Intents.OrderByDescending(item => item.CreatedAtUtc).Take(25).Select(intent => new DemoStrategyIntentResponse(intent.Id, intent.Direction.ToString(), intent.CrossoverTimeUtc, intent.SignalTimeUtc, intent.ExpectedEntryOpenUtc, intent.StructuralStopLoss, intent.IntendedTakeProfit, intent.IntendedVolumeLots, intent.ClientExecutionId, intent.Status.ToString(), intent.DemoExecutionId, intent.Reason)).ToArray())).ToArray(), runtime);
+            session.Symbols.Select(symbol => new DemoStrategySymbolResponse(symbol.Symbol, symbol.BrokerSymbol, symbol.LastProcessedClosedCandleUtc, symbol.LastMarketEventUtc, symbol.TrendRegimeDirection, symbol.TrendRegimeCrossoverTimeUtc, symbol.ReentryEligible, symbol.ReentryConsumed, symbol.ReentrySourceDemoExecutionId, symbol.ReentryEligibleAtUtc, symbol.ReentryReason, symbol.Intents.OrderByDescending(item => item.CreatedAtUtc).Take(25).Select(intent => new DemoStrategyIntentResponse(intent.Id, intent.Direction.ToString(), intent.CrossoverTimeUtc, intent.SignalTimeUtc, intent.ExpectedEntryOpenUtc, intent.StructuralStopLoss, intent.IntendedTakeProfit, intent.IntendedVolumeLots, intent.ClientExecutionId, intent.Status.ToString(), intent.DemoExecutionId, intent.IsReentry, intent.ReentrySourceDemoExecutionId, intent.TrendRegimeCrossoverTimeUtc, intent.ReentryAgeBars, intent.Reason)).ToArray())).ToArray(), runtime);
     }
 }

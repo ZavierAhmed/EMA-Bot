@@ -85,6 +85,14 @@ public sealed class DemoStrategySessionSymbol
     public required string BrokerSymbol { get; set; }
     public DateTimeOffset? LastProcessedClosedCandleUtc { get; set; }
     public DateTimeOffset? LastMarketEventUtc { get; set; }
+    public SignalDirection? TrendRegimeDirection { get; set; }
+    public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
+    public bool ReentryEligible { get; set; }
+    public bool ReentryConsumed { get; set; }
+    public int? ReentrySourceDemoExecutionId { get; set; }
+    public DateTimeOffset? ReentryEligibleAtUtc { get; set; }
+    public string? ReentryReason { get; set; }
+    [JsonIgnore] public DemoExecution? ReentrySourceDemoExecution { get; set; }
     public List<DemoStrategyIntent> Intents { get; set; } = [];
 }
 
@@ -119,4 +127,9 @@ public sealed class DemoStrategyIntent
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? UpdatedAtUtc { get; set; }
     public DateTimeOffset? SubmittedAtUtc { get; set; }
+    public bool IsReentry { get; set; }
+    public int? ReentrySourceDemoExecutionId { get; set; }
+    public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
+    public int? ReentryAgeBars { get; set; }
+    [JsonIgnore] public DemoExecution? ReentrySourceDemoExecution { get; set; }
 }

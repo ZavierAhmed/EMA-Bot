@@ -80,6 +80,7 @@ public sealed class DemoStrategyCoordinator(
                 }
                 await database.SaveChangesAsync(token);
                 await RecoverManagementAfterResumeAsync(database, session, scope.ServiceProvider.GetRequiredService<IDemoExecutionService>(), token);
+                await SynchronizeReentryEligibilityAfterResumeAsync(database, session, scope.ServiceProvider.GetRequiredService<IDemoExecutionService>(), token);
             }
             // A successful start outlives its HTTP/request caller.  The request token is used
             // above for startup I/O only; session stop, host stop, and stream failure own this
@@ -186,16 +187,182 @@ public sealed class DemoStrategyCoordinator(
             runtime.Candles.Add(new Candle(update.OpenTimeUtc, update.CloseTimeUtc, update.Open, update.High, update.Low, update.Close, update.Volume, true));
             if (runtime.Candles.Count > 200) runtime.Candles.RemoveRange(0, runtime.Candles.Count - 200);
             await PersistSymbolAsync(runtime, token);
+            await SynchronizeReentryEligibilityAsync(state, runtime, token); // read-only reconciliation/classification only.
             // A gap reconstructs historical indicator state only.  The close that exposed the
             // gap is never allowed to manufacture an entry against a successor quote.
             if (streamGap) return;
             if (!state.AcceptSignals) return;
             var evaluation = strategy.Evaluate(runtime.Candles, Settings(state.Session));
-            foreach (var signal in evaluation.Events.Where(item => item.Time == update.CloseTimeUtc && (item.Status == SignalStatus.LongSignal || item.Status == SignalStatus.ShortSignal)))
+            var events = evaluation.Events.Where(item => item.Time == update.CloseTimeUtc).ToArray();
+            await ObserveTrendRegimeAsync(state, runtime, events, token);
+            var normalSignals = events.Where(item => item.Status is SignalStatus.LongSignal or SignalStatus.ShortSignal).ToArray();
+            foreach (var signal in normalSignals)
                 await CreateIntentAsync(state, runtime, evaluation.Events, signal, token);
+            if (normalSignals.Length == 0) await TryScheduleReentryAsync(state, runtime, evaluation.Snapshots.LastOrDefault(), token);
             logger.LogInformation("Demo strategy closed candle processed for {SessionId}/{Symbol} at {CloseTime}.", state.Session.Id, runtime.Symbol.BrokerSymbol, update.CloseTimeUtc);
         }
         finally { gate.Release(); }
+    }
+
+    private async Task SynchronizeReentryEligibilityAfterResumeAsync(EmaBotDbContext database, DemoStrategySession session, IDemoExecutionService service, CancellationToken token)
+    {
+        foreach (var symbol in session.Symbols)
+            await SynchronizeReentryEligibilityAsync(database, session, symbol.Id, symbol.BrokerSymbol, service, token, skipManagementRecoveredExecutions: true);
+    }
+
+    // This is reconciliation/classification only.  It is called before any closed-candle
+    // continuation evaluation and during Resume, so it can never manufacture an entry.
+    private async Task SynchronizeReentryEligibilityAsync(RuntimeSession state, RuntimeSymbol runtime, CancellationToken token)
+    {
+        await using var scope = scopeFactory.CreateAsyncScope();
+        await SynchronizeReentryEligibilityAsync(scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(), state.Session, runtime.Symbol.Id, runtime.Symbol.BrokerSymbol, scope.ServiceProvider.GetRequiredService<IDemoExecutionService>(), token);
+    }
+
+    private static async Task SynchronizeReentryEligibilityAsync(EmaBotDbContext database, DemoStrategySession session, int symbolId, string brokerSymbol, IDemoExecutionService service, CancellationToken token, bool reconcileUnresolved = true, bool skipManagementRecoveredExecutions = false)
+    {
+        var symbol = await database.DemoStrategySessionSymbols.SingleAsync(item => item.Id == symbolId && item.DemoStrategySessionId == session.Id, token);
+        var managementRecoveredExecutionIds = skipManagementRecoveredExecutions
+            ? await database.DemoStrategyPositionManagement.Where(item => item.DemoStrategySessionId == session.Id && item.DemoStrategySessionSymbolId == symbolId).Select(item => item.DemoExecutionId).ToArrayAsync(token)
+            : [];
+        // Phase 1: reconcile every currently unresolved linked execution.  Do not
+        // classify while this loop runs: reconciliation can establish a later close.
+        var intents = await database.DemoStrategyIntents.Include(item => item.DemoExecution)
+            .Where(item => item.DemoStrategySessionId == session.Id && item.DemoStrategySessionSymbolId == symbolId && item.DemoExecutionId != null)
+            .ToListAsync(token);
+        foreach (var intent in intents)
+        {
+            var execution = intent.DemoExecution!;
+            if (reconcileUnresolved && !managementRecoveredExecutionIds.Contains(execution.Id) && execution.State is (DemoExecutionState.PreflightPassed or DemoExecutionState.Submitting or DemoExecutionState.BrokerAccepted or DemoExecutionState.PartiallyFilled or DemoExecutionState.Open or DemoExecutionState.CloseRequested or DemoExecutionState.ReconciliationRequired))
+                execution = await service.ReconcileAsync(execution.ClientExecutionId, token) ?? execution;
+        }
+        await database.SaveChangesAsync(token);
+
+        // Phase 2: requery after reconciliation and classify one broker-authoritative
+        // terminal row only.  Null close times are deliberately not orderable sources.
+        var latest = await database.DemoStrategyIntents.Include(item => item.DemoExecution)
+            .Where(item => item.DemoStrategySessionId == session.Id && item.DemoStrategySessionSymbolId == symbolId
+                && item.DemoExecutionId != null && item.DemoExecution!.State == DemoExecutionState.Closed
+                && item.DemoExecution.ClosedAtUtc != null)
+            .OrderByDescending(item => item.DemoExecution!.ClosedAtUtc).ThenByDescending(item => item.DemoExecutionId)
+            .FirstOrDefaultAsync(token);
+        if (latest?.DemoExecution is not { } terminal) return;
+        await ClassifyTerminalReentrySourceAsync(database, session, symbol, latest, terminal, brokerSymbol, token);
+        await database.SaveChangesAsync(token);
+    }
+
+    private static async Task ClassifyTerminalReentrySourceAsync(EmaBotDbContext database, DemoStrategySession session, DemoStrategySessionSymbol symbol, DemoStrategyIntent intent, DemoExecution execution, string brokerSymbol, CancellationToken token)
+    {
+        // Reconciliation may be repeated. A consumed/ineligible source is never re-armed;
+        // an eligible source is revalidated so later B3A evidence conflict revokes it.
+        var exactOwnedSource = IsExactOwnedReentrySource(session, symbol, intent, execution, brokerSymbol);
+        var eligible = exactOwnedSource && !intent.IsReentry && session.SameTrendReentryEnabled && DemoStrategyReentryEvidence.IsEligibleExitReason(execution);
+        if (symbol.ReentrySourceDemoExecutionId == execution.Id)
+        {
+            if (symbol.ReentryEligible && !eligible)
+            {
+                symbol.ReentryEligible = false;
+                symbol.ReentryReason = "The previously eligible exact source no longer has unconflicted native SL evidence and exact native ownership.";
+            }
+            return;
+        }
+
+        symbol.ReentrySourceDemoExecutionId = execution.Id;
+        var attempted = await database.DemoStrategyIntents.AnyAsync(item => item.ReentrySourceDemoExecutionId == execution.Id, token);
+        symbol.ReentryEligible = eligible && !attempted;
+        symbol.ReentryConsumed = attempted;
+        symbol.ReentryEligibleAtUtc = symbol.ReentryEligible ? DateTimeOffset.UtcNow : null;
+        symbol.ReentryReason = eligible
+            ? attempted ? "A durable re-entry intent already exists for this exact source; its one attempt remains consumed." : "Exact unconflicted native SL closure made this first-generation automated source eligible for one same-trend continuation."
+            : intent.IsReentry ? "The terminal source was itself a re-entry; a second continuation is prohibited."
+            : !exactOwnedSource ? "Terminal execution did not satisfy exact current-session automated source ownership requirements."
+            : !session.SameTrendReentryEnabled ? "The immutable session re-entry snapshot is disabled."
+            : "The terminal native exit reason is not an unconflicted SL.";
+        if (eligible)
+        {
+            symbol.TrendRegimeDirection = intent.Direction;
+            symbol.TrendRegimeCrossoverTimeUtc = intent.TrendRegimeCrossoverTimeUtc ?? intent.CrossoverTimeUtc;
+        }
+    }
+
+    private static bool IsExactOwnedReentrySource(DemoStrategySession session, DemoStrategySessionSymbol symbol, DemoStrategyIntent intent, DemoExecution execution, string brokerSymbol) =>
+        execution.State == DemoExecutionState.Closed
+        && intent.DemoExecutionId == execution.Id
+        && intent.DemoStrategySessionId == session.Id
+        && intent.DemoStrategySessionSymbolId == symbol.Id
+        && string.Equals(execution.BrokerSymbol, brokerSymbol, StringComparison.Ordinal)
+        && execution.AverageFillPrice is > 0m
+        && execution.RequestedStopLoss is > 0m
+        && execution.RequestedTakeProfit is > 0m
+        && execution.EntryDealTicket is > 0
+        && execution.ExitDealTicket is > 0
+        && execution.PositionIdentifier is > 0;
+
+    private async Task ObserveTrendRegimeAsync(RuntimeSession state, RuntimeSymbol runtime, IReadOnlyList<StrategyEvent> events, CancellationToken token)
+    {
+        var crossovers = events.Where(item => item.Status is SignalStatus.BullishCrossover or SignalStatus.BearishCrossover).ToArray();
+        if (crossovers.Length == 0) return;
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var symbol = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategySessionSymbols.SingleAsync(item => item.Id == runtime.Symbol.Id && item.DemoStrategySessionId == state.Session.Id, token);
+        var crossover = crossovers[^1];
+        symbol.TrendRegimeDirection = crossover.Direction;
+        symbol.TrendRegimeCrossoverTimeUtc = crossover.Time;
+        symbol.ReentryEligible = false;
+        symbol.ReentryConsumed = false;
+        symbol.ReentryEligibleAtUtc = null;
+        symbol.ReentryReason = "A new canonical crossover began a new trend regime and invalidated prior continuation eligibility.";
+        await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().SaveChangesAsync(token);
+    }
+
+    private async Task TryScheduleReentryAsync(RuntimeSession state, RuntimeSymbol runtime, IndicatorSnapshot? snapshot, CancellationToken token)
+    {
+        if (snapshot is null) return;
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var service = scope.ServiceProvider.GetRequiredService<IDemoExecutionService>();
+        var symbol = await database.DemoStrategySessionSymbols.SingleAsync(item => item.Id == runtime.Symbol.Id && item.DemoStrategySessionId == state.Session.Id, token);
+        if (!state.Session.SameTrendReentryEnabled || !symbol.ReentryEligible || symbol.ReentryConsumed || symbol.ReentrySourceDemoExecutionId is not { } sourceId || symbol.TrendRegimeDirection is not { } direction || symbol.TrendRegimeCrossoverTimeUtc is not { } regimeTime) return;
+        if (state.Session.MaxReentryAgeBars < 0)
+        {
+            symbol.ReentryEligible = false; symbol.ReentryReason = "The immutable MaxReentryAgeBars snapshot is negative; re-entry failed closed.";
+            await database.SaveChangesAsync(token); return;
+        }
+        var source = await LoadEligibleReentrySourceAsync(database, state, runtime, sourceId, token);
+        if (source is null)
+        {
+            symbol.ReentryEligible = false; symbol.ReentryReason = "The exact re-entry source no longer has usable closed SL evidence.";
+            await database.SaveChangesAsync(token); return;
+        }
+        var unresolved = await ReconcileOpenExecutionsAndFindUnresolvedAsync(database, runtime.Symbol.BrokerSymbol, service, token);
+        if (unresolved is not null) return;
+        if (await database.DemoStrategyIntents.AnyAsync(item => item.DemoStrategySessionSymbolId == runtime.Symbol.Id && (item.Status == DemoStrategyIntentStatus.Created || item.Status == DemoStrategyIntentStatus.WaitingForEntryWindow || item.Status == DemoStrategyIntentStatus.Submitting), token)) return;
+        if (!DemoStrategyReentryRules.IsContinuation(snapshot, direction, Settings(state.Session))) return;
+        var ageBars = DemoStrategyReentryRules.AgeBars(runtime.Candles, regimeTime, snapshot.Time);
+        if (ageBars > state.Session.MaxReentryAgeBars)
+        {
+            symbol.ReentryEligible = false; symbol.ReentryReason = $"Re-entry eligibility expired at {ageBars} bars; immutable maximum is {state.Session.MaxReentryAgeBars}.";
+            await database.SaveChangesAsync(token); return;
+        }
+        var index = runtime.Candles.FindIndex(candle => candle.CloseTimeUtc == snapshot.Time);
+        if (index < 1) return;
+        var stop = InitialStopSelector.Select(runtime.Candles, index, index, snapshot, direction, Settings(state.Session));
+        symbol.ReentryConsumed = true; symbol.ReentryEligible = false; symbol.ReentryReason = "Re-entry eligibility was consumed by one durable continuation intent.";
+        database.DemoStrategyIntents.Add(new DemoStrategyIntent
+        {
+            DemoStrategySessionId = state.Session.Id, DemoStrategySessionSymbolId = runtime.Symbol.Id, Direction = direction,
+            CrossoverTimeUtc = regimeTime, TrendRegimeCrossoverTimeUtc = regimeTime, SignalTimeUtc = snapshot.Time, ExpectedEntryOpenUtc = snapshot.Time.AddMilliseconds(1),
+            SignalOpen = snapshot.Open, SignalClose = snapshot.Close, SignalEma9 = snapshot.Ema9, SignalEma15 = snapshot.Ema15, SignalEma100 = snapshot.Ema100, SignalGapPercent = snapshot.GapPercent, SignalGapState = snapshot.GapState,
+            StructuralStopLoss = stop.Price, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, IntendedVolumeLots = state.Session.FixedLots,
+            ClientExecutionId = Guid.NewGuid(), Status = DemoStrategyIntentStatus.WaitingForEntryWindow, IsReentry = true, ReentrySourceDemoExecutionId = sourceId, ReentryAgeBars = ageBars,
+            Reason = "Exact unconflicted native SL continuation re-entry scheduled for the exact next bar.", CreatedAtUtc = DateTimeOffset.UtcNow
+        });
+        await database.SaveChangesAsync(token); // consumption and idempotent intent are durable before any possible entry window.
+    }
+
+    private static async Task<DemoStrategyIntent?> LoadEligibleReentrySourceAsync(EmaBotDbContext database, RuntimeSession state, RuntimeSymbol runtime, int sourceId, CancellationToken token)
+    {
+        var source = await database.DemoStrategyIntents.Include(item => item.DemoExecution).SingleOrDefaultAsync(item => item.DemoStrategySessionId == state.Session.Id && item.DemoStrategySessionSymbolId == runtime.Symbol.Id && item.DemoExecutionId == sourceId, token);
+        if (source?.DemoExecution is not { } execution || source.IsReentry || execution.State != DemoExecutionState.Closed || !string.Equals(execution.BrokerSymbol, runtime.Symbol.BrokerSymbol, StringComparison.Ordinal) || execution.AverageFillPrice is not > 0m || execution.RequestedStopLoss is not > 0m || execution.RequestedTakeProfit is not > 0m || execution.EntryDealTicket is not > 0 || execution.ExitDealTicket is not > 0 || execution.PositionIdentifier is not > 0 || !DemoStrategyReentryEvidence.IsEligibleExitReason(execution)) return null;
+        return source;
     }
 
     private async Task CreateIntentAsync(RuntimeSession state, RuntimeSymbol runtime, IReadOnlyList<StrategyEvent> events, StrategyEvent signal, CancellationToken token)
@@ -218,6 +385,7 @@ public sealed class DemoStrategyCoordinator(
         {
             DemoStrategySessionId = state.Session.Id, DemoStrategySessionSymbolId = runtime.Symbol.Id, Direction = signal.Direction,
             CrossoverTimeUtc = crossover!.Time, SignalTimeUtc = signal.Time, ExpectedEntryOpenUtc = signal.Time.AddMilliseconds(1),
+            TrendRegimeCrossoverTimeUtc = crossover.Time, IsReentry = false,
             SignalOpen = signal.Snapshot.Open, SignalClose = signal.Snapshot.Close, SignalEma9 = signal.Snapshot.Ema9, SignalEma15 = signal.Snapshot.Ema15, SignalEma100 = signal.Snapshot.Ema100, SignalGapPercent = signal.Snapshot.GapPercent, SignalGapState = signal.Snapshot.GapState,
             StructuralStopLoss = stop.Price, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, IntendedVolumeLots = state.Session.FixedLots,
             ClientExecutionId = Guid.NewGuid(), Status = unresolved ? DemoStrategyIntentStatus.Blocked : DemoStrategyIntentStatus.WaitingForEntryWindow,
@@ -261,6 +429,13 @@ public sealed class DemoStrategyCoordinator(
             // before Submitting/SubmitAsync; reconciliation remains the E11.5 authority.
             var unresolvedExecution = await ReconcileOpenExecutionsAndFindUnresolvedAsync(database, runtime.Symbol.BrokerSymbol, executionService, token);
             if (unresolvedExecution is not null) { Finish(intent, DemoStrategyIntentStatus.Blocked, ExposureReason(intent.Direction, unresolvedExecution)); await database.SaveChangesAsync(token); continue; }
+            // This must be the last re-entry-specific read before durable Submitting:
+            // exposure reconciliation can itself reveal contradictory source evidence.
+            if (intent.IsReentry && (intent.ReentrySourceDemoExecutionId is not { } sourceId || await LoadEligibleReentrySourceAsync(database, state, runtime, sourceId, token) is null))
+            {
+                Finish(intent, DemoStrategyIntentStatus.Blocked, "The exact re-entry source is no longer a closed first-generation execution with unconflicted native SL evidence.");
+                await database.SaveChangesAsync(token); continue;
+            }
             intent.IntendedTakeProfit = target; intent.Status = DemoStrategyIntentStatus.Submitting; intent.SubmittedAtUtc = DateTimeOffset.UtcNow; intent.UpdatedAtUtc = intent.SubmittedAtUtc;
             await database.SaveChangesAsync(token); // strategy state is durable before DemoExecution submits its own durable broker intent.
             var execution = await executionService.SubmitAsync(new SubmitDemoOrder(intent.ClientExecutionId, runtime.Symbol.BrokerSymbol, intent.Direction == SignalDirection.Long ? "Buy" : "Sell", intent.IntendedVolumeLots, intent.StructuralStopLoss, target), token);
@@ -336,7 +511,11 @@ public sealed class DemoStrategyCoordinator(
                     item.UpdatedAtUtc = DateTimeOffset.UtcNow;
                     item.LastReason = "The exact linked execution was already reconciled Closed; no B2 write was attempted.";
                 }
-                if (closed.Count > 0) await database.SaveChangesAsync(token);
+                if (closed.Count > 0)
+                {
+                    await database.SaveChangesAsync(token);
+                    await SynchronizeReentryEligibilityAsync(database, state.Session, runtime.Symbol.Id, runtime.Symbol.BrokerSymbol, service, token);
+                }
             }
             if (potential.Count > 1)
             {
@@ -377,7 +556,9 @@ public sealed class DemoStrategyCoordinator(
         if (reconciled?.State == DemoExecutionState.Closed)
         {
             management.State = DemoStrategyPositionManagementState.Closed; management.OppositeCloseState = DemoStrategyOppositeCloseState.Closed; management.LastManagedAtUtc = DateTimeOffset.UtcNow; management.LastReason = "Exact execution reconciliation proved the broker position closed."; management.UpdatedAtUtc = DateTimeOffset.UtcNow;
-            await database.SaveChangesAsync(token); return;
+            await database.SaveChangesAsync(token);
+            await SynchronizeReentryEligibilityAsync(database, state.Session, runtime.Symbol.Id, runtime.Symbol.BrokerSymbol, service, token);
+            return;
         }
         if (reconciled?.State != DemoExecutionState.Open) return;
         executionForManagement = reconciled;
@@ -396,7 +577,10 @@ public sealed class DemoStrategyCoordinator(
             // submit a second close or a new protection write.
             else { management.State = DemoStrategyPositionManagementState.CloseRequested; management.OppositeCloseState = DemoStrategyOppositeCloseState.ReconciliationRequired; }
             management.LastManagedAtUtc = DateTimeOffset.UtcNow; management.UpdatedAtUtc = DateTimeOffset.UtcNow; management.LastReason = "Opposite close was delegated once to DemoExecutionService; no automatic retry is permitted.";
-            await database.SaveChangesAsync(token); return;
+            await database.SaveChangesAsync(token);
+            if (close?.State == DemoExecutionState.Closed)
+                await SynchronizeReentryEligibilityAsync(database, state.Session, runtime.Symbol.Id, runtime.Symbol.BrokerSymbol, service, token);
+            return;
         }
         if (management.OppositeCloseState is DemoStrategyOppositeCloseState.CloseRequested or DemoStrategyOppositeCloseState.ReconciliationRequired) return;
 

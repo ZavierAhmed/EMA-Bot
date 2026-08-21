@@ -109,6 +109,13 @@ public sealed class DemoStrategyManagementPlannerTests
         var session = snapshot.Model.FindEntityType(typeof(DemoStrategySession));
         Assert.NotNull(session!.FindProperty(nameof(DemoStrategySession.SameTrendReentryEnabled)));
         Assert.NotNull(session.FindProperty(nameof(DemoStrategySession.MaxReentryAgeBars)));
+        IEntityType symbol = Assert.IsAssignableFrom<IEntityType>(snapshot.Model.FindEntityType(typeof(DemoStrategySessionSymbol)));
+        Assert.All(new[] { nameof(DemoStrategySessionSymbol.TrendRegimeDirection), nameof(DemoStrategySessionSymbol.TrendRegimeCrossoverTimeUtc), nameof(DemoStrategySessionSymbol.ReentryEligible), nameof(DemoStrategySessionSymbol.ReentryConsumed), nameof(DemoStrategySessionSymbol.ReentrySourceDemoExecutionId), nameof(DemoStrategySessionSymbol.ReentryEligibleAtUtc), nameof(DemoStrategySessionSymbol.ReentryReason) }, name => Assert.NotNull(symbol.FindProperty(name)));
+        IEntityType intent = Assert.IsAssignableFrom<IEntityType>(snapshot.Model.FindEntityType(typeof(DemoStrategyIntent)));
+        Assert.All(new[] { nameof(DemoStrategyIntent.IsReentry), nameof(DemoStrategyIntent.ReentrySourceDemoExecutionId), nameof(DemoStrategyIntent.TrendRegimeCrossoverTimeUtc), nameof(DemoStrategyIntent.ReentryAgeBars) }, name => Assert.NotNull(intent.FindProperty(name)));
+        Assert.True(intent.GetIndexes().Single(index => index.Properties.Count == 1 && index.Properties[0].Name == nameof(DemoStrategyIntent.ReentrySourceDemoExecutionId)).IsUnique);
+        Assert.Equal(DeleteBehavior.Restrict, intent.GetForeignKeys().Single(key => key.Properties.Single().Name == nameof(DemoStrategyIntent.ReentrySourceDemoExecutionId)).DeleteBehavior);
+        Assert.Equal(DeleteBehavior.Restrict, symbol.GetForeignKeys().Single(key => key.Properties.Single().Name == nameof(DemoStrategySessionSymbol.ReentrySourceDemoExecutionId)).DeleteBehavior);
         var relationship = Assert.Single(management!.GetForeignKeys(), item => item.PrincipalEntityType.Name == typeof(DemoStrategySession).FullName);
         Assert.Equal(nameof(DemoStrategyPositionManagement.DemoStrategySessionId), Assert.Single(relationship.Properties).Name);
         Assert.Equal(DeleteBehavior.Cascade, relationship.DeleteBehavior);
