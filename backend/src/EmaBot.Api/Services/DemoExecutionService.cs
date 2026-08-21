@@ -9,7 +9,16 @@ namespace EmaBot.Api.Services;
 public sealed record DemoExecutionReadiness(bool Ready, string Reason, Mt5ExecutionAccountPayload? Account = null);
 public sealed record SubmitDemoOrder(Guid ClientExecutionId, string BrokerSymbol, string Side, decimal VolumeLots, decimal? StopLoss, decimal? TakeProfit);
 
-public sealed class DemoExecutionService(EmaBotDbContext database, IMt5ExecutionBridgeClient bridge, IOptions<DemoExecutionOptions> options, TimeProvider clock, ILogger<DemoExecutionService> logger)
+public interface IDemoExecutionService
+{
+    Task<DemoExecutionReadiness> ReadinessAsync(CancellationToken token);
+    Task<DemoExecution> SubmitAsync(SubmitDemoOrder request, CancellationToken token);
+    Task<DemoExecution?> ReconcileAsync(Guid id, CancellationToken token);
+    Task<DemoExecution?> CloseAsync(Guid id, CancellationToken token);
+    Task<DemoExecution?> GetAsync(Guid id, CancellationToken token);
+}
+
+public sealed class DemoExecutionService(EmaBotDbContext database, IMt5ExecutionBridgeClient bridge, IOptions<DemoExecutionOptions> options, TimeProvider clock, ILogger<DemoExecutionService> logger) : IDemoExecutionService
 {
     private readonly DemoExecutionOptions _options = options.Value;
 

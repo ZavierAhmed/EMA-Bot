@@ -21,12 +21,15 @@ public sealed class DatabaseInitializer(
         {
             await using var scope = scopeFactory.CreateAsyncScope();
             var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-            var pendingMigrations = (await database.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
-            if (pendingMigrations.Length > 0) logger.LogInformation("Applying {MigrationCount} pending database migrations: {Migrations}", pendingMigrations.Length, string.Join(", ", pendingMigrations));
-            await database.Database.MigrateAsync(cancellationToken);
-            var remainingMigrations = (await database.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
-            if (remainingMigrations.Length > 0) logger.LogError("Database migration completed with {MigrationCount} migrations still pending: {Migrations}", remainingMigrations.Length, string.Join(", ", remainingMigrations));
-            else logger.LogInformation("Database migration check completed with no pending migrations.");
+            if (database.Database.IsRelational())
+            {
+                var pendingMigrations = (await database.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+                if (pendingMigrations.Length > 0) logger.LogInformation("Applying {MigrationCount} pending database migrations: {Migrations}", pendingMigrations.Length, string.Join(", ", pendingMigrations));
+                await database.Database.MigrateAsync(cancellationToken);
+                var remainingMigrations = (await database.Database.GetPendingMigrationsAsync(cancellationToken)).ToArray();
+                if (remainingMigrations.Length > 0) logger.LogError("Database migration completed with {MigrationCount} migrations still pending: {Migrations}", remainingMigrations.Length, string.Join(", ", remainingMigrations));
+                else logger.LogInformation("Database migration check completed with no pending migrations.");
+            }
             await scope.ServiceProvider.GetRequiredService<TradingSettingsService>().GetAsync(cancellationToken);
             var interruptedAt = DateTimeOffset.UtcNow;
             var runningSessions = await database.PaperSessions.Include(session => session.Symbols).Where(session => session.Status == PaperSessionStatus.Running).ToListAsync(cancellationToken);
@@ -48,6 +51,33 @@ public sealed class DatabaseInitializer(
                 }
             }
             if (runningSessions.Count > 0) await database.SaveChangesAsync(cancellationToken);
+            var runningDemoSessions = await database.DemoStrategySessions.Where(session => session.Status == DemoStrategySessionStatus.Running).ToListAsync(cancellationToken);
+            foreach (var session in runningDemoSessions)
+            {
+                session.Status = DemoStrategySessionStatus.Interrupted;
+                session.InterruptedAtUtc = interruptedAt;
+                session.FailureMessage = "The application restarted while this Demo strategy session was Running. Explicit resume is required; no pending entry will be submitted automatically.";
+            }
+            // A strategy-owned intent without a DemoExecution never reached the protected broker
+            // ledger.  It is therefore permanently expired on restart rather than being retried.
+            var strandedDemoIntents = await database.DemoStrategyIntents.Where(intent => intent.DemoExecutionId == null && (intent.Status == DemoStrategyIntentStatus.Created || intent.Status == DemoStrategyIntentStatus.WaitingForEntryWindow || intent.Status == DemoStrategyIntentStatus.Submitting)).ToListAsync(cancellationToken);
+            foreach (var intent in strandedDemoIntents)
+            {
+                var existingExecution = await database.DemoExecutions.SingleOrDefaultAsync(execution => execution.ClientExecutionId == intent.ClientExecutionId, cancellationToken);
+                if (existingExecution is not null)
+                {
+                    intent.DemoExecutionId = existingExecution.Id;
+                    intent.Status = existingExecution.State == DemoExecutionState.ReconciliationRequired ? DemoStrategyIntentStatus.ReconciliationRequired : existingExecution.State == DemoExecutionState.Rejected ? DemoStrategyIntentStatus.Rejected : DemoStrategyIntentStatus.ExecutionLinked;
+                    intent.Reason = "Application restart recovered the existing DemoExecution by durable ClientExecutionId; no broker submission was retried.";
+                }
+                else
+                {
+                    intent.Status = DemoStrategyIntentStatus.Expired;
+                    intent.Reason = "Application restart made this exact entry window unavailable; no broker submission was attempted.";
+                }
+                intent.UpdatedAtUtc = interruptedAt;
+            }
+            if (runningDemoSessions.Count > 0 || strandedDemoIntents.Count > 0) await database.SaveChangesAsync(cancellationToken);
             await scope.ServiceProvider.GetRequiredService<StrategyOptimizationService>().MarkRunningAsInterruptedAsync(cancellationToken);
 
             var userManager = scope.ServiceProvider.GetRequiredService<UserManager<EmaUser>>();

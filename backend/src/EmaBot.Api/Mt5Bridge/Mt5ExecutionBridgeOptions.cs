@@ -55,3 +55,19 @@ public sealed class DemoExecutionOptionsValidator : IValidateOptions<DemoExecuti
 {
     public ValidateOptionsResult Validate(string? name, DemoExecutionOptions options) => DemoExecutionOptions.Validate(options) is { Count: 0 } ? ValidateOptionsResult.Success : ValidateOptionsResult.Fail(DemoExecutionOptions.Validate(options));
 }
+
+public sealed class DemoStrategyAutomationOptions
+{
+    public const string SectionName = "DemoStrategyAutomation";
+    // This is intentionally independent of DemoExecution: both gates must be open.
+    public bool Enabled { get; set; }
+    public decimal FixedLots { get; set; } = .01m;
+}
+
+public sealed class DemoStrategyAutomationOptionsValidator : IValidateOptions<DemoStrategyAutomationOptions>
+{
+    public ValidateOptionsResult Validate(string? name, DemoStrategyAutomationOptions options)
+        => options.FixedLots > 0m
+            ? ValidateOptionsResult.Success
+            : ValidateOptionsResult.Fail("DemoStrategyAutomation:FixedLots must be greater than zero.");
+}

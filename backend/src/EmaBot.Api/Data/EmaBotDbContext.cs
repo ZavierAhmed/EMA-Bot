@@ -21,6 +21,9 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<PaperTradeEvent> PaperTradeEvents => Set<PaperTradeEvent>();
     public DbSet<PaperDecisionEvent> PaperDecisionEvents => Set<PaperDecisionEvent>();
     public DbSet<DemoExecution> DemoExecutions => Set<DemoExecution>();
+    public DbSet<DemoStrategySession> DemoStrategySessions => Set<DemoStrategySession>();
+    public DbSet<DemoStrategySessionSymbol> DemoStrategySessionSymbols => Set<DemoStrategySessionSymbol>();
+    public DbSet<DemoStrategyIntent> DemoStrategyIntents => Set<DemoStrategyIntent>();
     public DbSet<StrategyOptimizationRun> StrategyOptimizationRuns => Set<StrategyOptimizationRun>();
     public DbSet<StrategyOptimizationCandidate> StrategyOptimizationCandidates => Set<StrategyOptimizationCandidate>();
     public DbSet<StrategyOptimizationMarketResult> StrategyOptimizationMarketResults => Set<StrategyOptimizationMarketResult>();
@@ -184,6 +187,47 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(item => item.PositionTicket);
             entity.HasIndex(item => item.PositionIdentifier);
             entity.HasIndex(item => item.State);
+        });
+        builder.Entity<DemoStrategySession>(entity =>
+        {
+            entity.Property(session => session.Interval).HasMaxLength(8);
+            entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32);
+            entity.Property(session => session.FailureMessage).HasMaxLength(1024);
+            entity.Property(session => session.FixedLots).HasPrecision(18, 8);
+            entity.Property(session => session.RiskReward).HasPrecision(18, 8);
+            entity.Property(session => session.MinEmaGapPercent).HasPrecision(8, 4);
+            entity.Property(session => session.MaxStopDistancePercent).HasPrecision(8, 4);
+            entity.HasIndex(session => session.Status);
+            entity.HasMany(session => session.Symbols).WithOne(symbol => symbol.DemoStrategySession!).HasForeignKey(symbol => symbol.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(session => session.Intents).WithOne(intent => intent.DemoStrategySession!).HasForeignKey(intent => intent.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<DemoStrategySessionSymbol>(entity =>
+        {
+            entity.Property(symbol => symbol.Symbol).HasMaxLength(32);
+            entity.Property(symbol => symbol.BrokerSymbol).HasMaxLength(64).UseCollation("utf8mb4_bin");
+            entity.HasIndex(symbol => new { symbol.DemoStrategySessionId, symbol.Symbol }).IsUnique();
+            entity.HasMany(symbol => symbol.Intents).WithOne(intent => intent.DemoStrategySessionSymbol!).HasForeignKey(intent => intent.DemoStrategySessionSymbolId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<DemoStrategyIntent>(entity =>
+        {
+            entity.Property(intent => intent.Status).HasConversion<string>().HasMaxLength(32);
+            entity.Property(intent => intent.Direction).HasConversion<string>().HasMaxLength(8);
+            entity.Property(intent => intent.SignalOpen).HasPrecision(18, 8);
+            entity.Property(intent => intent.SignalClose).HasPrecision(18, 8);
+            entity.Property(intent => intent.SignalEma9).HasPrecision(18, 8);
+            entity.Property(intent => intent.SignalEma15).HasPrecision(18, 8);
+            entity.Property(intent => intent.SignalEma100).HasPrecision(18, 8);
+            entity.Property(intent => intent.SignalGapPercent).HasPrecision(18, 8);
+            entity.Property(intent => intent.SignalGapState).HasConversion<string>().HasMaxLength(16);
+            entity.Property(intent => intent.StructuralStopLoss).HasPrecision(18, 8);
+            entity.Property(intent => intent.StopSourceType).HasConversion<string>().HasMaxLength(32);
+            entity.Property(intent => intent.IntendedTakeProfit).HasPrecision(18, 8);
+            entity.Property(intent => intent.IntendedVolumeLots).HasPrecision(18, 8);
+            entity.Property(intent => intent.Reason).HasMaxLength(1024);
+            entity.HasIndex(intent => intent.ClientExecutionId).IsUnique();
+            entity.HasIndex(intent => new { intent.DemoStrategySessionId, intent.DemoStrategySessionSymbolId, intent.SignalTimeUtc, intent.Direction }).IsUnique();
+            entity.HasIndex(intent => new { intent.DemoStrategySessionSymbolId, intent.Status });
+            entity.HasOne(intent => intent.DemoExecution).WithMany().HasForeignKey(intent => intent.DemoExecutionId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<StrategyOptimizationRun>(entity =>
         {

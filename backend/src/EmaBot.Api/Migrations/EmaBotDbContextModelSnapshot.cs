@@ -611,6 +611,86 @@ namespace EmaBot.Api.Migrations
                     b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("PositionIdentifier"); b.HasIndex("PositionTicket"); b.HasIndex("State"); b.ToTable("DemoExecutions");
                 });
 
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategyIntent", b =>
+                {
+                    b.HasOne("EmaBot.Api.Models.DemoExecution", "DemoExecution").WithMany().HasForeignKey("DemoExecutionId").OnDelete(DeleteBehavior.Restrict);
+                    b.HasOne("EmaBot.Api.Models.DemoStrategySession", "DemoStrategySession").WithMany("Intents").HasForeignKey("DemoStrategySessionId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                    b.HasOne("EmaBot.Api.Models.DemoStrategySessionSymbol", "DemoStrategySessionSymbol").WithMany("Intents").HasForeignKey("DemoStrategySessionSymbolId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                    b.Navigation("DemoExecution"); b.Navigation("DemoStrategySession"); b.Navigation("DemoStrategySessionSymbol");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySessionSymbol", b =>
+                {
+                    b.HasOne("EmaBot.Api.Models.DemoStrategySession", "DemoStrategySession").WithMany("Symbols").HasForeignKey("DemoStrategySessionId").OnDelete(DeleteBehavior.Cascade).IsRequired();
+                    b.Navigation("DemoStrategySession");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategyIntent", b =>
+                {
+                    b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("int");
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    b.Property<Guid>("ClientExecutionId").HasColumnType("char(36)");
+                    b.Property<DateTimeOffset>("CreatedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset>("CrossoverTimeUtc").HasColumnType("datetime(6)");
+                    b.Property<int?>("DemoExecutionId").HasColumnType("int");
+                    b.Property<int>("DemoStrategySessionId").HasColumnType("int");
+                    b.Property<int>("DemoStrategySessionSymbolId").HasColumnType("int");
+                    b.Property<string>("Direction").IsRequired().HasMaxLength(8).HasColumnType("varchar(8)");
+                    b.Property<DateTimeOffset>("ExpectedEntryOpenUtc").HasColumnType("datetime(6)");
+                    b.Property<decimal>("IntendedVolumeLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("IntendedTakeProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("Reason").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<decimal?>("SignalEma100").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("SignalEma15").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("SignalEma9").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("SignalGapPercent").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("SignalGapState").IsRequired().HasMaxLength(16).HasColumnType("varchar(16)");
+                    b.Property<decimal>("SignalClose").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal>("SignalOpen").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<DateTimeOffset>("SignalTimeUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("Status").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<decimal>("StructuralStopLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<string>("StopSourceType").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<DateTimeOffset>("StopSourceTimeUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset?>("SubmittedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset?>("UpdatedAtUtc").HasColumnType("datetime(6)");
+                    b.HasKey("Id"); b.HasIndex("ClientExecutionId").IsUnique(); b.HasIndex("DemoExecutionId"); b.HasIndex("DemoStrategySessionSymbolId", "Status"); b.HasIndex("DemoStrategySessionId", "DemoStrategySessionSymbolId", "SignalTimeUtc", "Direction").IsUnique(); b.ToTable("DemoStrategyIntents");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySession", b =>
+                {
+                    b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("int");
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    b.Property<bool>("AutomationEnabledAtCreation").HasColumnType("tinyint(1)");
+                    b.Property<DateTimeOffset>("CreatedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("FailureMessage").HasMaxLength(1024).HasColumnType("varchar(1024)");
+                    b.Property<decimal>("FixedLots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<DateTimeOffset?>("InterruptedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("Interval").IsRequired().HasMaxLength(8).HasColumnType("varchar(8)");
+                    b.Property<decimal>("MaxStopDistancePercent").HasPrecision(8, 4).HasColumnType("decimal(8,4)");
+                    b.Property<decimal>("MinEmaGapPercent").HasPrecision(8, 4).HasColumnType("decimal(8,4)");
+                    b.Property<decimal>("RiskReward").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<DateTimeOffset?>("StartedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("Status").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.Property<DateTimeOffset?>("StoppedAtUtc").HasColumnType("datetime(6)");
+                    b.Property<bool>("UseAdaptiveInitialStop").HasColumnType("tinyint(1)");
+                    b.Property<bool>("UseEma100Filter").HasColumnType("tinyint(1)");
+                    b.Property<bool>("WaitForConfirmationCandle").HasColumnType("tinyint(1)");
+                    b.HasKey("Id"); b.HasIndex("Status"); b.ToTable("DemoStrategySessions");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySessionSymbol", b =>
+                {
+                    b.Property<int>("Id").ValueGeneratedOnAdd().HasColumnType("int");
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+                    b.Property<string>("BrokerSymbol").IsRequired().HasMaxLength(64).HasColumnType("varchar(64)").UseCollation("utf8mb4_bin");
+                    b.Property<int>("DemoStrategySessionId").HasColumnType("int");
+                    b.Property<DateTimeOffset?>("LastMarketEventUtc").HasColumnType("datetime(6)");
+                    b.Property<DateTimeOffset?>("LastProcessedClosedCandleUtc").HasColumnType("datetime(6)");
+                    b.Property<string>("Symbol").IsRequired().HasMaxLength(32).HasColumnType("varchar(32)");
+                    b.HasKey("Id"); b.HasIndex("DemoStrategySessionId", "Symbol").IsUnique(); b.ToTable("DemoStrategySessionSymbols");
+                });
+
             modelBuilder.Entity("EmaBot.Api.Models.PaperDecisionEvent", b =>
                 {
                     b.Property<int>("Id")
@@ -1878,6 +1958,17 @@ namespace EmaBot.Api.Migrations
                         .IsRequired();
 
                     b.Navigation("BacktestRun");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySession", b =>
+                {
+                    b.Navigation("Intents");
+                    b.Navigation("Symbols");
+                });
+
+            modelBuilder.Entity("EmaBot.Api.Models.DemoStrategySessionSymbol", b =>
+                {
+                    b.Navigation("Intents");
                 });
 
             modelBuilder.Entity("EmaBot.Api.Models.BacktestTradeEvent", b =>
