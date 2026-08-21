@@ -61,6 +61,9 @@ public sealed class DemoStrategyAutomationOptions
     public const string SectionName = "DemoStrategyAutomation";
     // This is intentionally independent of DemoExecution: both gates must be open.
     public bool Enabled { get; set; }
+    // Independent runtime kill switch for B2 broker management.  It never changes
+    // E11.6A entry semantics, which remain governed solely by Enabled.
+    public bool ManagementEnabled { get; set; }
     public decimal FixedLots { get; set; } = .01m;
 }
 

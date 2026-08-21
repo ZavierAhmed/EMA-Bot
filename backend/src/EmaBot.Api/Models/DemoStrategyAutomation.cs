@@ -7,6 +7,9 @@ namespace EmaBot.Api.Models;
 // the strategy decision which may (once only) be linked to the broker-intent ledger.
 public enum DemoStrategySessionStatus { Created, Running, Interrupted, Stopped, Faulted }
 public enum DemoStrategyIntentStatus { Created, WaitingForEntryWindow, Submitting, ExecutionLinked, Rejected, Expired, Blocked, ReconciliationRequired }
+public enum DemoStrategyPositionManagementState { Active, ProtectionReconciliationRequired, ClosePending, CloseRequested, Closed, SuspendedAfterRestart, Blocked }
+public enum DemoStrategyTargetExtensionState { NotAttempted, Pending, Applied, Rejected }
+public enum DemoStrategyOppositeCloseState { None, Pending, CloseRequested, ReconciliationRequired, Closed, Blocked }
 
 public sealed class DemoStrategySession
 {
@@ -26,8 +29,49 @@ public sealed class DemoStrategySession
     public bool WaitForConfirmationCandle { get; set; }
     public bool UseEma100Filter { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
+    public bool TrailingStopEnabled { get; set; }
+    public bool ExitOnOppositeCrossover { get; set; }
     public List<DemoStrategySessionSymbol> Symbols { get; set; } = [];
     public List<DemoStrategyIntent> Intents { get; set; } = [];
+    public List<DemoStrategyPositionManagement> PositionManagement { get; set; } = [];
+}
+
+// Durable B2 state is deliberately separate from both the broker execution and entry
+// intent lifecycles.  It owns only strategy-generated management directives.
+public sealed class DemoStrategyPositionManagement
+{
+    public int Id { get; set; }
+    public int DemoStrategySessionId { get; set; }
+    public int DemoStrategySessionSymbolId { get; set; }
+    public int DemoStrategyIntentId { get; set; }
+    public int DemoExecutionId { get; set; }
+    public DemoStrategyPositionManagementState State { get; set; }
+    public decimal OriginalEntryPrice { get; set; }
+    public decimal OriginalStopLoss { get; set; }
+    public decimal OriginalTakeProfit { get; set; }
+    public decimal? BestFavorablePrice { get; set; }
+    public decimal BestFavorableProgressPercent { get; set; }
+    public DemoStrategyTargetExtensionState TakeProfitExtensionState { get; set; }
+    public DateTimeOffset? TargetExtensionAppliedAtUtc { get; set; }
+    public decimal HighestAttemptedLockPercent { get; set; }
+    public decimal HighestAppliedLockPercent { get; set; }
+    public Guid? PendingProtectionActionId { get; set; }
+    public decimal? PendingProtectionLockPercent { get; set; }
+    public bool PendingProtectionExtendsTarget { get; set; }
+    public decimal? PendingDesiredStopLoss { get; set; }
+    public decimal? PendingDesiredTakeProfit { get; set; }
+    public DateTimeOffset? OppositeSignalTimeUtc { get; set; }
+    public SignalDirection? OppositeSignalDirection { get; set; }
+    public DemoStrategyOppositeCloseState OppositeCloseState { get; set; }
+    public DateTimeOffset? OppositeCloseRequestedAtUtc { get; set; }
+    public DateTimeOffset? LastManagedAtUtc { get; set; }
+    public string? LastReason { get; set; }
+    public DateTimeOffset CreatedAtUtc { get; set; }
+    public DateTimeOffset UpdatedAtUtc { get; set; }
+    [JsonIgnore] public DemoStrategySession? DemoStrategySession { get; set; }
+    [JsonIgnore] public DemoStrategySessionSymbol? DemoStrategySessionSymbol { get; set; }
+    [JsonIgnore] public DemoStrategyIntent? DemoStrategyIntent { get; set; }
+    [JsonIgnore] public DemoExecution? DemoExecution { get; set; }
 }
 
 public sealed class DemoStrategySessionSymbol

@@ -18,7 +18,7 @@ public sealed class DemoExecutionManagementTests
         Assert.Contains(Mt5ExecutionOperation.ModifyPositionProtection, Mt5ExecutionBridgeProtocol.AllowedWriteOperations);
         var dependencies = typeof(DemoStrategyCoordinator).GetConstructors().SelectMany(item => item.GetParameters()).Select(item => item.ParameterType);
         Assert.DoesNotContain(typeof(IMt5ExecutionBridgeClient), dependencies);
-        Assert.DoesNotContain("ModifyProtectionAsync", File.ReadAllText(ResolveSource("backend", "src", "EmaBot.Api", "Services", "DemoStrategyCoordinator.cs")));
+        Assert.Contains("ModifyProtectionAsync", File.ReadAllText(ResolveSource("backend", "src", "EmaBot.Api", "Services", "DemoStrategyCoordinator.cs"))); // B2 delegates through IDemoExecutionService, never the bridge.
     }
 
     [Fact]

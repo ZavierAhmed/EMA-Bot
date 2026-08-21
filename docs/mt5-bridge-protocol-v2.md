@@ -22,6 +22,12 @@ E11.6B1 provides the protected position-management primitive only. Strategy-driv
 
 No public automatic protection-modification HTTP route is exposed by E11.6B1.
 
+## E11.6B2 automated Demo strategy management
+
+E11.6B2 uses the existing `DemoExecutionService` primitives only: an active Demo strategy session may reconcile its own exact linked execution, submit one durable B1 `ModifyProtectionAsync` action for a higher trailing tier and/or the one-time 70% target extension, or delegate one exact opposite-signal `CloseAsync`. It never calls the bridge directly, never manages manual or previous-session executions, and introduces no public broker-write endpoint.
+
+Management is independently disabled by default through `DemoStrategyAutomation:ManagementEnabled`; it also requires the existing automation gate and execution readiness. Progress is based only on a later executable quote—Bid for Buy and Ask for Sell—and on the broker-derived actual fill plus immutable original requested target. Generated strategy prices are conservatively aligned to `TickSize` (falling back to `PointSize`) before B1 validates them. An ambiguous B1 action blocks new actions and is reconciled only; an opposite close is similarly one-shot. Stopping a session never changes broker protection or closes a position. After restart/resume, pre-interruption B2 management is suspended fail-closed; E11.6B3 is reserved for deliberate restart-safe recovery and re-entry.
+
 Historical entry/exit evidence can recover missing tickets and prove an ambiguous close completed. The ledger retains separate order, entry-deal, exit-deal, position identifier, fill/close prices and volumes, broker times, and reconciliation source. `BrokerAccepted` means request acknowledgement only; `Open`, `PartiallyFilled`, and `Closed` require corresponding broker evidence.
 
 No strategy, Paper session, optimizer, or UI live-trading path invokes this endpoint. E11.5 provides explicit manual submit, reconcile, and close calls under `/api/demo-executions`; E11.6B1 deliberately adds no public protection-modification endpoint.

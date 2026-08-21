@@ -14,7 +14,7 @@ namespace EmaBot.Api.Controllers;
 public sealed record CreateDemoStrategySessionRequest(string Interval, IReadOnlyList<string> Symbols);
 public sealed record DemoStrategyIntentResponse(int Id, string Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, DateTimeOffset ExpectedEntryOpenUtc, decimal StructuralStopLoss, decimal? IntendedTakeProfit, decimal IntendedVolumeLots, Guid ClientExecutionId, string Status, int? DemoExecutionId, string? Reason);
 public sealed record DemoStrategySymbolResponse(string Symbol, string BrokerSymbol, DateTimeOffset? LastProcessedClosedCandleUtc, DateTimeOffset? LastMarketEventUtc, IReadOnlyList<DemoStrategyIntentResponse> RecentIntents);
-public sealed record DemoStrategySessionResponse(int Id, string Interval, string Status, DateTimeOffset CreatedAtUtc, DateTimeOffset? StartedAtUtc, DateTimeOffset? StoppedAtUtc, DateTimeOffset? InterruptedAtUtc, string? FailureMessage, bool AutomationEnabled, decimal FixedLots, decimal RiskReward, IReadOnlyList<DemoStrategySymbolResponse> Symbols, DemoStrategyRuntimeSnapshot? Runtime);
+public sealed record DemoStrategySessionResponse(int Id, string Interval, string Status, DateTimeOffset CreatedAtUtc, DateTimeOffset? StartedAtUtc, DateTimeOffset? StoppedAtUtc, DateTimeOffset? InterruptedAtUtc, string? FailureMessage, bool AutomationEnabled, bool ManagementEnabled, bool TrailingStopEnabled, bool ExitOnOppositeCrossover, decimal FixedLots, decimal RiskReward, IReadOnlyList<DemoStrategySymbolResponse> Symbols, DemoStrategyRuntimeSnapshot? Runtime);
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/demo-strategy-sessions")]
 public sealed class DemoStrategySessionsController(EmaBotDbContext database, TradingSettingsService settingsService, DemoStrategyCoordinator coordinator, IOptions<DemoStrategyAutomationOptions> automation) : ControllerBase
@@ -37,6 +37,7 @@ public sealed class DemoStrategySessionsController(EmaBotDbContext database, Tra
             AutomationEnabledAtCreation = automation.Value.Enabled, FixedLots = automation.Value.FixedLots,
             RiskReward = settings.RiskReward, MinEmaGapPercent = settings.MinEmaGapPercent, MaxStopDistancePercent = settings.MaxStopDistancePercent,
             WaitForConfirmationCandle = settings.WaitForConfirmationCandle, UseEma100Filter = settings.UseEma100Filter, UseAdaptiveInitialStop = settings.UseAdaptiveInitialStop,
+            TrailingStopEnabled = settings.TrailingStopEnabled, ExitOnOppositeCrossover = settings.ExitOnOppositeCrossover,
             Symbols = monitored.Select(item => new DemoStrategySessionSymbol { Symbol = item.Symbol, BrokerSymbol = item.Symbol }).ToList()
         };
         database.DemoStrategySessions.Add(session);
@@ -88,7 +89,7 @@ public sealed class DemoStrategySessionsController(EmaBotDbContext database, Tra
     private DemoStrategySessionResponse ToResponse(DemoStrategySession session)
     {
         var runtime = coordinator.GetRuntimeSnapshot(); if (runtime?.SessionId != session.Id) runtime = null;
-        return new(session.Id, session.Interval, session.Status.ToString(), session.CreatedAtUtc, session.StartedAtUtc, session.StoppedAtUtc, session.InterruptedAtUtc, session.FailureMessage, automation.Value.Enabled, session.FixedLots, session.RiskReward,
+        return new(session.Id, session.Interval, session.Status.ToString(), session.CreatedAtUtc, session.StartedAtUtc, session.StoppedAtUtc, session.InterruptedAtUtc, session.FailureMessage, automation.Value.Enabled, automation.Value.ManagementEnabled, session.TrailingStopEnabled, session.ExitOnOppositeCrossover, session.FixedLots, session.RiskReward,
             session.Symbols.Select(symbol => new DemoStrategySymbolResponse(symbol.Symbol, symbol.BrokerSymbol, symbol.LastProcessedClosedCandleUtc, symbol.LastMarketEventUtc, symbol.Intents.OrderByDescending(item => item.CreatedAtUtc).Take(25).Select(intent => new DemoStrategyIntentResponse(intent.Id, intent.Direction.ToString(), intent.CrossoverTimeUtc, intent.SignalTimeUtc, intent.ExpectedEntryOpenUtc, intent.StructuralStopLoss, intent.IntendedTakeProfit, intent.IntendedVolumeLots, intent.ClientExecutionId, intent.Status.ToString(), intent.DemoExecutionId, intent.Reason)).ToArray())).ToArray(), runtime);
     }
 }

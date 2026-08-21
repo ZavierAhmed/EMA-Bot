@@ -25,6 +25,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<DemoStrategySession> DemoStrategySessions => Set<DemoStrategySession>();
     public DbSet<DemoStrategySessionSymbol> DemoStrategySessionSymbols => Set<DemoStrategySessionSymbol>();
     public DbSet<DemoStrategyIntent> DemoStrategyIntents => Set<DemoStrategyIntent>();
+    public DbSet<DemoStrategyPositionManagement> DemoStrategyPositionManagement => Set<DemoStrategyPositionManagement>();
     public DbSet<StrategyOptimizationRun> StrategyOptimizationRuns => Set<StrategyOptimizationRun>();
     public DbSet<StrategyOptimizationCandidate> StrategyOptimizationCandidates => Set<StrategyOptimizationCandidate>();
     public DbSet<StrategyOptimizationMarketResult> StrategyOptimizationMarketResults => Set<StrategyOptimizationMarketResult>();
@@ -221,6 +222,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(session => session.Status);
             entity.HasMany(session => session.Symbols).WithOne(symbol => symbol.DemoStrategySession!).HasForeignKey(symbol => symbol.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
             entity.HasMany(session => session.Intents).WithOne(intent => intent.DemoStrategySession!).HasForeignKey(intent => intent.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(session => session.PositionManagement).WithOne(item => item.DemoStrategySession!).HasForeignKey(item => item.DemoStrategySessionId).OnDelete(DeleteBehavior.Cascade);
         });
         builder.Entity<DemoStrategySessionSymbol>(entity =>
         {
@@ -249,6 +251,29 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(intent => new { intent.DemoStrategySessionId, intent.DemoStrategySessionSymbolId, intent.SignalTimeUtc, intent.Direction }).IsUnique();
             entity.HasIndex(intent => new { intent.DemoStrategySessionSymbolId, intent.Status });
             entity.HasOne(intent => intent.DemoExecution).WithMany().HasForeignKey(intent => intent.DemoExecutionId).OnDelete(DeleteBehavior.Restrict);
+        });
+        builder.Entity<DemoStrategyPositionManagement>(entity =>
+        {
+            entity.Property(item => item.State).HasConversion<string>().HasMaxLength(48);
+            entity.Property(item => item.TakeProfitExtensionState).HasConversion<string>().HasMaxLength(32);
+            entity.Property(item => item.OppositeCloseState).HasConversion<string>().HasMaxLength(32);
+            entity.Property(item => item.OppositeSignalDirection).HasConversion<string>().HasMaxLength(8);
+            entity.Property(item => item.OriginalEntryPrice).HasPrecision(18, 8);
+            entity.Property(item => item.OriginalStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.OriginalTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.BestFavorablePrice).HasPrecision(18, 8);
+            entity.Property(item => item.BestFavorableProgressPercent).HasPrecision(18, 8);
+            entity.Property(item => item.HighestAttemptedLockPercent).HasPrecision(8, 4);
+            entity.Property(item => item.HighestAppliedLockPercent).HasPrecision(8, 4);
+            entity.Property(item => item.PendingProtectionLockPercent).HasPrecision(8, 4);
+            entity.Property(item => item.PendingDesiredStopLoss).HasPrecision(18, 8);
+            entity.Property(item => item.PendingDesiredTakeProfit).HasPrecision(18, 8);
+            entity.Property(item => item.LastReason).HasMaxLength(1024);
+            entity.HasIndex(item => item.DemoExecutionId).IsUnique();
+            entity.HasIndex(item => new { item.DemoStrategySessionId, item.State });
+            entity.HasOne(item => item.DemoStrategySessionSymbol).WithMany().HasForeignKey(item => item.DemoStrategySessionSymbolId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(item => item.DemoStrategyIntent).WithMany().HasForeignKey(item => item.DemoStrategyIntentId).OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(item => item.DemoExecution).WithMany().HasForeignKey(item => item.DemoExecutionId).OnDelete(DeleteBehavior.Restrict);
         });
         builder.Entity<StrategyOptimizationRun>(entity =>
         {
