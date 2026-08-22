@@ -1,5 +1,6 @@
 using System.Text.Json;
 using EmaBot.Api.Controllers;
+using EmaBot.Api.Configuration;
 using EmaBot.Api.Data;
 using EmaBot.Api.Models;
 using EmaBot.Api.Mt5Bridge;
@@ -104,12 +105,28 @@ public sealed class DemoStrategySessionsControllerTests
         Assert.DoesNotContain("expectedAccountFingerprint", json, StringComparison.OrdinalIgnoreCase); Assert.DoesNotContain("expectedServer", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task Create_WithEnabledExactMt5Symbol_CreatesSession()
+    {
+        var (controller, database) = CreateController(); database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }); await database.SaveChangesAsync();
+        var result = Assert.IsType<CreatedAtActionResult>((await controller.Create(new("3m", ["BTCUSDm"]), CancellationToken.None)).Result); var response = Assert.IsType<DemoStrategySessionResponse>(result.Value);
+        Assert.Equal("3m", response.Interval); Assert.Equal("BTCUSDm", Assert.Single(response.Symbols).BrokerSymbol); Assert.True(response.AutomationEnabledAtCreation); Assert.Equal(.01m, response.FixedLots); Assert.NotNull(await database.DemoStrategySessions.FindAsync(response.Id));
+    }
+
+    [Fact]
+    public async Task Create_RequiresExactOrdinalMt5Symbol()
+    {
+        var (controller, database) = CreateController(); database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }); await database.SaveChangesAsync();
+        Assert.IsType<BadRequestObjectResult>((await controller.Create(new("3m", ["btcusdm"]), CancellationToken.None)).Result);
+    }
+
     private static (DemoStrategySessionsController Controller, EmaBotDbContext Database) CreateController(DemoExecutionReadiness? readiness = null, IMt5BridgeRequestClient? bridge = null)
     {
         var context = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
         var options = Options.Create(new DemoStrategyAutomationOptions { Enabled = true, ManagementEnabled = true, FixedLots = .01m });
         var coordinator = new DemoStrategyCoordinator(null!, null!, null!, null!, null!, options, null!);
-        return (new DemoStrategySessionsController(context, null!, coordinator, options, Options.Create(new DemoExecutionOptions { Enabled = true, DemoOnly = true }), Options.Create(new Mt5ExecutionBridgeOptions { Enabled = true }), new FakeExecutionService(readiness ?? new(false, "not ready")), bridge ?? new FakeBridge(true)), context);
+        var settings = new TradingSettingsService(context, Options.Create(new TradingDefaultsOptions()));
+        return (new DemoStrategySessionsController(context, settings, coordinator, options, Options.Create(new DemoExecutionOptions { Enabled = true, DemoOnly = true }), Options.Create(new Mt5ExecutionBridgeOptions { Enabled = true }), new FakeExecutionService(readiness ?? new(false, "not ready")), bridge ?? new FakeBridge(true)), context);
     }
 
     private static DemoStrategySession Session(DemoStrategySessionStatus status, int offset) => new() { Interval = "3m", Status = status, CreatedAtUtc = DateTimeOffset.UnixEpoch.AddMinutes(offset), FixedLots = .01m, RiskReward = 2m, Symbols = [new() { Symbol = "XAUUSDm", BrokerSymbol = "XAUUSDm" }] };

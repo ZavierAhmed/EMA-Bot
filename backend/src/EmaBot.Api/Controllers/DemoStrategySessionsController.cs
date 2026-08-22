@@ -50,7 +50,9 @@ public sealed class DemoStrategySessionsController(EmaBotDbContext database, Tra
         if (!Mt5NativeTimeframes.IsSupported(request.Interval) || symbols.Length == 0) return BadRequest(new ApiMessage("Use a native MT5 interval and select at least one enabled MT5 symbol."));
         if (symbols.Distinct(StringComparer.Ordinal).Count() != symbols.Length) return BadRequest(new ApiMessage("Symbols must not contain duplicates."));
         if (await database.DemoStrategySessions.AnyAsync(item => item.Status == DemoStrategySessionStatus.Running || item.Status == DemoStrategySessionStatus.Interrupted, token)) return Conflict(new ApiMessage("Stop or resume the existing Demo strategy session before creating another."));
-        var monitored = await database.MonitoredSymbols.Where(item => item.IsEnabled && item.Source == MarketDataSource.Mt5Exness && symbols.Contains(item.Symbol)).ToListAsync(token);
+        var requestedSymbols = symbols.ToHashSet(StringComparer.Ordinal);
+        var monitoredCandidates = await database.MonitoredSymbols.Where(item => item.IsEnabled && item.Source == MarketDataSource.Mt5Exness).ToListAsync(token);
+        var monitored = monitoredCandidates.Where(item => requestedSymbols.Contains(item.Symbol)).ToList();
         if (monitored.Count != symbols.Length) return BadRequest(new ApiMessage("Every selected symbol must be an enabled exact MT5 instrument."));
         var settings = await settingsService.GetAsync(token);
         if (settings.UseHtfRegimeFilter) return BadRequest(new ApiMessage("HTF Regime Filter is currently supported for historical backtesting only."));
