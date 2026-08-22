@@ -150,6 +150,18 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public void DemoStrategySessionModel_PersistsDurableNewEntriesPauseState()
+    {
+        using var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var entity = database.Model.FindEntityType(typeof(DemoStrategySession))!;
+        var paused = entity.FindProperty(nameof(DemoStrategySession.NewEntriesPaused))!;
+        var pausedAt = entity.FindProperty(nameof(DemoStrategySession.NewEntriesPausedAtUtc))!;
+
+        Assert.False(paused.IsNullable); Assert.Equal(false, paused.GetDefaultValue());
+        Assert.True(pausedAt.IsNullable);
+    }
+
+    [Fact]
     public void PaperCoordinator_HasNoExecutionSubmissionDependency()
     {
         var constructorTypes = typeof(PaperTradingCoordinator).GetConstructors().SelectMany(item => item.GetParameters()).Select(item => item.ParameterType);

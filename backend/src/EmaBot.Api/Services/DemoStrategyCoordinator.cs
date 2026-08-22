@@ -136,6 +136,45 @@ public sealed class DemoStrategyCoordinator(
         logger.LogInformation("Demo strategy session {SessionId} stopped without closing any broker execution.", sessionId);
     }
 
+    public async Task PauseNewEntriesAsync(int sessionId, CancellationToken token)
+    {
+        await gate.WaitAsync(token);
+        try
+        {
+            if (active is not null && active.Session.Id != sessionId) throw new InvalidOperationException("A different Demo strategy session is running in this application.");
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            var session = await database.DemoStrategySessions.SingleOrDefaultAsync(item => item.Id == sessionId, token) ?? throw new KeyNotFoundException("Demo strategy session not found.");
+            if (session.Status != DemoStrategySessionStatus.Running) throw new InvalidOperationException("Only running Demo strategy sessions can pause new entries.");
+            if (session.NewEntriesPaused) return;
+            var now = DateTimeOffset.UtcNow;
+            session.NewEntriesPaused = true; session.NewEntriesPausedAtUtc = now;
+            foreach (var intent in await database.DemoStrategyIntents.Where(item => item.DemoStrategySessionId == sessionId && item.DemoExecutionId == null && (item.Status == DemoStrategyIntentStatus.Created || item.Status == DemoStrategyIntentStatus.WaitingForEntryWindow)).ToListAsync(token))
+                Finish(intent, DemoStrategyIntentStatus.Blocked, "New entries were paused before broker submission; this entry will not be resurrected or submitted after resume.");
+            await database.SaveChangesAsync(token);
+            if (active is not null) { active.Session.NewEntriesPaused = true; active.Session.NewEntriesPausedAtUtc = now; }
+        }
+        finally { gate.Release(); }
+    }
+
+    public async Task ResumeNewEntriesAsync(int sessionId, CancellationToken token)
+    {
+        await gate.WaitAsync(token);
+        try
+        {
+            if (active is null || active.Session.Id != sessionId) throw new InvalidOperationException("The requested Demo strategy session is not active in this application.");
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+            var session = await database.DemoStrategySessions.SingleOrDefaultAsync(item => item.Id == sessionId, token) ?? throw new KeyNotFoundException("Demo strategy session not found.");
+            if (session.Status != DemoStrategySessionStatus.Running) throw new InvalidOperationException("Only running Demo strategy sessions can resume new entries.");
+            if (!session.NewEntriesPaused) return;
+            session.NewEntriesPaused = false; session.NewEntriesPausedAtUtc = null;
+            await database.SaveChangesAsync(token);
+            active.Session.NewEntriesPaused = false; active.Session.NewEntriesPausedAtUtc = null;
+        }
+        finally { gate.Release(); }
+    }
+
     internal async Task ProcessUpdateForTestAsync(MarketBarUpdate update, CancellationToken token = default)
     {
         var state = active ?? throw new InvalidOperationException("No active Demo strategy session.");
@@ -198,7 +237,7 @@ public sealed class DemoStrategyCoordinator(
             var normalSignals = events.Where(item => item.Status is SignalStatus.LongSignal or SignalStatus.ShortSignal).ToArray();
             foreach (var signal in normalSignals)
                 await CreateIntentAsync(state, runtime, evaluation.Events, signal, token);
-            if (normalSignals.Length == 0) await TryScheduleReentryAsync(state, runtime, evaluation.Snapshots.LastOrDefault(), token);
+            if (normalSignals.Length == 0 && !state.Session.NewEntriesPaused) await TryScheduleReentryAsync(state, runtime, evaluation.Snapshots.LastOrDefault(), token);
             logger.LogInformation("Demo strategy closed candle processed for {SessionId}/{Symbol} at {CloseTime}.", state.Session.Id, runtime.Symbol.BrokerSymbol, update.CloseTimeUtc);
         }
         finally { gate.Release(); }
@@ -315,7 +354,7 @@ public sealed class DemoStrategyCoordinator(
 
     private async Task TryScheduleReentryAsync(RuntimeSession state, RuntimeSymbol runtime, IndicatorSnapshot? snapshot, CancellationToken token)
     {
-        if (snapshot is null) return;
+        if (snapshot is null || state.Session.NewEntriesPaused) return;
         await using var scope = scopeFactory.CreateAsyncScope();
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var service = scope.ServiceProvider.GetRequiredService<IDemoExecutionService>();
@@ -388,8 +427,8 @@ public sealed class DemoStrategyCoordinator(
             TrendRegimeCrossoverTimeUtc = crossover.Time, IsReentry = false,
             SignalOpen = signal.Snapshot.Open, SignalClose = signal.Snapshot.Close, SignalEma9 = signal.Snapshot.Ema9, SignalEma15 = signal.Snapshot.Ema15, SignalEma100 = signal.Snapshot.Ema100, SignalGapPercent = signal.Snapshot.GapPercent, SignalGapState = signal.Snapshot.GapState,
             StructuralStopLoss = stop.Price, StopSourceType = stop.Source, StopSourceTimeUtc = stop.Time, IntendedVolumeLots = state.Session.FixedLots,
-            ClientExecutionId = Guid.NewGuid(), Status = unresolved ? DemoStrategyIntentStatus.Blocked : DemoStrategyIntentStatus.WaitingForEntryWindow,
-            Reason = oppositeCloseScheduled ? "OppositeSignalCloseScheduled: the existing exact automated position will be reconciled and closed only on a later executable quote." : unresolved ? ExposureReason(signal.Direction, unresolvedExecution!) : null, CreatedAtUtc = DateTimeOffset.UtcNow
+            ClientExecutionId = Guid.NewGuid(), Status = state.Session.NewEntriesPaused || unresolved ? DemoStrategyIntentStatus.Blocked : DemoStrategyIntentStatus.WaitingForEntryWindow,
+            Reason = state.Session.NewEntriesPaused ? oppositeCloseScheduled ? "New entries are paused; the opposite signal was observed and the existing position close was scheduled, but no replacement entry will be submitted." : unresolved ? $"New entries are paused; {ExposureReason(signal.Direction, unresolvedExecution!)}" : "New entries are paused; the strategy signal was observed but no entry window was queued." : oppositeCloseScheduled ? "OppositeSignalCloseScheduled: the existing exact automated position will be reconciled and closed only on a later executable quote." : unresolved ? ExposureReason(signal.Direction, unresolvedExecution!) : null, CreatedAtUtc = DateTimeOffset.UtcNow
         };
         database.DemoStrategyIntents.Add(intent);
         await database.SaveChangesAsync(token); // ClientExecutionId is durable before an entry window can submit.
@@ -403,6 +442,12 @@ public sealed class DemoStrategyCoordinator(
         var pending = await database.DemoStrategyIntents.Where(item => item.DemoStrategySessionSymbolId == runtime.Symbol.Id && item.Status == DemoStrategyIntentStatus.WaitingForEntryWindow).OrderBy(item => item.Id).ToListAsync(token);
         foreach (var intent in pending)
         {
+            if (state.Session.NewEntriesPaused)
+            {
+                Finish(intent, DemoStrategyIntentStatus.Blocked, "New entries are paused; this exact entry window will not submit and will not be retried.");
+                await database.SaveChangesAsync(token);
+                continue;
+            }
             if (update.OpenTimeUtc > intent.ExpectedEntryOpenUtc)
             {
                 Finish(intent, DemoStrategyIntentStatus.Expired, "The exact next-bar entry window was missed; the strategy will not chase a later quote.");

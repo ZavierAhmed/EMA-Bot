@@ -21,6 +21,8 @@ public sealed class DemoStrategySession
     public DateTimeOffset? StoppedAtUtc { get; set; }
     public DateTimeOffset? InterruptedAtUtc { get; set; }
     public string? FailureMessage { get; set; }
+    public bool NewEntriesPaused { get; set; }
+    public DateTimeOffset? NewEntriesPausedAtUtc { get; set; }
     public bool AutomationEnabledAtCreation { get; set; }
     public decimal FixedLots { get; set; }
     public decimal RiskReward { get; set; }

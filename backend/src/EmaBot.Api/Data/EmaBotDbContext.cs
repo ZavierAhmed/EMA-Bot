@@ -228,6 +228,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(session => session.Interval).HasMaxLength(8);
             entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32);
             entity.Property(session => session.FailureMessage).HasMaxLength(1024);
+            entity.Property(session => session.NewEntriesPaused).HasDefaultValue(false);
             entity.Property(session => session.FixedLots).HasPrecision(18, 8);
             entity.Property(session => session.RiskReward).HasPrecision(18, 8);
             entity.Property(session => session.MinEmaGapPercent).HasPrecision(8, 4);

@@ -219,6 +219,260 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         Assert.False(afterReentryExit.ReentryEligible);
     }
 
+    [Fact]
+    public async Task PauseAndResumeNewEntries_AreDurableWithoutChangingRunningStatus()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync();
+        var initial = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, initial.Status); Assert.False(initial.NewEntriesPaused); Assert.Null(initial.NewEntriesPausedAtUtc);
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        var paused = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, paused.Status); Assert.True(paused.NewEntriesPaused); Assert.NotNull(paused.NewEntriesPausedAtUtc);
+        var firstPausedAtUtc = paused.NewEntriesPausedAtUtc;
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        var repeatedPause = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, repeatedPause.Status); Assert.True(repeatedPause.NewEntriesPaused); Assert.Equal(firstPausedAtUtc, repeatedPause.NewEntriesPausedAtUtc);
+
+        await harness.Coordinator.ResumeNewEntriesAsync(session.Id, default);
+        var resumed = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, resumed.Status); Assert.False(resumed.NewEntriesPaused); Assert.Null(resumed.NewEntriesPausedAtUtc);
+
+        await harness.Coordinator.ResumeNewEntriesAsync(session.Id, default);
+        var repeatedResume = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, repeatedResume.Status); Assert.False(repeatedResume.NewEntriesPaused); Assert.Null(repeatedResume.NewEntriesPausedAtUtc);
+        Assert.Empty(harness.Recorder.Submissions); Assert.Equal(0, harness.Recorder.CloseCalls);
+    }
+
+    [Fact]
+    public async Task PauseNewEntries_BlocksWaitingIntentAndResumeDoesNotResurrectIt()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync();
+        var intent = (await harness.DeliverFirstSignalAsync(session))!;
+
+        Assert.Equal(DemoStrategyIntentStatus.WaitingForEntryWindow, intent.Status);
+        Assert.Null(intent.DemoExecutionId);
+        Assert.Empty(harness.Recorder.Submissions);
+        var intentId = intent.Id;
+        var clientExecutionId = intent.ClientExecutionId;
+        var expectedEntryOpenUtc = intent.ExpectedEntryOpenUtc;
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        var paused = Assert.Single(await harness.IntentsAsync(), item => item.Id == intentId);
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, paused.Status);
+        Assert.Null(paused.DemoExecutionId);
+        Assert.NotNull(paused.Reason);
+        Assert.Contains("paused", paused.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("broker submission", paused.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, await harness.ExecutionCountAsync(clientExecutionId));
+        Assert.Empty(harness.Recorder.Submissions);
+
+        await harness.Coordinator.ResumeNewEntriesAsync(session.Id, default);
+        var resumed = Assert.Single(await harness.IntentsAsync(), item => item.Id == intentId);
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, resumed.Status);
+        Assert.Null(resumed.DemoExecutionId);
+        Assert.Equal(clientExecutionId, resumed.ClientExecutionId);
+
+        await harness.DeliverAsync(harness.Forming(expectedEntryOpenUtc, 100m, 100.2m));
+        var afterOldWindow = Assert.Single(await harness.IntentsAsync(), item => item.Id == intentId);
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, afterOldWindow.Status);
+        Assert.Null(afterOldWindow.DemoExecutionId);
+        Assert.Equal(0, await harness.ExecutionCountAsync(clientExecutionId));
+        Assert.Empty(harness.Recorder.Submissions);
+        Assert.DoesNotContain(await harness.IntentsAsync(), item =>
+            item.Id != intentId &&
+            item.DemoStrategySessionId == session.Id &&
+            item.SignalTimeUtc == intent.SignalTimeUtc &&
+            item.Direction == intent.Direction &&
+            (item.Status == DemoStrategyIntentStatus.WaitingForEntryWindow || item.Status == DemoStrategyIntentStatus.Submitting));
+    }
+
+    [Fact]
+    public async Task PausedSession_ContinuesClosedCandleTrendAndSignalObservation()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync();
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        var pausedSession = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, pausedSession.Status);
+        Assert.True(pausedSession.NewEntriesPaused);
+        Assert.Empty(harness.Recorder.Submissions);
+        var before = await harness.SessionSymbolAsync();
+
+        var signal = (await harness.DeliverFirstSignalAsync(session))!;
+        var after = await harness.SessionSymbolAsync();
+
+        Assert.NotNull(after.LastProcessedClosedCandleUtc);
+        Assert.NotNull(after.LastMarketEventUtc);
+        Assert.Equal(signal.SignalTimeUtc, after.LastProcessedClosedCandleUtc);
+        Assert.True(after.LastProcessedClosedCandleUtc!.Value > before.LastProcessedClosedCandleUtc.GetValueOrDefault(DateTimeOffset.MinValue));
+        Assert.True(after.LastMarketEventUtc!.Value > before.LastMarketEventUtc.GetValueOrDefault(DateTimeOffset.MinValue));
+        Assert.Equal(signal.Direction, after.TrendRegimeDirection);
+        Assert.Equal(signal.CrossoverTimeUtc, after.TrendRegimeCrossoverTimeUtc);
+
+        var forensic = Assert.Single(await harness.IntentsAsync(), item =>
+            item.DemoStrategySessionId == session.Id &&
+            item.DemoStrategySessionSymbolId == after.Id &&
+            item.SignalTimeUtc == signal.SignalTimeUtc &&
+            item.Direction == signal.Direction);
+        Assert.False(forensic.IsReentry);
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, forensic.Status);
+        Assert.Null(forensic.DemoExecutionId);
+        Assert.NotNull(forensic.Reason);
+        Assert.Contains("new entries are paused", forensic.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(await harness.IntentsAsync(), item =>
+            item.DemoStrategySessionId == session.Id &&
+            item.SignalTimeUtc == signal.SignalTimeUtc &&
+            item.Direction == signal.Direction &&
+            (item.Status == DemoStrategyIntentStatus.WaitingForEntryWindow ||
+             item.Status == DemoStrategyIntentStatus.Submitting ||
+             item.Status == DemoStrategyIntentStatus.ExecutionLinked));
+        Assert.Equal(0, await harness.ExecutionCountAsync(forensic.ClientExecutionId));
+        Assert.Empty(harness.Recorder.Submissions);
+
+        var finalSession = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, finalSession.Status);
+        Assert.True(finalSession.NewEntriesPaused);
+    }
+
+    [Fact]
+    public async Task PausedSession_DoesNotScheduleOrConsumeEligibleReentry()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync(sameTrendReentryEnabled: true);
+        var source = (await harness.DeliverFirstSignalAsync(session))!;
+        await harness.DeliverAsync(harness.Forming(source.ExpectedEntryOpenUtc, 100m, 100.2m));
+        await harness.MarkExecutionExactSlClosedAsync(source.ClientExecutionId);
+        Assert.Single(harness.Recorder.Submissions);
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        await harness.DeliverAsync(harness.Closed(harness.FirstLiveCandleAfter(source.SignalTimeUtc)));
+
+        var pausedState = await harness.SessionSymbolAsync();
+        Assert.True(pausedState.ReentryEligible);
+        Assert.False(pausedState.ReentryConsumed);
+        Assert.DoesNotContain(await harness.IntentsAsync(), intent => intent.IsReentry);
+        Assert.Single(harness.Recorder.Submissions);
+
+        await harness.Coordinator.ResumeNewEntriesAsync(session.Id, default);
+        var resumedState = await harness.SessionSymbolAsync();
+        Assert.True(resumedState.ReentryEligible);
+        Assert.False(resumedState.ReentryConsumed);
+        Assert.DoesNotContain(await harness.IntentsAsync(), intent => intent.IsReentry);
+        Assert.Single(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task PausedSession_OppositeSignalStillClosesExistingPositionWithoutReplacementEntry()
+    {
+        await using var harness = new Harness(enabled: true, shortSetup: true, managementEnabled: true)
+        {
+            Recorder = { CloseResultState = DemoExecutionState.Closed }
+        };
+        var session = await harness.CreateAndStartAsync(exitOnOppositeCrossover: true);
+        await harness.AddLinkedExecutionAsync(session, DemoExecutionState.Open, "Buy");
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 100m, 100.2m));
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        var forensic = (await harness.DeliverFirstSignalAsync(session))!;
+
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, forensic.Status);
+        Assert.Null(forensic.DemoExecutionId);
+        Assert.NotNull(forensic.Reason);
+        Assert.Contains("new entries are paused", forensic.Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(await harness.IntentsAsync(), intent =>
+            intent.DemoStrategySessionId == session.Id &&
+            intent.SignalTimeUtc == forensic.SignalTimeUtc &&
+            intent.Direction == forensic.Direction &&
+            intent.Status == DemoStrategyIntentStatus.WaitingForEntryWindow);
+        Assert.Equal(0, harness.Recorder.CloseCalls);
+        Assert.Empty(harness.Recorder.Submissions);
+        Assert.Equal(DemoStrategyOppositeCloseState.Pending, (await harness.ManagementAsync())!.OppositeCloseState);
+
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 100m, 100.2m));
+
+        Assert.Equal(1, harness.Recorder.CloseCalls);
+        Assert.Empty(harness.Recorder.Submissions);
+        Assert.Equal(DemoStrategyOppositeCloseState.Closed, (await harness.ManagementAsync())!.OppositeCloseState);
+    }
+
+    [Fact]
+    public async Task PausedSession_ExistingPositionManagementContinues()
+    {
+        await using var harness = new Harness(enabled: true, managementEnabled: true);
+        var session = await harness.CreateAndStartAsync(trailingStopEnabled: true);
+        await harness.AddLinkedExecutionAsync(session, DemoExecutionState.Open, "Buy");
+
+        await harness.Coordinator.PauseNewEntriesAsync(session.Id, default);
+        await harness.DeliverAsync(harness.Forming(harness.Start.AddHours(1), 107m, 107.2m));
+
+        var modification = Assert.Single(harness.Recorder.Modifications);
+        Assert.Equal(104m, modification.StopLoss);
+        Assert.Equal(111m, modification.TakeProfit);
+        var management = (await harness.ManagementAsync())!;
+        Assert.Equal(DemoStrategyPositionManagementState.Active, management.State);
+        Assert.Equal(DemoStrategyTargetExtensionState.Applied, management.TakeProfitExtensionState);
+        Assert.Empty(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task PausedSession_StaleWaitingIntentCannotSubmitAtExactEntryWindow()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Created);
+        await harness.UpdateSessionAsync(session.Id, item =>
+        {
+            item.NewEntriesPaused = true;
+            item.NewEntriesPausedAtUtc = harness.Start;
+        });
+        var clientExecutionId = Guid.NewGuid();
+        var expectedEntryOpenUtc = harness.Start.AddMinutes(3);
+        await harness.AddPendingAsync(session, expectedEntryOpenUtc, id: clientExecutionId);
+        await harness.Coordinator.StartSessionAsync(session.Id, false, default);
+
+        await harness.DeliverAsync(harness.Forming(expectedEntryOpenUtc, 100m, 100.2m));
+
+        var intent = (await harness.FirstIntentAsync())!;
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, intent.Status);
+        Assert.Null(intent.DemoExecutionId);
+        Assert.Equal(0, await harness.ExecutionCountAsync(clientExecutionId));
+        Assert.Empty(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task InterruptedPausedSession_ResumeRecoveryRemainsEntryPaused()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateSessionAsync(DemoStrategySessionStatus.Interrupted);
+        var pausedAtUtc = harness.Start.AddMinutes(1);
+        await harness.UpdateSessionAsync(session.Id, item =>
+        {
+            item.NewEntriesPaused = true;
+            item.NewEntriesPausedAtUtc = pausedAtUtc;
+        });
+
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+
+        var recovered = await harness.SessionAsync(session.Id);
+        Assert.Equal(DemoStrategySessionStatus.Running, recovered.Status);
+        Assert.True(recovered.NewEntriesPaused);
+        Assert.Equal(pausedAtUtc, recovered.NewEntriesPausedAtUtc);
+
+        var intent = (await harness.DeliverFirstSignalAsync(session))!;
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, intent.Status);
+        Assert.Null(intent.DemoExecutionId);
+        await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+
+        var persisted = Assert.Single(await harness.IntentsAsync(), item => item.Id == intent.Id);
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status);
+        Assert.Null(persisted.DemoExecutionId);
+        Assert.Empty(harness.Recorder.Submissions);
+    }
+
     [Theory]
     [InlineData("TP", false)]
     [InlineData("Expert", false)]
@@ -1052,6 +1306,8 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         public async Task<string?> IntentReasonAsync() => (await FirstIntentAsync())!.Reason;
         public async Task<IReadOnlyList<DemoStrategyIntentStatus>> IntentStatusesAsync(int? sessionId = null) { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategyIntents.Where(item => sessionId == null || item.DemoStrategySessionId == sessionId).Select(item => item.Status).ToListAsync(); }
         public async Task<DemoStrategySessionStatus> SessionStatusAsync(int id) { await using var scope = provider.CreateAsyncScope(); return (await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategySessions.SingleAsync(item => item.Id == id)).Status; }
+        public async Task<DemoStrategySession> SessionAsync(int id) { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategySessions.AsNoTracking().SingleAsync(item => item.Id == id); }
+        public async Task UpdateSessionAsync(int id, Action<DemoStrategySession> update) { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var session = await db.DemoStrategySessions.SingleAsync(item => item.Id == id); update(session); await db.SaveChangesAsync(); }
         public async Task<DemoExecutionState> ExecutionStateAsync(Guid id) { await using var scope = provider.CreateAsyncScope(); return (await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoExecutions.SingleAsync(item => item.ClientExecutionId == id)).State; }
         public async Task<int> ExecutionIdAsync(Guid id) { await using var scope = provider.CreateAsyncScope(); return (await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoExecutions.SingleAsync(item => item.ClientExecutionId == id)).Id; }
         public async Task<int> ExecutionCountAsync(Guid id) { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoExecutions.CountAsync(item => item.ClientExecutionId == id); }
