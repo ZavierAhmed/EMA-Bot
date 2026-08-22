@@ -7,6 +7,7 @@ const navigation = [
   ['Backtests', '/backtests'],
   ['Strategy Optimizer', '/optimizer'],
   ['Paper Trading', '/paper-trading'],
+  ['Exness Demo', '/demo-trading'],
   ['Trades', '/trades'],
   ['Symbols', '/symbols'],
   ['Settings', '/settings'],

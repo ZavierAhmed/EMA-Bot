@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
+import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type LineWidth, type UTCTimestamp } from 'lightweight-charts'
 import type { PaperRuntimeCandle, PaperTrade, TradeChartData } from '../api'
 
 const utc = (value: string) => Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp
@@ -9,7 +9,7 @@ export function PaperPositionChart({ data, trade, formingCandle, bid, ask }: { d
   const host = useRef<HTMLDivElement>(null); const chart = useRef<IChartApi | null>(null); const series = useRef<Series | null>(null); const initial = useRef(true)
   useEffect(() => {
     if (!host.current) return
-    const instance = createChart(host.current, { autoSize: true, height: 460, layout: { background: { color: '#fff' }, textColor: '#334155' } }); const line = (color: string, title: string, width = 2) => instance.addSeries(LineSeries, { color, lineWidth: width, title })
+    const instance = createChart(host.current, { autoSize: true, height: 460, layout: { background: { color: '#fff' }, textColor: '#334155' } }); const line = (color: string, title: string, width: LineWidth = 2) => instance.addSeries(LineSeries, { color, lineWidth: width, title })
     series.current = { candles: instance.addSeries(CandlestickSeries, { upColor: '#16a34a', downColor: '#dc2626', borderVisible: false, wickUpColor: '#16a34a', wickDownColor: '#dc2626' }), ema9: line('#111827', 'EMA 9'), ema15: line('#2563eb', 'EMA 15'), ema100: line('#dc2626', 'EMA 100'), entry: line('#64748b', 'Entry'), stop: line('#991b1b', 'SL'), target: line('#15803d', 'TP'), bid: line('#0ea5e9', 'Bid', 1), ask: line('#f59e0b', 'Ask', 1), executableExit: line('#7c3aed', 'Executable Exit', 3) }; chart.current = instance; initial.current = true
     return () => { series.current = null; chart.current = null; instance.remove() }
   }, [trade.id])
