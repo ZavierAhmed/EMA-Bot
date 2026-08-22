@@ -348,7 +348,7 @@ bool DemoExecutionAllowed()
 }
 void SendExecutionAccount(const string request_id)
 {
-   const string payload="{\"accountFingerprint\":\""+JsonEscape(AccountFingerprint())+"\",\"server\":\""+JsonEscape(AccountInfoString(ACCOUNT_SERVER))+"\",\"tradeMode\":\""+AccountModeName()+"\",\"accountTradeAllowed\":"+(AccountTradingAllowed() ? "true" : "false")+",\"expertTradeAllowed\":"+(ExpertTradingAllowed() ? "true" : "false")+",\"demoExecutionEnabled\":"+(InpEnableDemoExecution ? "true" : "false")+",\"demoExecutionAllowed\":"+(DemoExecutionAllowed() ? "true" : "false")+"}"; SendResponse("GetExecutionAccount",request_id,payload);
+   const string payload="{\"accountFingerprint\":\""+JsonEscape(AccountFingerprint())+"\",\"server\":\""+JsonEscape(AccountInfoString(ACCOUNT_SERVER))+"\",\"tradeMode\":\""+AccountModeName()+"\",\"accountTradeAllowed\":"+(AccountTradingAllowed() ? "true" : "false")+",\"expertTradeAllowed\":"+(ExpertTradingAllowed() ? "true" : "false")+",\"demoExecutionEnabled\":"+(InpEnableDemoExecution ? "true" : "false")+",\"demoExecutionAllowed\":"+(DemoExecutionAllowed() ? "true" : "false")+",\"eaBuildId\":\"E11.7A1A1\",\"supportsExactProtectionReadback\":true,\"supportsNativeExitReason\":true}"; SendResponse("GetExecutionAccount",request_id,payload);
 }
 bool TryExecutionRequest(const string operation,const string request_id,const string payload,string &symbol,string &side,double &volume,double &sl,double &tp,long &magic,string &marker,long &position)
 {

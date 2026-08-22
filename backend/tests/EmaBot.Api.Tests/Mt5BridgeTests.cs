@@ -413,6 +413,38 @@ public sealed class Mt5ExecutionBridgeServerTests
         Assert.Equal("DemoSafetyGate", exception.Code); Assert.Equal("Synthetic gate rejection.", exception.Message); Assert.False(exception.Retryable); Assert.Equal(42, exception.NativeCode);
     }
 
+    [Fact]
+    public void LegacyExecutionAccountPayload_DeserializesAsCapabilityUnsupported()
+    {
+        const string json = "{\"accountFingerprint\":\"test-fingerprint\",\"server\":\"test-server\",\"tradeMode\":\"Demo\",\"accountTradeAllowed\":true,\"expertTradeAllowed\":true,\"demoExecutionEnabled\":true,\"demoExecutionAllowed\":true}";
+        var payload = JsonSerializer.Deserialize<Mt5ExecutionAccountPayload>(json, Mt5ExecutionBridgeProtocol.JsonOptions);
+
+        Assert.NotNull(payload);
+        Assert.Null(payload.EaBuildId);
+        Assert.False(payload.SupportsExactProtectionReadback);
+        Assert.False(payload.SupportsNativeExitReason);
+    }
+
+    [Fact]
+    public void CurrentExecutionAccountPayload_RoundTripsCapabilities()
+    {
+        var account = new Mt5ExecutionAccountPayload("test-fingerprint", "test-server", "Demo", true, true, true, true, "E11.7A1A1", true, true);
+        var json = JsonSerializer.Serialize(account, Mt5ExecutionBridgeProtocol.JsonOptions);
+        var payload = JsonSerializer.Deserialize<Mt5ExecutionAccountPayload>(json, Mt5ExecutionBridgeProtocol.JsonOptions);
+
+        Assert.NotNull(payload);
+        Assert.Equal("test-fingerprint", payload.AccountFingerprint);
+        Assert.Equal("test-server", payload.Server);
+        Assert.Equal("Demo", payload.TradeMode);
+        Assert.True(payload.AccountTradeAllowed);
+        Assert.True(payload.ExpertTradeAllowed);
+        Assert.True(payload.DemoExecutionEnabled);
+        Assert.True(payload.DemoExecutionAllowed);
+        Assert.Equal("E11.7A1A1", payload.EaBuildId);
+        Assert.True(payload.SupportsExactProtectionReadback);
+        Assert.True(payload.SupportsNativeExitReason);
+    }
+
     private static async Task WriteAsync(Stream stream, Mt5ExecutionEnvelope envelope)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(envelope, Mt5ExecutionBridgeProtocol.JsonOptions);

@@ -43,6 +43,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             if (!_options.DemoOnly) return new(false, "Demo-only execution safety lock is not enabled.", account);
             if (!account.DemoExecutionEnabled) return new(false, "MT5 EA Demo execution is disabled.", account);
             if (!account.DemoExecutionAllowed) return new(false, "MT5 EA Demo execution safety gate failed.", account);
+            if (!account.SupportsExactProtectionReadback || !account.SupportsNativeExitReason) return new(false, "MT5 execution EA does not support the required broker-evidence capabilities.", account);
             return new(true, "Demo execution preflight passed.", account);
         }
         catch (Exception exception) when (exception is Mt5ExecutionBridgeException or Mt5ExecutionBridgeRejectedException or Mt5ExecutionBridgeUnavailableException or Mt5ExecutionBridgeAmbiguousException)

@@ -361,7 +361,7 @@ public sealed class DemoExecutionManagementTests
         {
             object response = operation switch
             {
-                Mt5ExecutionOperation.GetExecutionAccount => new Mt5ExecutionAccountPayload("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true),
+                Mt5ExecutionOperation.GetExecutionAccount => new Mt5ExecutionAccountPayload("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true, "E11.7A1A1", true, true),
                 Mt5ExecutionOperation.GetPosition => PositionResult,
                 Mt5ExecutionOperation.GetExecutionHistory => new Mt5ExecutionHistoryPayload([]),
                 Mt5ExecutionOperation.ModifyPositionProtection => Modify((Mt5ModifyPositionProtectionRequest)payload!),

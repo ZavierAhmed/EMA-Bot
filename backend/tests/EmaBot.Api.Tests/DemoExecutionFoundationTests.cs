@@ -95,7 +95,25 @@ public sealed class DemoExecutionFoundationTests
 
         var readiness = await Service(database, bridge).ReadinessAsync(default);
 
-        Assert.True(readiness.Ready); Assert.Equal("Demo execution preflight passed.", readiness.Reason);
+        Assert.True(readiness.Ready); Assert.Equal("Demo execution preflight passed.", readiness.Reason); Assert.NotNull(readiness.Account); Assert.Equal("E11.7A1A1", readiness.Account.EaBuildId); Assert.True(readiness.Account.SupportsExactProtectionReadback); Assert.True(readiness.Account.SupportsNativeExitReason);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenProtectionReadbackCapabilityIsMissing_FailsClosed()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { AccountResult = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true, "E11.7A1A1", false, true) };
+        var readiness = await Service(database, bridge).ReadinessAsync(default);
+
+        Assert.False(readiness.Ready); Assert.Equal("MT5 execution EA does not support the required broker-evidence capabilities.", readiness.Reason); Assert.NotNull(readiness.Account);
+    }
+
+    [Fact]
+    public async Task Readiness_WhenNativeExitCapabilityIsMissing_FailsClosed()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { AccountResult = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true, "E11.7A1A1", true, false) };
+        var readiness = await Service(database, bridge).ReadinessAsync(default);
+
+        Assert.False(readiness.Ready); Assert.Equal("MT5 execution EA does not support the required broker-evidence capabilities.", readiness.Reason); Assert.NotNull(readiness.Account);
     }
 
     [Fact]
@@ -244,6 +262,38 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public async Task ExactOpenPositionReadback_PersistsBrokerNativeProtection()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 123456, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m, StopLoss: 78569.64m, TakeProfit: 78876.42m) }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.RequestedStopLoss = 78000m; execution.RequestedTakeProfit = 79000m; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+        Assert.Equal(DemoExecutionState.Open, result!.State); Assert.Equal(78569.64m, result.CurrentStopLoss); Assert.Equal(78876.42m, result.CurrentTakeProfit); Assert.NotNull(result.ProtectionObservedAtUtc); Assert.Equal("ExactPositionTicket", result.ReconciliationSource); Assert.Equal(123456, result.PositionTicket); Assert.Equal(123456, result.PositionIdentifier);
+    }
+
+    [Fact]
+    public async Task ExactOpenPositionReadback_WhenStopLossMissing_ClearsStaleProtection()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 123456, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m, StopLoss: null, TakeProfit: 78876.42m) }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.RequestedStopLoss = 77000m; execution.RequestedTakeProfit = 80000m; execution.CurrentStopLoss = 78000m; execution.CurrentTakeProfit = 79000m; execution.ProtectionObservedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1); database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+        Assert.Equal(DemoExecutionState.Open, result!.State); Assert.Null(result.CurrentStopLoss); Assert.Equal(78876.42m, result.CurrentTakeProfit); Assert.NotNull(result.ProtectionObservedAtUtc); Assert.Equal("ExactPositionTicket", result.ReconciliationSource);
+    }
+
+    [Fact]
+    public async Task ExactOpenPositionReadback_WhenTakeProfitMissing_ClearsStaleProtection()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 123456, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m, StopLoss: 78569.64m, TakeProfit: null) }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.RequestedStopLoss = 77000m; execution.RequestedTakeProfit = 80000m; execution.CurrentStopLoss = 78000m; execution.CurrentTakeProfit = 79000m; execution.ProtectionObservedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1); database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+        Assert.Equal(DemoExecutionState.Open, result!.State); Assert.Equal(78569.64m, result.CurrentStopLoss); Assert.Null(result.CurrentTakeProfit); Assert.NotNull(result.ProtectionObservedAtUtc); Assert.Equal("ExactPositionTicket", result.ReconciliationSource);
+    }
+
+    [Fact]
+    public async Task ExactOpenPositionReadback_WhenPositionIdentifierMismatches_DoesNotAdoptProtection()
+    {
+        await using var database = NewDatabase(); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 654321, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m, StopLoss: 78569.64m, TakeProfit: 78876.42m) }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.CurrentStopLoss = 78000m; execution.CurrentTakeProfit = 79000m; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+        Assert.Equal(DemoExecutionState.ReconciliationRequired, result!.State); Assert.NotEqual(78569.64m, result.CurrentStopLoss); Assert.NotEqual(78876.42m, result.CurrentTakeProfit);
+    }
+
+    [Fact]
     public async Task PositionTicketWithoutIdentifier_NeverCallsNativeGetPosition()
     {
         await using var database = NewDatabase(); var bridge = new FakeBridge(); var execution = Uncertain(); execution.PositionTicket = 300; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
@@ -320,6 +370,36 @@ public sealed class DemoExecutionFoundationTests
         var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
 
         Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("SL", result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted); Assert.Equal(201, result.ExitDealTicket);
+    }
+
+    [Fact]
+    public async Task FirstExactTpExitReason_PersistsWithoutConflict()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), "TP")] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("TP", result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted); Assert.Equal(201, result.ExitDealTicket); Assert.Equal("NativePositionHistory", result.ReconciliationSource);
+    }
+
+    [Fact]
+    public async Task ExactExitAtRequestedStopPrice_WithoutNativeReason_DoesNotInferSl()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.RequestedStopLoss = 78569.64m; execution.RequestedTakeProfit = 78876.42m;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), null) with { ExecutionPrice = 78569.64m }] };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("NativePositionHistory", result.ReconciliationSource); Assert.Equal(201, result.ExitDealTicket); Assert.Null(result.NativeExitReason); Assert.False(result.NativeExitReasonConflicted);
+    }
+
+    [Fact]
+    public async Task ExactNativeExitReason_IsDurablyPersistedAcrossDatabaseReload()
+    {
+        var name = Guid.NewGuid().ToString(); var options = new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(name).Options; await using (var database = new EmaBotDbContext(options)) { var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), "SL")] }; database.DemoExecutions.Add(execution); await database.SaveChangesAsync(); var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default); Assert.Equal(DemoExecutionState.Closed, result!.State); }
+        await using var fresh = new EmaBotDbContext(options); var persisted = await fresh.DemoExecutions.SingleAsync(item => item.EntryDealTicket == 200);
+        Assert.Equal(DemoExecutionState.Closed, persisted.State); Assert.Equal("SL", persisted.NativeExitReason); Assert.False(persisted.NativeExitReasonConflicted); Assert.Equal(201, persisted.ExitDealTicket); Assert.Equal("NativePositionHistory", persisted.ReconciliationSource); Assert.NotNull(persisted.ClosedAtUtc);
     }
 
     [Fact]
@@ -562,7 +642,7 @@ public sealed class DemoExecutionFoundationTests
         public IReadOnlyList<Mt5PositionHistoryDeal> PositionHistory { get; init; } = [];
         public Mt5ClosePositionResultPayload CloseResult { get; init; } = new(true, "Done", "closed", 789, 0.01m, 1.1m, true);
         public Mt5SubmitOrderResultPayload SubmitResult { get; init; } = new(true, "Done", "ok", 100, 200, 123, 123, 0.01m, 1.1m, false, true);
-        public Mt5ExecutionAccountPayload AccountResult { get; init; } = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true);
+        public Mt5ExecutionAccountPayload AccountResult { get; init; } = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true, "E11.7A1A1", true, true);
         public Exception? OrderCheckException { get; init; }
         public Exception? SubmitException { get; init; }
         public Exception? CloseException { get; init; }
