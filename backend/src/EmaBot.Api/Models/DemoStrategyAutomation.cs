@@ -23,6 +23,7 @@ public sealed class DemoStrategySession
     public string? FailureMessage { get; set; }
     public bool NewEntriesPaused { get; set; }
     public DateTimeOffset? NewEntriesPausedAtUtc { get; set; }
+    public decimal InitialAllocation { get; set; }
     public bool AutomationEnabledAtCreation { get; set; }
     public decimal FixedLots { get; set; }
     public decimal RiskReward { get; set; }

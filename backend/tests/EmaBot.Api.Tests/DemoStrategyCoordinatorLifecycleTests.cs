@@ -37,6 +37,85 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
     }
 
     [Fact]
+    public async Task AffordableMarginAndStopRisk_AllowsNormalSubmit()
+    {
+        await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = true; harness.Calculator.RequiredMargin = 80m; harness.Calculator.Profit = -20m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!;
+        Assert.Equal(DemoStrategyIntentStatus.WaitingForEntryWindow, intent.Status); await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+        Assert.Equal(1, harness.Calculator.MarginCalls); Assert.Equal(1, harness.Calculator.ProfitCalls); Assert.Equal("XAUUSDm", harness.Calculator.LastMarginRequest!.BrokerSymbol); Assert.Equal(intent.IntendedVolumeLots, harness.Calculator.LastMarginRequest.VolumeLots); Assert.Equal(100.2m, harness.Calculator.LastMarginRequest.OpenPrice); Assert.Equal(intent.StructuralStopLoss, harness.Calculator.LastProfitRequest!.ClosePrice); Assert.Single(harness.Recorder.Submissions); Assert.Equal(DemoStrategyIntentStatus.ExecutionLinked, await harness.IntentStatusAsync());
+    }
+
+    [Fact]
+    public async Task MarginAboveBalance_BlocksBeforeSubmit()
+    {
+        await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = true; harness.Calculator.RequiredMargin = 101m; harness.Calculator.Profit = -20m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!; await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+        var persisted = (await harness.FirstIntentAsync())!; Assert.Equal(1, harness.Calculator.MarginCalls); Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Equal(0, await harness.ExecutionCountAsync(intent.ClientExecutionId)); Assert.Empty(harness.Recorder.Submissions); Assert.Contains("margin", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task StopRiskAboveBalance_BlocksBeforeSubmit()
+    {
+        await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = true; harness.Calculator.RequiredMargin = 80m; harness.Calculator.Profit = -101m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!; await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+        var persisted = (await harness.FirstIntentAsync())!; Assert.Equal(1, harness.Calculator.MarginCalls); Assert.Equal(1, harness.Calculator.ProfitCalls); Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Equal(0, await harness.ExecutionCountAsync(intent.ClientExecutionId)); Assert.Empty(harness.Recorder.Submissions); Assert.Contains("stop risk", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BudgetCurrencyMismatch_FailsClosed()
+    {
+        await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = true; harness.Calculator.RequiredMargin = 80m; harness.Calculator.MarginAccountCurrency = "USD"; harness.Calculator.Profit = -20m; harness.Calculator.ProfitAccountCurrency = "EUR";
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!; await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+        var persisted = (await harness.FirstIntentAsync())!; Assert.Equal(1, harness.Calculator.MarginCalls); Assert.Equal(1, harness.Calculator.ProfitCalls); Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Empty(harness.Recorder.Submissions); Assert.Contains("currency", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BrokerPnlCapabilityMissing_BlocksEntry()
+    {
+        await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = false; harness.Calculator.RequiredMargin = 80m; harness.Calculator.Profit = -20m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!; await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+        var persisted = (await harness.FirstIntentAsync())!; Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Empty(harness.Recorder.Submissions); Assert.Equal(0, harness.Calculator.MarginCalls); Assert.Equal(0, harness.Calculator.ProfitCalls); Assert.Contains("P/L", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ZeroAllocationSession_BlocksBeforeSubmit()
+    {
+        await using var harness = new Harness(enabled: true); harness.Calculator.RequiredMargin = 10m; harness.Calculator.Profit = -10m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 0m); var intent = (await harness.DeliverFirstSignalAsync(session))!;
+
+        await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+
+        var persisted = (await harness.FirstIntentAsync())!;
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Empty(harness.Recorder.Submissions);
+        Assert.Equal(0, harness.Calculator.MarginCalls); Assert.Equal(0, harness.Calculator.ProfitCalls);
+        Assert.Contains("SessionBudgetBlocked", persisted.Reason); Assert.Contains("positive logical allocation", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task RejectedWithFillEvidence_FailsClosedBeforeSubmit()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync(); await harness.AddLinkedExecutionAsync(session, DemoExecutionState.Rejected, "Buy"); await harness.UpdateExecutionAsync(execution => execution.FilledVolumeLots = .01m);
+        var intent = (await harness.DeliverFirstSignalAsync(session))!;
+
+        await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+
+        var persisted = (await harness.LatestIntentAsync())!;
+        Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Empty(harness.Recorder.Submissions); Assert.Contains("ambiguous broker exposure", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ReentryUsesSameBudgetGate()
+    {
+        await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = true;
+        var session = await harness.CreateAndStartAsync(sameTrendReentryEnabled: true, initialAllocation: 100m); var source = (await harness.DeliverFirstSignalAsync(session))!; await harness.DeliverAsync(harness.Forming(source.ExpectedEntryOpenUtc, 100m, 100.2m)); await harness.MarkExecutionExactSlClosedAsync(source.ClientExecutionId);
+        await harness.UpdateExecutionAsync(execution => { execution.BrokerAccountCurrency = "USD"; execution.BrokerHistoryProfit = 0m; execution.BrokerHistoryCommission = 0m; execution.BrokerHistorySwap = 0m; execution.BrokerHistoryFee = 0m; execution.BrokerHistoryPnlObservedAtUtc = harness.Start; });
+        var reentry = (await harness.DeliverFirstReentryAsync(source.SignalTimeUtc))!; Assert.True(reentry.IsReentry); harness.Calculator.RequiredMargin = 101m;
+        await harness.DeliverAsync(harness.Forming(reentry.ExpectedEntryOpenUtc, 100m, 100.2m));
+        var persisted = (await harness.LatestIntentAsync())!; Assert.True(persisted.IsReentry); Assert.Equal(DemoStrategyIntentStatus.Blocked, persisted.Status); Assert.Null(persisted.DemoExecutionId); Assert.Single(harness.Recorder.Submissions); Assert.Contains("margin", persisted.Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task BearishConfirmation_UsesBidAndSubmitsProtectedShortOnce()
     {
         await using var harness = new Harness(enabled: true, shortSetup: true);
@@ -1201,6 +1280,7 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         public static readonly InstrumentSpec Specification = new("MT5", "XAUUSDm", "XAUUSDm", AssetClass.Commodity, 2, .01m, 100m, .01m, 10m, .01m, "XAU", "USD", "USD", VolumeLimit: 5m, StopsLevelPoints: 10);
         public DateTimeOffset Start { get; } = new(2026, 8, 21, 0, 0, 0, TimeSpan.Zero);
         public Recorder Recorder { get; } = new();
+        public FakeMt5TradeCalculator Calculator { get; } = new();
         public DemoStrategyAutomationOptions Automation { get; }
         public DemoStrategyCoordinator Coordinator { get; }
         private readonly ServiceProvider provider;
@@ -1215,22 +1295,23 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
             var services = new ServiceCollection();
             services.AddDbContext<EmaBotDbContext>(options => options.UseInMemoryDatabase(databaseName));
             services.AddSingleton(Recorder);
+            services.AddSingleton<IMt5TradeCalculator>(Calculator);
             services.AddScoped<IDemoExecutionService, RecordingExecutionService>();
             provider = services.BuildServiceProvider();
             Automation = new DemoStrategyAutomationOptions { Enabled = enabled, ManagementEnabled = managementEnabled, FixedLots = .01m };
             Coordinator = new DemoStrategyCoordinator(provider.GetRequiredService<IServiceScopeFactory>(), new Resolver(history), new Stream(), new Catalog(spec ?? Specification, tradeMode), new EmaSignalEngine(), Options.Create(Automation), NullLogger<DemoStrategyCoordinator>.Instance);
         }
 
-        public async Task<DemoStrategySession> CreateAndStartAsync(bool waitForConfirmation = true, decimal fixedLots = .01m, decimal riskReward = 2m, bool trailingStopEnabled = false, bool exitOnOppositeCrossover = false, bool sameTrendReentryEnabled = false, int maxReentryAgeBars = 6)
+        public async Task<DemoStrategySession> CreateAndStartAsync(bool waitForConfirmation = true, decimal fixedLots = .01m, decimal riskReward = 2m, bool trailingStopEnabled = false, bool exitOnOppositeCrossover = false, bool sameTrendReentryEnabled = false, int maxReentryAgeBars = 6, decimal initialAllocation = 100000m)
         {
-            var session = await CreateSessionAsync(DemoStrategySessionStatus.Created, waitForConfirmation, fixedLots, riskReward, trailingStopEnabled, exitOnOppositeCrossover, sameTrendReentryEnabled, maxReentryAgeBars);
+            var session = await CreateSessionAsync(DemoStrategySessionStatus.Created, waitForConfirmation, fixedLots, riskReward, trailingStopEnabled, exitOnOppositeCrossover, sameTrendReentryEnabled, maxReentryAgeBars, initialAllocation);
             await Coordinator.StartSessionAsync(session.Id, false, default);
             return session;
         }
-        public async Task<DemoStrategySession> CreateSessionAsync(DemoStrategySessionStatus status, bool waitForConfirmation = true, decimal fixedLots = .01m, decimal riskReward = 2m, bool trailingStopEnabled = false, bool exitOnOppositeCrossover = false, bool sameTrendReentryEnabled = false, int maxReentryAgeBars = 6)
+        public async Task<DemoStrategySession> CreateSessionAsync(DemoStrategySessionStatus status, bool waitForConfirmation = true, decimal fixedLots = .01m, decimal riskReward = 2m, bool trailingStopEnabled = false, bool exitOnOppositeCrossover = false, bool sameTrendReentryEnabled = false, int maxReentryAgeBars = 6, decimal initialAllocation = 100000m)
         {
             await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
-            var session = new DemoStrategySession { Interval = "3m", Status = status, CreatedAtUtc = Start, FixedLots = fixedLots, RiskReward = riskReward, WaitForConfirmationCandle = waitForConfirmation, TrailingStopEnabled = trailingStopEnabled, ExitOnOppositeCrossover = exitOnOppositeCrossover, SameTrendReentryEnabled = sameTrendReentryEnabled, MaxReentryAgeBars = maxReentryAgeBars, Symbols = [new DemoStrategySessionSymbol { Symbol = "XAUUSDm", BrokerSymbol = "XAUUSDm" }] };
+            var session = new DemoStrategySession { Interval = "3m", Status = status, CreatedAtUtc = Start, InitialAllocation = initialAllocation, FixedLots = fixedLots, RiskReward = riskReward, WaitForConfirmationCandle = waitForConfirmation, TrailingStopEnabled = trailingStopEnabled, ExitOnOppositeCrossover = exitOnOppositeCrossover, SameTrendReentryEnabled = sameTrendReentryEnabled, MaxReentryAgeBars = maxReentryAgeBars, Symbols = [new DemoStrategySessionSymbol { Symbol = "XAUUSDm", BrokerSymbol = "XAUUSDm" }] };
             db.DemoStrategySessions.Add(session); await db.SaveChangesAsync(); return session;
         }
         public async Task<DemoStrategyIntent?> DeliverFirstSignalAsync(DemoStrategySession session)
@@ -1277,7 +1358,7 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         {
             await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
             var execution = await db.DemoExecutions.SingleAsync(item => item.ClientExecutionId == clientExecutionId);
-            execution.State = DemoExecutionState.Closed; execution.ClosedAtUtc = closedAt ?? DateTimeOffset.UtcNow; execution.EntryDealTicket = 8001; execution.ExitDealTicket = 9001; execution.PositionIdentifier = 7001; execution.PositionTicket = 7001; execution.AverageFillPrice = 100m; execution.FilledVolumeLots = execution.VolumeLots; execution.ClosedVolumeLots = execution.VolumeLots; execution.NativeExitReason = exitReason; execution.NativeExitReasonConflicted = conflicted;
+            execution.State = DemoExecutionState.Closed; execution.ClosedAtUtc = closedAt ?? DateTimeOffset.UtcNow; execution.EntryDealTicket = 8001; execution.ExitDealTicket = 9001; execution.PositionIdentifier = 7001; execution.PositionTicket = 7001; execution.AverageFillPrice = 100m; execution.FilledVolumeLots = execution.VolumeLots; execution.ClosedVolumeLots = execution.VolumeLots; execution.NativeExitReason = exitReason; execution.NativeExitReasonConflicted = conflicted; execution.BrokerAccountCurrency = "USD"; execution.BrokerHistoryProfit = 0m; execution.BrokerHistoryCommission = 0m; execution.BrokerHistorySwap = 0m; execution.BrokerHistoryFee = 0m; execution.BrokerHistoryPnlObservedAtUtc = Start;
             await db.SaveChangesAsync();
         }
         public async Task UpdateFirstIntentAsync(Action<DemoStrategyIntent> update) { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var intent = await db.DemoStrategyIntents.OrderBy(item => item.Id).FirstAsync(); update(intent); await db.SaveChangesAsync(); }
@@ -1297,7 +1378,7 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
             db.DemoStrategyPositionManagement.Add(new DemoStrategyPositionManagement { DemoStrategySessionId = session.Id, DemoStrategySessionSymbolId = intent.DemoStrategySessionSymbolId, DemoStrategyIntentId = intent.Id, DemoExecutionId = intent.DemoExecutionId!.Value, State = DemoStrategyPositionManagementState.ClosePending, OriginalEntryPrice = 100m, OriginalStopLoss = side == "Buy" ? 90m : 110m, OriginalTakeProfit = side == "Buy" ? 110m : 90m, TakeProfitExtensionState = DemoStrategyTargetExtensionState.NotAttempted, OppositeCloseState = DemoStrategyOppositeCloseState.Pending, OppositeSignalDirection = side == "Buy" ? SignalDirection.Short : SignalDirection.Long, OppositeSignalTimeUtc = Start, CreatedAtUtc = Start, UpdatedAtUtc = Start });
             await db.SaveChangesAsync();
         }
-        public async Task AddExistingExecutionAsync(Guid id, DemoExecutionState state, string side = "Buy", string brokerSymbol = "XAUUSDm") { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); db.DemoExecutions.Add(new DemoExecution { ClientExecutionId = id, State = state, BrokerSymbol = brokerSymbol, Side = side, VolumeLots = .01m, RequestedStopLoss = side == "Buy" ? 90m : 110m, RequestedTakeProfit = side == "Buy" ? 110m : 90m, CurrentStopLoss = side == "Buy" ? 90m : 110m, CurrentTakeProfit = side == "Buy" ? 110m : 90m, AverageFillPrice = 100m, PositionTicket = 300, PositionIdentifier = 400, CorrelationMarker = "EMA-test", CreatedAtUtc = Start }); await db.SaveChangesAsync(); }
+        public async Task AddExistingExecutionAsync(Guid id, DemoExecutionState state, string side = "Buy", string brokerSymbol = "XAUUSDm") { await using var scope = provider.CreateAsyncScope(); var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var noFillTerminal = state is DemoExecutionState.Rejected or DemoExecutionState.Cancelled; db.DemoExecutions.Add(new DemoExecution { ClientExecutionId = id, State = state, BrokerSymbol = brokerSymbol, Side = side, VolumeLots = .01m, RequestedStopLoss = side == "Buy" ? 90m : 110m, RequestedTakeProfit = side == "Buy" ? 110m : 90m, CurrentStopLoss = side == "Buy" ? 90m : 110m, CurrentTakeProfit = side == "Buy" ? 110m : 90m, AverageFillPrice = noFillTerminal ? null : 100m, PositionTicket = noFillTerminal ? null : 300, PositionIdentifier = noFillTerminal ? null : 400, CorrelationMarker = "EMA-test", CreatedAtUtc = Start, BrokerAccountCurrency = state == DemoExecutionState.Closed ? "USD" : null, BrokerHistoryProfit = state == DemoExecutionState.Closed ? 0m : null, BrokerHistoryCommission = state == DemoExecutionState.Closed ? 0m : null, BrokerHistorySwap = state == DemoExecutionState.Closed ? 0m : null, BrokerHistoryFee = state == DemoExecutionState.Closed ? 0m : null, BrokerHistoryPnlObservedAtUtc = state == DemoExecutionState.Closed ? Start : null }); await db.SaveChangesAsync(); }
         public async Task<int> CountIntentsAsync() { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategyIntents.CountAsync(); }
         public async Task<IReadOnlyList<DemoStrategyIntent>> IntentsAsync() { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategyIntents.AsNoTracking().OrderBy(item => item.Id).ToListAsync(); }
         public async Task<DemoStrategyIntent?> FirstIntentAsync(int? sessionId = null) { await using var scope = provider.CreateAsyncScope(); var query = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategyIntents.AsNoTracking(); if (sessionId is not null) query = query.Where(item => item.DemoStrategySessionId == sessionId); return await query.OrderBy(item => item.Id).FirstOrDefaultAsync(); }
@@ -1324,12 +1405,21 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         }
     }
 
-    private sealed class Recorder { public bool Ready { get; set; } = true; public bool ReconcileToClosed { get; set; } public string? ReconcileExitReason { get; set; } public Guid? ConflictSourceWhenReconcilingOther { get; set; } public DemoExecutionState? CloseResultState { get; set; } public bool CloseObservedPersistedRequest { get; set; } public DemoExecutionManagementActionState ModifyState { get; set; } = DemoExecutionManagementActionState.Applied; public DemoExecutionManagementActionState? ReconciledActionState { get; set; } public List<SubmitDemoOrder> Submissions { get; } = []; public List<ModifyDemoProtection> Modifications { get; } = []; public int PersistedIntentObservedAtSubmit { get; set; } public int CloseCalls { get; set; } public int ReconcileCalls { get; set; } }
+    private sealed class Recorder { public bool Ready { get; set; } = true; public bool SupportsBrokerPnlEvidence { get; set; } = true; public bool ReconcileToClosed { get; set; } public string? ReconcileExitReason { get; set; } public Guid? ConflictSourceWhenReconcilingOther { get; set; } public DemoExecutionState? CloseResultState { get; set; } public bool CloseObservedPersistedRequest { get; set; } public DemoExecutionManagementActionState ModifyState { get; set; } = DemoExecutionManagementActionState.Applied; public DemoExecutionManagementActionState? ReconciledActionState { get; set; } public List<SubmitDemoOrder> Submissions { get; } = []; public List<ModifyDemoProtection> Modifications { get; } = []; public int PersistedIntentObservedAtSubmit { get; set; } public int CloseCalls { get; set; } public int ReconcileCalls { get; set; } }
+    private sealed class FakeMt5TradeCalculator : IMt5TradeCalculator
+    {
+        public decimal RequiredMargin { get; set; } = 10m; public string MarginAccountCurrency { get; set; } = "USD";
+        public decimal Profit { get; set; } = -10m; public string ProfitAccountCurrency { get; set; } = "USD";
+        public int MarginCalls { get; private set; } public int ProfitCalls { get; private set; }
+        public Mt5CalculateMarginRequest? LastMarginRequest { get; private set; } public Mt5CalculateProfitRequest? LastProfitRequest { get; private set; }
+        public Task<Mt5MarginCalculationPayload> CalculateMarginAsync(Mt5CalculateMarginRequest request, CancellationToken token) { MarginCalls++; LastMarginRequest = request; return Task.FromResult(new Mt5MarginCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, RequiredMargin, MarginAccountCurrency)); }
+        public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken token) { ProfitCalls++; LastProfitRequest = request; return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, Profit, ProfitAccountCurrency)); }
+    }
     private sealed class RecordingExecutionService(EmaBotDbContext database, Recorder recorder) : IDemoExecutionService
     {
-        public Task<DemoExecutionReadiness> ReadinessAsync(CancellationToken token) => Task.FromResult(new DemoExecutionReadiness(recorder.Ready, recorder.Ready ? "ready" : "not ready"));
+        public Task<DemoExecutionReadiness> ReadinessAsync(CancellationToken token) => Task.FromResult(new DemoExecutionReadiness(recorder.Ready, recorder.Ready ? "ready" : "not ready", new Mt5ExecutionAccountPayload("test", "test", "Demo", true, true, true, true, SupportsBrokerPnlEvidence: recorder.SupportsBrokerPnlEvidence)));
         public async Task<DemoExecution> SubmitAsync(SubmitDemoOrder request, CancellationToken token) { recorder.PersistedIntentObservedAtSubmit = await database.DemoStrategyIntents.CountAsync(item => item.ClientExecutionId == request.ClientExecutionId, token); recorder.Submissions.Add(request); var execution = new DemoExecution { ClientExecutionId = request.ClientExecutionId, State = DemoExecutionState.Open, BrokerSymbol = request.BrokerSymbol, Side = request.Side, VolumeLots = request.VolumeLots, RequestedStopLoss = request.StopLoss, RequestedTakeProfit = request.TakeProfit, CorrelationMarker = "EMA-test", CreatedAtUtc = DateTimeOffset.UtcNow }; database.DemoExecutions.Add(execution); await database.SaveChangesAsync(token); return execution; }
-        public async Task<DemoExecution?> ReconcileAsync(Guid id, CancellationToken token) { recorder.ReconcileCalls++; var execution = await database.DemoExecutions.SingleOrDefaultAsync(item => item.ClientExecutionId == id, token); if (recorder.ConflictSourceWhenReconcilingOther is { } sourceId && id != sourceId) { var source = await database.DemoExecutions.SingleAsync(item => item.ClientExecutionId == sourceId, token); source.NativeExitReasonConflicted = true; await database.SaveChangesAsync(token); } if (execution is not null && recorder.ReconcileToClosed) { execution.State = DemoExecutionState.Closed; execution.ClosedAtUtc = DateTimeOffset.UtcNow; execution.ExitDealTicket = 9001; execution.EntryDealTicket ??= 8001; execution.PositionIdentifier ??= 7001; execution.FilledVolumeLots ??= execution.VolumeLots; execution.ClosedVolumeLots = execution.FilledVolumeLots; execution.NativeExitReason = recorder.ReconcileExitReason; await database.SaveChangesAsync(token); } return execution; }
+        public async Task<DemoExecution?> ReconcileAsync(Guid id, CancellationToken token) { recorder.ReconcileCalls++; var execution = await database.DemoExecutions.SingleOrDefaultAsync(item => item.ClientExecutionId == id, token); if (recorder.ConflictSourceWhenReconcilingOther is { } sourceId && id != sourceId) { var source = await database.DemoExecutions.SingleAsync(item => item.ClientExecutionId == sourceId, token); source.NativeExitReasonConflicted = true; await database.SaveChangesAsync(token); } if (execution is not null && recorder.ReconcileToClosed) { execution.State = DemoExecutionState.Closed; execution.ClosedAtUtc = DateTimeOffset.UtcNow; execution.ExitDealTicket = 9001; execution.EntryDealTicket ??= 8001; execution.PositionIdentifier ??= 7001; execution.FilledVolumeLots ??= execution.VolumeLots; execution.ClosedVolumeLots = execution.FilledVolumeLots; execution.NativeExitReason = recorder.ReconcileExitReason; execution.BrokerAccountCurrency = "USD"; execution.BrokerHistoryProfit = 0m; execution.BrokerHistoryCommission = 0m; execution.BrokerHistorySwap = 0m; execution.BrokerHistoryFee = 0m; execution.BrokerHistoryPnlObservedAtUtc = DateTimeOffset.UtcNow; await database.SaveChangesAsync(token); } return execution; }
         public async Task<DemoExecution?> CloseAsync(Guid id, CancellationToken token) { recorder.CloseCalls++; recorder.CloseObservedPersistedRequest = await database.DemoStrategyPositionManagement.AnyAsync(item => item.OppositeCloseState == DemoStrategyOppositeCloseState.CloseRequested && item.OppositeCloseRequestedAtUtc != null, token); var execution = await database.DemoExecutions.SingleOrDefaultAsync(item => item.ClientExecutionId == id, token); if (execution is not null && recorder.CloseResultState is { } state) { execution.State = state; await database.SaveChangesAsync(token); } return execution; }
         public Task<DemoExecutionManagementAction> ModifyProtectionAsync(ModifyDemoProtection request, CancellationToken token) { recorder.Modifications.Add(request); return Task.FromResult(new DemoExecutionManagementAction { ClientManagementActionId = request.ClientManagementActionId, State = recorder.ModifyState }); }
         public Task<DemoExecutionManagementAction?> ReconcileManagementActionAsync(Guid clientManagementActionId, CancellationToken token) => Task.FromResult(recorder.ReconciledActionState is { } state ? new DemoExecutionManagementAction { ClientManagementActionId = clientManagementActionId, State = state } : null);

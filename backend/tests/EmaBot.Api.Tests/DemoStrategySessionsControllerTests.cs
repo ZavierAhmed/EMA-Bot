@@ -109,7 +109,7 @@ public sealed class DemoStrategySessionsControllerTests
     public async Task Create_WithEnabledExactMt5Symbol_CreatesSession()
     {
         var (controller, database) = CreateController(); database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }); await database.SaveChangesAsync();
-        var result = Assert.IsType<CreatedAtActionResult>((await controller.Create(new("3m", ["BTCUSDm"]), CancellationToken.None)).Result); var response = Assert.IsType<DemoStrategySessionResponse>(result.Value);
+        var result = Assert.IsType<CreatedAtActionResult>((await controller.Create(new("3m", ["BTCUSDm"], 100m), CancellationToken.None)).Result); var response = Assert.IsType<DemoStrategySessionResponse>(result.Value);
         Assert.Equal("3m", response.Interval); Assert.Equal("BTCUSDm", Assert.Single(response.Symbols).BrokerSymbol); Assert.True(response.AutomationEnabledAtCreation); Assert.Equal(.01m, response.FixedLots); Assert.NotNull(await database.DemoStrategySessions.FindAsync(response.Id));
     }
 
@@ -117,7 +117,82 @@ public sealed class DemoStrategySessionsControllerTests
     public async Task Create_RequiresExactOrdinalMt5Symbol()
     {
         var (controller, database) = CreateController(); database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }); await database.SaveChangesAsync();
-        Assert.IsType<BadRequestObjectResult>((await controller.Create(new("3m", ["btcusdm"]), CancellationToken.None)).Result);
+        Assert.IsType<BadRequestObjectResult>((await controller.Create(new("3m", ["btcusdm"], 100m), CancellationToken.None)).Result);
+    }
+
+    [Fact]
+    public async Task Create_RequiresPositiveInitialAllocation()
+    {
+        var (controller, database) = CreateController(); database.MonitoredSymbols.Add(new MonitoredSymbol { Symbol = "BTCUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }); await database.SaveChangesAsync();
+        Assert.IsType<BadRequestObjectResult>((await controller.Create(new("3m", ["BTCUSDm"], 0m), CancellationToken.None)).Result);
+    }
+
+    [Fact]
+    public async Task Create_OvernightAllocationModeRequiresExactlyOneSymbol()
+    {
+        var (controller, database) = CreateController(); database.MonitoredSymbols.AddRange(new MonitoredSymbol { Symbol = "BTCUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }, new MonitoredSymbol { Symbol = "XAUUSDm", Source = MarketDataSource.Mt5Exness, IsEnabled = true }); await database.SaveChangesAsync();
+        Assert.IsType<BadRequestObjectResult>((await controller.Create(new("3m", ["BTCUSDm", "XAUUSDm"], 100m), CancellationToken.None)).Result);
+    }
+
+    [Fact]
+    public async Task InitialAllocation100_NoHistory_HasBalance100()
+    {
+        var (controller, database) = CreateController(); var session = Session(DemoStrategySessionStatus.Created, 1); session.InitialAllocation = 100m; database.DemoStrategySessions.Add(session); await database.SaveChangesAsync();
+        var result = Assert.IsType<OkObjectResult>(await controller.Get(session.Id, CancellationToken.None)); var response = Assert.IsType<DemoStrategySessionResponse>(result.Value);
+        Assert.Empty(await database.DemoExecutions.ToListAsync());
+        Assert.Equal(100m, response.InitialAllocation); Assert.Equal(0m, response.Budget.RealizedPnl); Assert.Equal(0m, response.Budget.UnrealizedPnl); Assert.Equal(100m, response.Budget.Balance); Assert.Equal(100m, response.Budget.Equity); Assert.True(response.Budget.EvidenceReady);
+    }
+
+    [Fact]
+    public async Task ClosedExactLoss_ReducesNextBalance()
+    {
+        var (controller, database) = CreateController(); var session = Session(DemoStrategySessionStatus.Created, 1); session.InitialAllocation = 100m; var execution = AddClosedExecutionEvidence(session, -25m); database.DemoStrategySessions.Add(session); await database.SaveChangesAsync();
+        var response = Assert.IsType<DemoStrategySessionResponse>(Assert.IsType<OkObjectResult>(await controller.Get(session.Id, CancellationToken.None)).Value); var evidence = DemoExecutionBrokerMoneyEvidenceEvaluator.Evaluate(execution);
+        Assert.True(evidence.Available); Assert.Equal(-25m, evidence.Amount); Assert.Equal("USD", response.Budget.AccountCurrency); Assert.Equal(-25m, response.Budget.RealizedPnl); Assert.Equal(0m, response.Budget.UnrealizedPnl); Assert.Equal(75m, response.Budget.Balance); Assert.Equal(75m, response.Budget.Equity); Assert.True(response.Budget.EvidenceReady);
+    }
+
+    [Fact]
+    public async Task ClosedExactProfit_IncreasesNextBalance()
+    {
+        var (controller, database) = CreateController(); var session = Session(DemoStrategySessionStatus.Created, 1); session.InitialAllocation = 100m; var execution = AddClosedExecutionEvidence(session, 20m); database.DemoStrategySessions.Add(session); await database.SaveChangesAsync();
+        var response = Assert.IsType<DemoStrategySessionResponse>(Assert.IsType<OkObjectResult>(await controller.Get(session.Id, CancellationToken.None)).Value); var evidence = DemoExecutionBrokerMoneyEvidenceEvaluator.Evaluate(execution);
+        Assert.True(evidence.Available); Assert.Equal(20m, evidence.Amount); Assert.Equal("USD", response.Budget.AccountCurrency); Assert.Equal(20m, response.Budget.RealizedPnl); Assert.Equal(0m, response.Budget.UnrealizedPnl); Assert.Equal(120m, response.Budget.Balance); Assert.Equal(120m, response.Budget.Equity); Assert.True(response.Budget.EvidenceReady);
+    }
+
+    [Fact]
+    public async Task IncompleteClosedBrokerEvidence_FailsClosed()
+    {
+        var (controller, database) = CreateController(); var session = Session(DemoStrategySessionStatus.Created, 1); session.InitialAllocation = 100m; var execution = AddClosedExecutionEvidence(session, -25m); execution.BrokerHistoryFee = null; database.DemoStrategySessions.Add(session); await database.SaveChangesAsync();
+        var evidence = DemoExecutionBrokerMoneyEvidenceEvaluator.Evaluate(execution); var response = Assert.IsType<DemoStrategySessionResponse>(Assert.IsType<OkObjectResult>(await controller.Get(session.Id, CancellationToken.None)).Value);
+        Assert.False(evidence.Available); Assert.False(response.Budget.EvidenceReady); Assert.NotNull(response.Budget.Reason); Assert.Null(response.Budget.RealizedPnl); Assert.Null(response.Budget.Balance); Assert.Null(response.Budget.Equity);
+    }
+
+    [Fact]
+    public async Task OtherSessionExecution_DoesNotAffectBudget()
+    {
+        var (controller, database) = CreateController(); var first = Session(DemoStrategySessionStatus.Created, 1); first.InitialAllocation = 100m; var second = Session(DemoStrategySessionStatus.Created, 2); second.InitialAllocation = 100m; AddClosedExecutionEvidence(second, 20m); database.DemoStrategySessions.AddRange(first, second); await database.SaveChangesAsync();
+        var response = Assert.IsType<DemoStrategySessionResponse>(Assert.IsType<OkObjectResult>(await controller.Get(first.Id, CancellationToken.None)).Value);
+        Assert.Equal(0m, response.Budget.RealizedPnl); Assert.Equal(100m, response.Budget.Balance); Assert.Equal(100m, response.Budget.Equity); Assert.True(response.Budget.EvidenceReady);
+    }
+
+    [Fact]
+    public async Task RejectedNoFillExecution_CountsAsZero()
+    {
+        var (controller, database) = CreateController(); var session = Session(DemoStrategySessionStatus.Created, 1); session.InitialAllocation = 100m; AddRejectedExecution(session); database.DemoStrategySessions.Add(session); await database.SaveChangesAsync();
+
+        var response = Assert.IsType<DemoStrategySessionResponse>(Assert.IsType<OkObjectResult>(await controller.Get(session.Id, CancellationToken.None)).Value);
+
+        Assert.Equal(0m, response.Budget.RealizedPnl); Assert.Equal(100m, response.Budget.Balance); Assert.Equal(100m, response.Budget.Equity); Assert.True(response.Budget.EvidenceReady);
+    }
+
+    [Fact]
+    public async Task RejectedWithFillEvidence_FailsClosed()
+    {
+        var (controller, database) = CreateController(); var session = Session(DemoStrategySessionStatus.Created, 1); session.InitialAllocation = 100m; var execution = AddRejectedExecution(session); execution.FilledVolumeLots = .01m; database.DemoStrategySessions.Add(session); await database.SaveChangesAsync();
+
+        var response = Assert.IsType<DemoStrategySessionResponse>(Assert.IsType<OkObjectResult>(await controller.Get(session.Id, CancellationToken.None)).Value);
+
+        Assert.False(response.Budget.EvidenceReady); Assert.Contains("ambiguous", response.Budget.Reason, StringComparison.OrdinalIgnoreCase); Assert.Null(response.Budget.Balance); Assert.Null(response.Budget.Equity);
     }
 
     private static (DemoStrategySessionsController Controller, EmaBotDbContext Database) CreateController(DemoExecutionReadiness? readiness = null, IMt5BridgeRequestClient? bridge = null)
@@ -127,6 +202,16 @@ public sealed class DemoStrategySessionsControllerTests
         var coordinator = new DemoStrategyCoordinator(null!, null!, null!, null!, null!, options, null!);
         var settings = new TradingSettingsService(context, Options.Create(new TradingDefaultsOptions()));
         return (new DemoStrategySessionsController(context, settings, coordinator, options, Options.Create(new DemoExecutionOptions { Enabled = true, DemoOnly = true }), Options.Create(new Mt5ExecutionBridgeOptions { Enabled = true }), new FakeExecutionService(readiness ?? new(false, "not ready")), bridge ?? new FakeBridge(true)), context);
+    }
+    private static DemoExecution AddClosedExecutionEvidence(DemoStrategySession session, decimal brokerHistoryAmount, string currency = "USD")
+    {
+        var at = new DateTimeOffset(2026, 8, 22, 0, 0, 0, TimeSpan.Zero); var execution = new DemoExecution { ClientExecutionId = Guid.NewGuid(), State = DemoExecutionState.Closed, BrokerSymbol = session.Symbols.Single().BrokerSymbol, Side = "Buy", VolumeLots = .01m, BrokerAccountCurrency = currency, BrokerHistoryProfit = brokerHistoryAmount, BrokerHistoryCommission = 0m, BrokerHistorySwap = 0m, BrokerHistoryFee = 0m, BrokerHistoryPnlObservedAtUtc = at, CreatedAtUtc = at };
+        session.Symbols.Single().Intents.Add(new DemoStrategyIntent { Direction = SignalDirection.Long, ClientExecutionId = execution.ClientExecutionId, Status = DemoStrategyIntentStatus.ExecutionLinked, CrossoverTimeUtc = at, SignalTimeUtc = at, ExpectedEntryOpenUtc = at, StructuralStopLoss = 1m, StopSourceTimeUtc = at, IntendedVolumeLots = .01m, DemoExecution = execution }); return execution;
+    }
+    private static DemoExecution AddRejectedExecution(DemoStrategySession session)
+    {
+        var at = new DateTimeOffset(2026, 8, 22, 0, 0, 0, TimeSpan.Zero); var execution = new DemoExecution { ClientExecutionId = Guid.NewGuid(), State = DemoExecutionState.Rejected, BrokerSymbol = session.Symbols.Single().BrokerSymbol, Side = "Buy", VolumeLots = .01m, BrokerRetcode = "rejected", BrokerMessage = "test rejection", CreatedAtUtc = at };
+        session.Symbols.Single().Intents.Add(new DemoStrategyIntent { Direction = SignalDirection.Long, ClientExecutionId = execution.ClientExecutionId, Status = DemoStrategyIntentStatus.Rejected, CrossoverTimeUtc = at, SignalTimeUtc = at, ExpectedEntryOpenUtc = at, StructuralStopLoss = 1m, StopSourceTimeUtc = at, IntendedVolumeLots = .01m, DemoExecution = execution }); return execution;
     }
 
     private static DemoStrategySession Session(DemoStrategySessionStatus status, int offset) => new() { Interval = "3m", Status = status, CreatedAtUtc = DateTimeOffset.UnixEpoch.AddMinutes(offset), FixedLots = .01m, RiskReward = 2m, Symbols = [new() { Symbol = "XAUUSDm", BrokerSymbol = "XAUUSDm" }] };

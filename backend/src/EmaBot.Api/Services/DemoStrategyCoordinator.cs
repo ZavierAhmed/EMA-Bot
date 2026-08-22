@@ -481,6 +481,14 @@ public sealed class DemoStrategyCoordinator(
                 Finish(intent, DemoStrategyIntentStatus.Blocked, "The exact re-entry source is no longer a closed first-generation execution with unconflicted native SL evidence.");
                 await database.SaveChangesAsync(token); continue;
             }
+            if (state.Session.InitialAllocation <= 0m)
+            {
+                Finish(intent, DemoStrategyIntentStatus.Blocked, "SessionBudgetBlocked: this session does not have a positive logical allocation.");
+                await database.SaveChangesAsync(token);
+                continue;
+            }
+            var budgetFailure = await BudgetFailureAsync(database, scope.ServiceProvider.GetRequiredService<IMt5TradeCalculator>(), state.Session, runtime.Symbol.BrokerSymbol, intent, entry.Value, readiness, token);
+            if (budgetFailure is not null) { Finish(intent, DemoStrategyIntentStatus.Blocked, budgetFailure); await database.SaveChangesAsync(token); continue; }
             intent.IntendedTakeProfit = target; intent.Status = DemoStrategyIntentStatus.Submitting; intent.SubmittedAtUtc = DateTimeOffset.UtcNow; intent.UpdatedAtUtc = intent.SubmittedAtUtc;
             await database.SaveChangesAsync(token); // strategy state is durable before DemoExecution submits its own durable broker intent.
             var execution = await executionService.SubmitAsync(new SubmitDemoOrder(intent.ClientExecutionId, runtime.Symbol.BrokerSymbol, intent.Direction == SignalDirection.Long ? "Buy" : "Sell", intent.IntendedVolumeLots, intent.StructuralStopLoss, target), token);
@@ -491,6 +499,42 @@ public sealed class DemoStrategyCoordinator(
             await database.SaveChangesAsync(token);
             logger.LogInformation("Demo strategy intent {IntentId} linked DemoExecution {ExecutionId} in state {ExecutionState}.", intent.Id, execution.Id, execution.State);
         }
+    }
+
+    private static async Task<string?> BudgetFailureAsync(EmaBotDbContext database, IMt5TradeCalculator calculator, DemoStrategySession session, string brokerSymbol, DemoStrategyIntent intent, decimal entry, DemoExecutionReadiness readiness, CancellationToken token)
+    {
+        if (readiness.Account?.SupportsBrokerPnlEvidence != true) return "SessionBudgetBlocked: the MT5 execution EA does not support required broker P/L evidence.";
+        var executions = await database.DemoStrategyIntents.Include(item => item.DemoExecution).Where(item => item.DemoStrategySessionId == session.Id && item.DemoExecutionId != null).Select(item => item.DemoExecution!).ToListAsync(token);
+        decimal realized = 0m; string? currency = null;
+        foreach (var execution in executions)
+        {
+            if (execution.State is DemoExecutionState.Rejected or DemoExecutionState.Cancelled)
+            {
+                if (DemoStrategyBudgetEvidencePolicy.IsConclusiveNoFillTerminal(execution)) continue;
+                return "SessionBudgetBlocked: rejected/cancelled execution has ambiguous broker exposure or monetary evidence.";
+            }
+            if (execution.State != DemoExecutionState.Closed) return "SessionBudgetBlocked: session broker exposure or monetary evidence is not conclusively closed.";
+            var evidence = DemoExecutionBrokerMoneyEvidenceEvaluator.Evaluate(execution);
+            if (!evidence.Available || evidence.Amount is null || string.IsNullOrWhiteSpace(evidence.AccountCurrency)) return "SessionBudgetBlocked: closed broker-money evidence is incomplete.";
+            var evidenceCurrency = evidence.AccountCurrency.Trim();
+            if (currency is not null && !string.Equals(currency, evidenceCurrency, StringComparison.Ordinal)) return "SessionBudgetBlocked: broker account currencies conflict.";
+            currency = evidenceCurrency; realized += evidence.Amount.Value;
+        }
+        var balance = session.InitialAllocation + realized;
+        if (balance <= 0m) return "SessionBudgetBlocked: logical session balance is not positive.";
+        try
+        {
+            var side = intent.Direction == SignalDirection.Long ? "Buy" : "Sell";
+            var margin = await calculator.CalculateMarginAsync(new Mt5CalculateMarginRequest(brokerSymbol, side, intent.IntendedVolumeLots, entry), token);
+            var risk = await calculator.CalculateProfitAsync(new Mt5CalculateProfitRequest(brokerSymbol, side, intent.IntendedVolumeLots, entry, intent.StructuralStopLoss), token);
+            var marginCurrency = margin.AccountCurrency?.Trim(); var riskCurrency = risk.AccountCurrency?.Trim();
+            if (margin.RequiredMargin <= 0m || string.IsNullOrWhiteSpace(marginCurrency) || string.IsNullOrWhiteSpace(riskCurrency) || !string.Equals(marginCurrency, riskCurrency, StringComparison.Ordinal) || currency is not null && !string.Equals(currency, marginCurrency, StringComparison.Ordinal)) return "SessionBudgetBlocked: broker calculation currency evidence is invalid or conflicts.";
+            if (margin.RequiredMargin > balance) return "SessionBudgetBlocked: required broker margin exceeds logical session balance.";
+            if (risk.Profit >= 0m) return "SessionBudgetBlocked: broker initial stop-risk calculation is invalid.";
+            if (decimal.Abs(risk.Profit) > balance) return "SessionBudgetBlocked: broker initial stop risk exceeds logical session balance.";
+            return null;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException) { return "SessionBudgetBlocked: broker-native margin or stop-risk calculation is unavailable."; }
     }
 
     private async Task ResyncAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
