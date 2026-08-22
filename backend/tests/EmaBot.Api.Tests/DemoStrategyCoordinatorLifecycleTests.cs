@@ -46,6 +46,28 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
     }
 
     [Fact]
+    public async Task AffordableLongBudget_UsesLongCalculatorDirectionsAndSubmits()
+    {
+        await using var harness = new Harness(enabled: true); harness.Calculator.RequiredMargin = 80m; harness.Calculator.Profit = -20m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!;
+
+        await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 100m, 100.2m));
+
+        Assert.Equal("Long", harness.Calculator.LastMarginRequest!.Direction); Assert.Equal("Long", harness.Calculator.LastProfitRequest!.Direction); Assert.Single(harness.Recorder.Submissions);
+    }
+
+    [Fact]
+    public async Task AffordableShortBudget_UsesShortCalculatorDirectionsAndSubmits()
+    {
+        await using var harness = new Harness(enabled: true, shortSetup: true); harness.Calculator.RequiredMargin = 80m; harness.Calculator.Profit = -20m;
+        var session = await harness.CreateAndStartAsync(initialAllocation: 100m); var intent = (await harness.DeliverFirstSignalAsync(session))!;
+
+        Assert.Equal(SignalDirection.Short, intent.Direction); await harness.DeliverAsync(harness.Forming(intent.ExpectedEntryOpenUtc, 99.8m, 100.2m));
+
+        Assert.Equal("Short", harness.Calculator.LastMarginRequest!.Direction); Assert.Equal("Short", harness.Calculator.LastProfitRequest!.Direction); Assert.Single(harness.Recorder.Submissions);
+    }
+
+    [Fact]
     public async Task MarginAboveBalance_BlocksBeforeSubmit()
     {
         await using var harness = new Harness(enabled: true); harness.Recorder.SupportsBrokerPnlEvidence = true; harness.Calculator.RequiredMargin = 101m; harness.Calculator.Profit = -20m;

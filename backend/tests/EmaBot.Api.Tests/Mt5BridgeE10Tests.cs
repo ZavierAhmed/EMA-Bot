@@ -20,6 +20,21 @@ public sealed class Mt5BridgeE10Tests
     }
 
     [Fact]
+    public async Task TradeCalculationRequests_UseV1LongShortDirectionContract()
+    {
+        var bridge = new TestMt5BridgeRequestClient();
+        bridge.Responses[Mt5BridgeOperation.CalculateMargin] = Response(Mt5BridgeOperation.CalculateMargin, new Mt5MarginCalculationPayload("XAUUSDm", "Long", .01m, 2400.2m, 35m, "USD"));
+        bridge.Responses[Mt5BridgeOperation.CalculateProfit] = Response(Mt5BridgeOperation.CalculateProfit, new Mt5ProfitCalculationPayload("XAUUSDm", "Short", .01m, 2400m, 2401m, -10m, "USD"));
+        var calculator = new Mt5BridgeTradeCalculator(bridge);
+
+        await calculator.CalculateMarginAsync(new Mt5CalculateMarginRequest("XAUUSDm", "Long", .01m, 2400.2m), CancellationToken.None);
+        var marginRequest = Assert.IsType<Mt5CalculateMarginRequest>(bridge.LastPayload); Assert.Equal("Long", marginRequest.Direction); Assert.NotEqual("Buy", marginRequest.Direction);
+
+        await calculator.CalculateProfitAsync(new Mt5CalculateProfitRequest("XAUUSDm", "Short", .01m, 2400m, 2401m), CancellationToken.None);
+        var profitRequest = Assert.IsType<Mt5CalculateProfitRequest>(bridge.LastPayload); Assert.Equal("Short", profitRequest.Direction); Assert.NotEqual("Sell", profitRequest.Direction);
+    }
+
+    [Fact]
     public void CommissionSemanticsKeepNullDistinctFromConfirmedZero()
     {
         decimal? unconfigured = null;

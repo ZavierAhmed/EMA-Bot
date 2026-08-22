@@ -524,9 +524,9 @@ public sealed class DemoStrategyCoordinator(
         if (balance <= 0m) return "SessionBudgetBlocked: logical session balance is not positive.";
         try
         {
-            var side = intent.Direction == SignalDirection.Long ? "Buy" : "Sell";
-            var margin = await calculator.CalculateMarginAsync(new Mt5CalculateMarginRequest(brokerSymbol, side, intent.IntendedVolumeLots, entry), token);
-            var risk = await calculator.CalculateProfitAsync(new Mt5CalculateProfitRequest(brokerSymbol, side, intent.IntendedVolumeLots, entry, intent.StructuralStopLoss), token);
+            var calculationDirection = intent.Direction == SignalDirection.Long ? "Long" : "Short";
+            var margin = await calculator.CalculateMarginAsync(new Mt5CalculateMarginRequest(brokerSymbol, calculationDirection, intent.IntendedVolumeLots, entry), token);
+            var risk = await calculator.CalculateProfitAsync(new Mt5CalculateProfitRequest(brokerSymbol, calculationDirection, intent.IntendedVolumeLots, entry, intent.StructuralStopLoss), token);
             var marginCurrency = margin.AccountCurrency?.Trim(); var riskCurrency = risk.AccountCurrency?.Trim();
             if (margin.RequiredMargin <= 0m || string.IsNullOrWhiteSpace(marginCurrency) || string.IsNullOrWhiteSpace(riskCurrency) || !string.Equals(marginCurrency, riskCurrency, StringComparison.Ordinal) || currency is not null && !string.Equals(currency, marginCurrency, StringComparison.Ordinal)) return "SessionBudgetBlocked: broker calculation currency evidence is invalid or conflicts.";
             if (margin.RequiredMargin > balance) return "SessionBudgetBlocked: required broker margin exceeds logical session balance.";
