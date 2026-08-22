@@ -185,6 +185,17 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.Property(item => item.AverageClosePrice).HasPrecision(18, 8);
             entity.Property(item => item.BrokerRetcode).HasMaxLength(64);
             entity.Property(item => item.BrokerMessage).HasMaxLength(1024);
+            entity.Property(item => item.BrokerAccountCurrency).HasMaxLength(16);
+            entity.Property(item => item.BrokerEntryProfit).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerEntryCommission).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerEntrySwap).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerEntryFee).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerCurrentProfit).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerCurrentSwap).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerHistoryProfit).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerHistoryCommission).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerHistorySwap).HasPrecision(18, 8);
+            entity.Property(item => item.BrokerHistoryFee).HasPrecision(18, 8);
             entity.Property(item => item.NativeExitReason).HasMaxLength(64);
             entity.Property(item => item.NativeExitReasonConflicted).HasDefaultValue(false);
             entity.Property(item => item.ReconciliationNote).HasMaxLength(1024);

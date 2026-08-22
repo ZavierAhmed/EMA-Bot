@@ -273,6 +273,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         execution.FilledVolumeLots = payload.ExecutedVolumeLots;
         execution.AverageFillPrice = payload.ExecutionPrice ?? execution.AverageFillPrice;
         execution.BrokerExecutedAtUtc = payload.ExecutedAtUtc;
+        ApplyExactEntryPnlObservation(execution, payload.Profit, payload.Commission, payload.Swap, payload.Fee, payload.AccountCurrency);
         execution.ReconciledAtUtc = clock.GetUtcNow(); execution.ReconciliationSource = "ExactEntryDeal";
         if (payload.IsPositionOpen && payload.PositionTicket is > 0)
         {
@@ -306,6 +307,7 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
             execution.FilledVolumeLots = payload.VolumeLots;
             execution.AverageFillPrice = payload.OpenPrice ?? execution.AverageFillPrice;
             ApplyExactOpenProtectionObservation(execution, payload);
+            ApplyExactCurrentPnlObservation(execution, payload.CurrentProfit, payload.CurrentSwap, payload.AccountCurrency);
             execution.ReconciledAtUtc = clock.GetUtcNow(); execution.ReconciliationSource = "ExactPositionTicket"; execution.ReconciliationNote = "Reconciled from the exact owned broker position ticket with native ownership fields.";
             execution.State = execution.FilledVolumeLots < execution.VolumeLots ? DemoExecutionState.PartiallyFilled : DemoExecutionState.Open;
             await database.SaveChangesAsync(token); return execution;
@@ -344,6 +346,10 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         {
             var exit = exits[^1];
             execution.ExitDealTicket = exit.DealTicket; execution.ClosedVolumeLots = closedVolume; execution.AverageClosePrice = WeightedAverage(exits);
+            ApplyExactHistoryPnlObservation(execution, entry, exits, payload.AccountCurrency);
+            execution.BrokerCurrentProfit = null;
+            execution.BrokerCurrentSwap = null;
+            execution.BrokerCurrentPnlObservedAtUtc = null;
             var reasonConflicted = ApplyExactPositionHistoryExitReason(execution, exit);
             execution.BrokerClosedAtUtc = exit.ExecutedAtUtc; execution.ClosedAtUtc = exit.ExecutedAtUtc;
             execution.State = DemoExecutionState.Closed; execution.ReconciliationSource = "NativePositionHistory"; execution.ReconciliationNote = reasonConflicted ? "Exact native position history proved closure, but terminal exit-reason evidence is conflicted and unusable for automated strategy decisions." : "Exact native entry and identifier ownership proven; exit deals by exact PositionIdentifier conclusively balance the filled entry volume.";
@@ -454,6 +460,42 @@ public sealed class DemoExecutionService(EmaBotDbContext database, IMt5Execution
         execution.CurrentStopLoss = payload.StopLoss is > 0m ? payload.StopLoss : null;
         execution.CurrentTakeProfit = payload.TakeProfit is > 0m ? payload.TakeProfit : null;
         execution.ProtectionObservedAtUtc = clock.GetUtcNow();
+    }
+    // Monetary observations are accepted only from exact native evidence after the
+    // caller has established ownership. Null is an unavailable wire field, not zero.
+    private void ApplyExactEntryPnlObservation(DemoExecution execution, decimal? profit, decimal? commission, decimal? swap, decimal? fee, string? accountCurrency)
+    {
+        if (profit is not { } entryProfit || commission is not { } entryCommission || swap is not { } entrySwap || fee is not { } entryFee || !TryAcceptBrokerAccountCurrency(execution, accountCurrency)) return;
+        execution.BrokerEntryProfit = entryProfit;
+        execution.BrokerEntryCommission = entryCommission;
+        execution.BrokerEntrySwap = entrySwap;
+        execution.BrokerEntryFee = entryFee;
+        execution.BrokerEntryPnlObservedAtUtc = clock.GetUtcNow();
+    }
+    private void ApplyExactCurrentPnlObservation(DemoExecution execution, decimal? profit, decimal? swap, string? accountCurrency)
+    {
+        if (profit is not { } currentProfit || swap is not { } currentSwap || !TryAcceptBrokerAccountCurrency(execution, accountCurrency)) return;
+        execution.BrokerCurrentProfit = currentProfit;
+        execution.BrokerCurrentSwap = currentSwap;
+        execution.BrokerCurrentPnlObservedAtUtc = clock.GetUtcNow();
+    }
+    private void ApplyExactHistoryPnlObservation(DemoExecution execution, Mt5PositionHistoryDeal entry, IReadOnlyList<Mt5PositionHistoryDeal> exits, string? accountCurrency)
+    {
+        var trustedMoneyDeals = exits.Prepend(entry).ToArray();
+        if (trustedMoneyDeals.Any(item => item.Profit is null || item.Commission is null || item.Swap is null || item.Fee is null) || !TryAcceptBrokerAccountCurrency(execution, accountCurrency)) return;
+        execution.BrokerHistoryProfit = trustedMoneyDeals.Sum(item => item.Profit!.Value);
+        execution.BrokerHistoryCommission = trustedMoneyDeals.Sum(item => item.Commission!.Value);
+        execution.BrokerHistorySwap = trustedMoneyDeals.Sum(item => item.Swap!.Value);
+        execution.BrokerHistoryFee = trustedMoneyDeals.Sum(item => item.Fee!.Value);
+        execution.BrokerHistoryPnlObservedAtUtc = clock.GetUtcNow();
+        ApplyExactEntryPnlObservation(execution, entry.Profit, entry.Commission, entry.Swap, entry.Fee, accountCurrency);
+    }
+    private static bool TryAcceptBrokerAccountCurrency(DemoExecution execution, string? observedCurrency)
+    {
+        var observed = observedCurrency?.Trim();
+        if (string.IsNullOrEmpty(observed)) return false;
+        if (string.IsNullOrWhiteSpace(execution.BrokerAccountCurrency)) { execution.BrokerAccountCurrency = observed; return true; }
+        return string.Equals(execution.BrokerAccountCurrency, observed, StringComparison.Ordinal);
     }
     private static bool IsMonotonic(string side, decimal currentStop, decimal currentTarget, decimal newStop, decimal newTarget) =>
         string.Equals(side, "Buy", StringComparison.OrdinalIgnoreCase) ? newStop >= currentStop && newTarget >= currentTarget :

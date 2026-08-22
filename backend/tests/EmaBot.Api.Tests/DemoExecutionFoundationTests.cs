@@ -126,6 +126,30 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public void DemoExecutionModel_PersistsNullableBrokerPnlEvidence()
+    {
+        using var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+        var entity = database.Model.FindEntityType(typeof(DemoExecution))!;
+        var currency = entity.FindProperty(nameof(DemoExecution.BrokerAccountCurrency))!;
+        Assert.True(currency.IsNullable); Assert.Equal(16, currency.GetMaxLength());
+
+        foreach (var name in new[]
+        {
+            nameof(DemoExecution.BrokerEntryProfit), nameof(DemoExecution.BrokerEntryCommission), nameof(DemoExecution.BrokerEntrySwap), nameof(DemoExecution.BrokerEntryFee),
+            nameof(DemoExecution.BrokerCurrentProfit), nameof(DemoExecution.BrokerCurrentSwap),
+            nameof(DemoExecution.BrokerHistoryProfit), nameof(DemoExecution.BrokerHistoryCommission), nameof(DemoExecution.BrokerHistorySwap), nameof(DemoExecution.BrokerHistoryFee)
+        })
+        {
+            var property = entity.FindProperty(name)!;
+            Assert.True(property.IsNullable); Assert.Equal(18, property.GetPrecision()); Assert.Equal(8, property.GetScale());
+        }
+
+        Assert.True(entity.FindProperty(nameof(DemoExecution.BrokerEntryPnlObservedAtUtc))!.IsNullable);
+        Assert.True(entity.FindProperty(nameof(DemoExecution.BrokerCurrentPnlObservedAtUtc))!.IsNullable);
+        Assert.True(entity.FindProperty(nameof(DemoExecution.BrokerHistoryPnlObservedAtUtc))!.IsNullable);
+    }
+
+    [Fact]
     public void PaperCoordinator_HasNoExecutionSubmissionDependency()
     {
         var constructorTypes = typeof(PaperTradingCoordinator).GetConstructors().SelectMany(item => item.GetParameters()).Select(item => item.ParameterType);
@@ -270,6 +294,36 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public async Task ExactEntryAndOpenPosition_PersistSignedBrokerPnlEvidence()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt) with { PositionTicket = 123456, IsPositionOpen = true, Profit = 0m, Commission = -0.35m, Swap = 0m, Fee = -0.02m, AccountCurrency = "USD" }, PositionResult = new(true, false, 123456, 300, 20260817, "XAUUSD", "Buy", .01m, 2000m, CurrentProfit: -12.34m, CurrentSwap: -0.56m, AccountCurrency: "USD") }; var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Open, result!.State); Assert.Equal("USD", result.BrokerAccountCurrency); Assert.Equal(0m, result.BrokerEntryProfit); Assert.Equal(-0.35m, result.BrokerEntryCommission); Assert.Equal(0m, result.BrokerEntrySwap); Assert.Equal(-0.02m, result.BrokerEntryFee); Assert.NotNull(result.BrokerEntryPnlObservedAtUtc); Assert.Equal(-12.34m, result.BrokerCurrentProfit); Assert.Equal(-0.56m, result.BrokerCurrentSwap); Assert.NotNull(result.BrokerCurrentPnlObservedAtUtc);
+    }
+
+    [Fact]
+    public async Task ExactOpenPosition_WhenPnlFieldsAreMissing_DoesNotErasePriorBrokerPnl()
+    {
+        await using var database = NewDatabase(); var priorObservedAt = DateTimeOffset.UtcNow.AddMinutes(-1); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 123456, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m) }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.BrokerAccountCurrency = "USD"; execution.BrokerCurrentProfit = 5.25m; execution.BrokerCurrentSwap = -0.10m; execution.BrokerCurrentPnlObservedAtUtc = priorObservedAt; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Open, result!.State); Assert.Equal(5.25m, result.BrokerCurrentProfit); Assert.Equal(-0.10m, result.BrokerCurrentSwap); Assert.Equal(priorObservedAt, result.BrokerCurrentPnlObservedAtUtc);
+    }
+
+    [Fact]
+    public async Task ExactOpenPosition_WithConflictingCurrency_DoesNotOverwriteBrokerMoney()
+    {
+        await using var database = NewDatabase(); var priorObservedAt = DateTimeOffset.UtcNow.AddMinutes(-1); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 123456, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m, CurrentProfit: 99m, CurrentSwap: 1m, AccountCurrency: "EUR") }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.BrokerAccountCurrency = "USD"; execution.BrokerCurrentProfit = 5m; execution.BrokerCurrentSwap = -0.10m; execution.BrokerCurrentPnlObservedAtUtc = priorObservedAt; database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Open, result!.State); Assert.Equal("USD", result.BrokerAccountCurrency); Assert.Equal(5m, result.BrokerCurrentProfit); Assert.Equal(-0.10m, result.BrokerCurrentSwap); Assert.Equal(priorObservedAt, result.BrokerCurrentPnlObservedAtUtc);
+    }
+
+    [Fact]
     public async Task ExactOpenPositionReadback_WhenStopLossMissing_ClearsStaleProtection()
     {
         await using var database = NewDatabase(); var bridge = new FakeBridge { PositionResult = new(true, false, 123456, 123456, 20260817, "BTCUSDm", "Buy", .01m, 78693.81m, StopLoss: null, TakeProfit: 78876.42m) }; var execution = Uncertain(); execution.BrokerSymbol = "BTCUSDm"; execution.PositionTicket = 123456; execution.PositionIdentifier = 123456; execution.FilledVolumeLots = .01m; execution.RequestedStopLoss = 77000m; execution.RequestedTakeProfit = 80000m; execution.CurrentStopLoss = 78000m; execution.CurrentTakeProfit = 79000m; execution.ProtectionObservedAtUtc = DateTimeOffset.UtcNow.AddMinutes(-1); database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
@@ -385,6 +439,30 @@ public sealed class DemoExecutionFoundationTests
     }
 
     [Fact]
+    public async Task ExactClosedPositionHistory_PersistsSignedBrokerPnlTotals()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.BrokerCurrentProfit = 7m; execution.BrokerCurrentSwap = -0.2m; execution.BrokerCurrentPnlObservedAtUtc = entryAt;
+        var entry = PositionHistoryEntry(entryAt) with { Profit = 0m, Commission = -0.35m, Swap = 0m, Fee = -0.02m }; var exit1 = PositionHistoryExit(entryAt.AddSeconds(1), "SL") with { ExecutedVolumeLots = .005m, Profit = 8m, Commission = -0.20m, Swap = -0.04m, Fee = 0m }; var exit2 = PositionHistoryExit(entryAt.AddSeconds(2), "SL") with { DealTicket = 202, OrderTicket = 102, ExecutedVolumeLots = .005m, Profit = 12.50m, Commission = -0.15m, Swap = -0.06m, Fee = -0.01m }; var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [entry, exit1, exit2], PositionHistoryAccountCurrency = "USD" };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("USD", result.BrokerAccountCurrency); Assert.Equal(20.50m, result.BrokerHistoryProfit); Assert.Equal(-0.70m, result.BrokerHistoryCommission); Assert.Equal(-0.10m, result.BrokerHistorySwap); Assert.Equal(-0.03m, result.BrokerHistoryFee); Assert.NotNull(result.BrokerHistoryPnlObservedAtUtc); Assert.Equal(0m, result.BrokerEntryProfit); Assert.Equal(-0.35m, result.BrokerEntryCommission); Assert.Equal(0m, result.BrokerEntrySwap); Assert.Equal(-0.02m, result.BrokerEntryFee); Assert.Null(result.BrokerCurrentProfit); Assert.Null(result.BrokerCurrentSwap); Assert.Null(result.BrokerCurrentPnlObservedAtUtc);
+    }
+
+    [Fact]
+    public async Task ExactClosedPositionHistory_WithIncompletePnlEvidence_StillClosesWithoutInventingMoney()
+    {
+        await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.BrokerCurrentProfit = 7m; execution.BrokerCurrentSwap = -0.2m; execution.BrokerCurrentPnlObservedAtUtc = entryAt;
+        var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt) with { Profit = 0m, Commission = -0.35m, Swap = 0m, Fee = -0.02m }, PositionHistoryExit(entryAt.AddSeconds(1), "TP") with { Profit = 20.50m, Commission = -0.35m, Swap = -0.10m, Fee = null }], PositionHistoryAccountCurrency = "USD" };
+        database.DemoExecutions.Add(execution); await database.SaveChangesAsync();
+
+        var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default);
+
+        Assert.Equal(DemoExecutionState.Closed, result!.State); Assert.Equal("TP", result.NativeExitReason); Assert.Null(result.BrokerHistoryProfit); Assert.Null(result.BrokerHistoryCommission); Assert.Null(result.BrokerHistorySwap); Assert.Null(result.BrokerHistoryFee); Assert.Null(result.BrokerHistoryPnlObservedAtUtc); Assert.Null(result.BrokerCurrentProfit); Assert.Null(result.BrokerCurrentSwap); Assert.Null(result.BrokerCurrentPnlObservedAtUtc);
+    }
+
+    [Fact]
     public async Task ExactExitAtRequestedStopPrice_WithoutNativeReason_DoesNotInferSl()
     {
         await using var database = NewDatabase(); var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; execution.RequestedStopLoss = 78569.64m; execution.RequestedTakeProfit = 78876.42m;
@@ -400,6 +478,14 @@ public sealed class DemoExecutionFoundationTests
         var name = Guid.NewGuid().ToString(); var options = new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(name).Options; await using (var database = new EmaBotDbContext(options)) { var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt), PositionHistoryExit(entryAt.AddSeconds(1), "SL")] }; database.DemoExecutions.Add(execution); await database.SaveChangesAsync(); var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default); Assert.Equal(DemoExecutionState.Closed, result!.State); }
         await using var fresh = new EmaBotDbContext(options); var persisted = await fresh.DemoExecutions.SingleAsync(item => item.EntryDealTicket == 200);
         Assert.Equal(DemoExecutionState.Closed, persisted.State); Assert.Equal("SL", persisted.NativeExitReason); Assert.False(persisted.NativeExitReasonConflicted); Assert.Equal(201, persisted.ExitDealTicket); Assert.Equal("NativePositionHistory", persisted.ReconciliationSource); Assert.NotNull(persisted.ClosedAtUtc);
+    }
+
+    [Fact]
+    public async Task ExactBrokerPnlHistory_IsDurablyPersistedAcrossDatabaseReload()
+    {
+        var name = Guid.NewGuid().ToString(); var options = new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(name).Options; await using (var database = new EmaBotDbContext(options)) { var entryAt = DateTimeOffset.UtcNow.AddMinutes(-1); var execution = Uncertain(); execution.EntryDealTicket = 200; execution.OrderTicket = 100; var bridge = new FakeBridge { ExactDeal = ExactDeal(entryAt), PositionHistory = [PositionHistoryEntry(entryAt) with { Profit = 0m, Commission = -0.35m, Swap = 0m, Fee = -0.02m }, PositionHistoryExit(entryAt.AddSeconds(1), "TP") with { Profit = 20.50m, Commission = -0.35m, Swap = -0.10m, Fee = -0.01m }], PositionHistoryAccountCurrency = "USD" }; database.DemoExecutions.Add(execution); await database.SaveChangesAsync(); var result = await Service(database, bridge).ReconcileAsync(execution.ClientExecutionId, default); Assert.Equal(DemoExecutionState.Closed, result!.State); }
+        await using var fresh = new EmaBotDbContext(options); var persisted = await fresh.DemoExecutions.SingleAsync(item => item.EntryDealTicket == 200);
+        Assert.Equal("USD", persisted.BrokerAccountCurrency); Assert.Equal(20.50m, persisted.BrokerHistoryProfit); Assert.Equal(-0.70m, persisted.BrokerHistoryCommission); Assert.Equal(-0.10m, persisted.BrokerHistorySwap); Assert.Equal(-0.03m, persisted.BrokerHistoryFee); Assert.NotNull(persisted.BrokerHistoryPnlObservedAtUtc);
     }
 
     [Fact]
@@ -640,6 +726,7 @@ public sealed class DemoExecutionFoundationTests
         public Mt5ExecutionPositionPayload PositionResult { get; init; } = new(true, false, 123, 456, 20260817, "XAUUSD", "Buy", 0.01m, 1.1m);
         public Mt5ExactDealPayload? ExactDeal { get; init; }
         public IReadOnlyList<Mt5PositionHistoryDeal> PositionHistory { get; init; } = [];
+        public string? PositionHistoryAccountCurrency { get; init; }
         public Mt5ClosePositionResultPayload CloseResult { get; init; } = new(true, "Done", "closed", 789, 0.01m, 1.1m, true);
         public Mt5SubmitOrderResultPayload SubmitResult { get; init; } = new(true, "Done", "ok", 100, 200, 123, 123, 0.01m, 1.1m, false, true);
         public Mt5ExecutionAccountPayload AccountResult { get; init; } = new("demo-fingerprint", "Exness-Demo", "Demo", true, true, true, true, "E11.7A1A1", true, true);
@@ -660,7 +747,7 @@ public sealed class DemoExecutionFoundationTests
                 Mt5ExecutionOperation.GetExecutionHistory => HistoryResponse((Mt5ExecutionHistoryRequest)payload!),
                 Mt5ExecutionOperation.GetPosition => PositionResponse(),
                 Mt5ExecutionOperation.GetExactDeal => ExactDealResponse((Mt5ExactDealRequest)payload!),
-                Mt5ExecutionOperation.GetPositionHistory => new Mt5PositionHistoryPayload(((Mt5PositionHistoryRequest)payload!).PositionIdentifier, PositionHistory),
+                Mt5ExecutionOperation.GetPositionHistory => new Mt5PositionHistoryPayload(((Mt5PositionHistoryRequest)payload!).PositionIdentifier, PositionHistory, PositionHistoryAccountCurrency),
                 Mt5ExecutionOperation.ClosePosition => CloseResponse(),
                 _ => throw new InvalidOperationException($"Unexpected operation {operation}.")
             };

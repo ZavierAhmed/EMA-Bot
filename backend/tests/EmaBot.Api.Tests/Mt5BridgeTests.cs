@@ -423,12 +423,13 @@ public sealed class Mt5ExecutionBridgeServerTests
         Assert.Null(payload.EaBuildId);
         Assert.False(payload.SupportsExactProtectionReadback);
         Assert.False(payload.SupportsNativeExitReason);
+        Assert.False(payload.SupportsBrokerPnlEvidence);
     }
 
     [Fact]
     public void CurrentExecutionAccountPayload_RoundTripsCapabilities()
     {
-        var account = new Mt5ExecutionAccountPayload("test-fingerprint", "test-server", "Demo", true, true, true, true, "E11.7A1A1", true, true);
+        var account = new Mt5ExecutionAccountPayload("test-fingerprint", "test-server", "Demo", true, true, true, true, "E11.7A1A2", true, true, true);
         var json = JsonSerializer.Serialize(account, Mt5ExecutionBridgeProtocol.JsonOptions);
         var payload = JsonSerializer.Deserialize<Mt5ExecutionAccountPayload>(json, Mt5ExecutionBridgeProtocol.JsonOptions);
 
@@ -440,9 +441,30 @@ public sealed class Mt5ExecutionBridgeServerTests
         Assert.True(payload.ExpertTradeAllowed);
         Assert.True(payload.DemoExecutionEnabled);
         Assert.True(payload.DemoExecutionAllowed);
-        Assert.Equal("E11.7A1A1", payload.EaBuildId);
+        Assert.Equal("E11.7A1A2", payload.EaBuildId);
         Assert.True(payload.SupportsExactProtectionReadback);
         Assert.True(payload.SupportsNativeExitReason);
+        Assert.True(payload.SupportsBrokerPnlEvidence);
+    }
+
+    [Fact]
+    public void BrokerPnlEvidencePayloads_RoundTripSignedNativeMoneyFields()
+    {
+        var position = new Mt5ExecutionPositionPayload(true, false, 123, 456, 20260817, "BTCUSDm", "Buy", .01m, 70000m, CurrentProfit: -12.34m, CurrentSwap: -.56m, AccountCurrency: "USD");
+        var deal = new Mt5ExactDealPayload(1001, 1000, 456, 123, "BTCUSDm", "Buy", 20260817, .01m, 70000m, DateTimeOffset.Parse("2026-08-22T00:00:00Z"), true, false, true, Profit: 0m, Commission: -.35m, Swap: 0m, Fee: -.02m, AccountCurrency: "USD");
+        var history = new Mt5PositionHistoryPayload(456,
+        [
+            new Mt5PositionHistoryDeal(1001, 1000, 456, "BTCUSDm", "Buy", 20260817, .01m, 70000m, DateTimeOffset.Parse("2026-08-22T00:00:00Z"), "In", true, false, Profit: 0m, Commission: -.35m, Swap: 0m, Fee: 0m),
+            new Mt5PositionHistoryDeal(1002, 1000, 456, "BTCUSDm", "Sell", 20260817, .01m, 70200m, DateTimeOffset.Parse("2026-08-22T00:05:00Z"), "Out", false, true, Profit: 20.50m, Commission: -.35m, Swap: -.10m, Fee: -.02m)
+        ], "USD");
+
+        var positionRoundTrip = JsonSerializer.Deserialize<Mt5ExecutionPositionPayload>(JsonSerializer.Serialize(position, Mt5ExecutionBridgeProtocol.JsonOptions), Mt5ExecutionBridgeProtocol.JsonOptions);
+        var dealRoundTrip = JsonSerializer.Deserialize<Mt5ExactDealPayload>(JsonSerializer.Serialize(deal, Mt5ExecutionBridgeProtocol.JsonOptions), Mt5ExecutionBridgeProtocol.JsonOptions);
+        var historyRoundTrip = JsonSerializer.Deserialize<Mt5PositionHistoryPayload>(JsonSerializer.Serialize(history, Mt5ExecutionBridgeProtocol.JsonOptions), Mt5ExecutionBridgeProtocol.JsonOptions);
+
+        Assert.NotNull(positionRoundTrip); Assert.Equal(-12.34m, positionRoundTrip.CurrentProfit); Assert.Equal(-.56m, positionRoundTrip.CurrentSwap); Assert.Equal("USD", positionRoundTrip.AccountCurrency);
+        Assert.NotNull(dealRoundTrip); Assert.Equal(0m, dealRoundTrip.Profit); Assert.Equal(-.35m, dealRoundTrip.Commission); Assert.Equal(0m, dealRoundTrip.Swap); Assert.Equal(-.02m, dealRoundTrip.Fee); Assert.Equal("USD", dealRoundTrip.AccountCurrency);
+        Assert.NotNull(historyRoundTrip); Assert.Equal("USD", historyRoundTrip.AccountCurrency); Assert.Equal(0m, historyRoundTrip.Deals[0].Profit); Assert.Equal(-.35m, historyRoundTrip.Deals[0].Commission); Assert.Equal(0m, historyRoundTrip.Deals[0].Swap); Assert.Equal(0m, historyRoundTrip.Deals[0].Fee); Assert.Equal(20.50m, historyRoundTrip.Deals[1].Profit); Assert.Equal(-.35m, historyRoundTrip.Deals[1].Commission); Assert.Equal(-.10m, historyRoundTrip.Deals[1].Swap); Assert.Equal(-.02m, historyRoundTrip.Deals[1].Fee);
     }
 
     private static async Task WriteAsync(Stream stream, Mt5ExecutionEnvelope envelope)

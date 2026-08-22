@@ -46,6 +46,21 @@ public sealed class DemoExecution
     public DateTimeOffset? BrokerClosedAtUtc { get; set; }
     public string? BrokerRetcode { get; set; }
     public string? BrokerMessage { get; set; }
+    // Raw broker-derived monetary evidence. Values remain separate for auditability.
+    public string? BrokerAccountCurrency { get; set; }
+    public decimal? BrokerEntryProfit { get; set; }
+    public decimal? BrokerEntryCommission { get; set; }
+    public decimal? BrokerEntrySwap { get; set; }
+    public decimal? BrokerEntryFee { get; set; }
+    public DateTimeOffset? BrokerEntryPnlObservedAtUtc { get; set; }
+    public decimal? BrokerCurrentProfit { get; set; }
+    public decimal? BrokerCurrentSwap { get; set; }
+    public DateTimeOffset? BrokerCurrentPnlObservedAtUtc { get; set; }
+    public decimal? BrokerHistoryProfit { get; set; }
+    public decimal? BrokerHistoryCommission { get; set; }
+    public decimal? BrokerHistorySwap { get; set; }
+    public decimal? BrokerHistoryFee { get; set; }
+    public DateTimeOffset? BrokerHistoryPnlObservedAtUtc { get; set; }
     public DateTimeOffset CreatedAtUtc { get; set; }
     public DateTimeOffset? PreflightAtUtc { get; set; }
     public DateTimeOffset? SubmittedAtUtc { get; set; }
