@@ -24,6 +24,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<DemoExecutionManagementAction> DemoExecutionManagementActions => Set<DemoExecutionManagementAction>();
     public DbSet<DemoStrategySession> DemoStrategySessions => Set<DemoStrategySession>();
     public DbSet<DemoStrategySessionSymbol> DemoStrategySessionSymbols => Set<DemoStrategySessionSymbol>();
+    public DbSet<DemoStrategySessionCandle> DemoStrategySessionCandles => Set<DemoStrategySessionCandle>();
     public DbSet<DemoStrategyIntent> DemoStrategyIntents => Set<DemoStrategyIntent>();
     public DbSet<DemoStrategyPositionManagement> DemoStrategyPositionManagement => Set<DemoStrategyPositionManagement>();
     public DbSet<StrategyOptimizationRun> StrategyOptimizationRuns => Set<StrategyOptimizationRun>();
@@ -250,6 +251,20 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
             entity.HasIndex(symbol => symbol.ReentrySourceDemoExecutionId);
             entity.HasOne(symbol => symbol.ReentrySourceDemoExecution).WithMany().HasForeignKey(symbol => symbol.ReentrySourceDemoExecutionId).OnDelete(DeleteBehavior.Restrict);
             entity.HasMany(symbol => symbol.Intents).WithOne(intent => intent.DemoStrategySessionSymbol!).HasForeignKey(intent => intent.DemoStrategySessionSymbolId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(symbol => symbol.Candles).WithOne(candle => candle.DemoStrategySessionSymbol!).HasForeignKey(candle => candle.DemoStrategySessionSymbolId).OnDelete(DeleteBehavior.Cascade);
+        });
+        builder.Entity<DemoStrategySessionCandle>(entity =>
+        {
+            entity.Property(candle => candle.Open).HasPrecision(18, 8);
+            entity.Property(candle => candle.High).HasPrecision(18, 8);
+            entity.Property(candle => candle.Low).HasPrecision(18, 8);
+            entity.Property(candle => candle.Close).HasPrecision(18, 8);
+            entity.Property(candle => candle.Volume).HasPrecision(18, 8);
+            entity.Property(candle => candle.Ema9).HasPrecision(18, 8);
+            entity.Property(candle => candle.Ema15).HasPrecision(18, 8);
+            entity.Property(candle => candle.Ema100).HasPrecision(18, 8);
+            entity.Property(candle => candle.ObservationOrigin).HasConversion<string>().HasMaxLength(32);
+            entity.HasIndex(candle => new { candle.DemoStrategySessionSymbolId, candle.CloseTimeUtc }).IsUnique();
         });
         builder.Entity<DemoStrategyIntent>(entity =>
         {

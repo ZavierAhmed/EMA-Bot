@@ -24,6 +24,7 @@ public sealed class DemoStrategySessionExcelExportTests(EmaBotApiFactory factory
         Assert.Contains($"ema-bot-exness-demo-session-{id}.xlsx", response.Content.Headers.ContentDisposition?.FileNameStar ?? response.Content.Headers.ContentDisposition?.FileName);
         var all = string.Concat(Read(await response.Content.ReadAsByteArrayAsync()).Values);
         foreach (var sheet in new[] { "SESSION SUMMARY", "INTENTS AND REASONING", "BROKER EXECUTIONS", "POSITION MANAGEMENT", "MANAGEMENT ACTIONS", "BROKER PNL EVIDENCE" }) Assert.Contains(sheet, all);
+        Assert.DoesNotContain("MARKET PATH", all);
         Assert.Contains("blocked because durable broker evidence was unavailable", all); Assert.Contains("NativeExitReason", all); Assert.Contains("BrokerHistoryProfit", all); Assert.Contains("ModifyProtection", all);
         Assert.DoesNotContain("hidden-fingerprint", all); Assert.DoesNotContain("hidden-server", all); Assert.DoesNotContain("CorrelationMarker", all);
     }
@@ -53,6 +54,28 @@ public sealed class DemoStrategySessionExcelExportTests(EmaBotApiFactory factory
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Contains("Stop or finish the Exness Demo strategy session", await response.Content.ReadAsStringAsync());
     }
+
+    [Fact]
+    public async Task CapturedFutureSessionExport_IncludesChronologicalExactMarketPathWithOriginAndObservationTime()
+    {
+        var id = await SeedAsync(DemoStrategySessionStatus.Stopped); var first = new DateTimeOffset(2026, 8, 23, 12, 0, 0, TimeSpan.Zero); var second = first.AddMinutes(3);
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>(); var symbol = await db.DemoStrategySessionSymbols.SingleAsync(item => item.DemoStrategySessionId == id);
+            db.DemoStrategySessionCandles.AddRange(Candle(symbol.Id, second, 78240.12345678m, DemoStrategySessionCandleObservationOrigin.LiveClosedCandle, second.AddSeconds(2)), Candle(symbol.Id, first, 78234.12345678m, DemoStrategySessionCandleObservationOrigin.BootstrapHistory, first.AddSeconds(1)));
+            await db.SaveChangesAsync();
+        }
+
+        using var client = await AdminClientAsync(); using var response = await client.GetAsync($"/api/demo-strategy-sessions/{id}/export/excel");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var sheets = Read(await response.Content.ReadAsByteArrayAsync()); var all = string.Concat(sheets.Values);
+        Assert.Contains("MARKET PATH", all); var path = sheets["xl/worksheets/sheet7.xml"];
+        Assert.True(path.IndexOf(first.ToString("O"), StringComparison.Ordinal) < path.IndexOf(second.ToString("O"), StringComparison.Ordinal));
+        Assert.Contains("78234.12345678", path); Assert.Contains("78235.12345678", path); Assert.Contains("78233.12345678", path); Assert.Contains("78234.62345678", path); Assert.Contains("12.34567891", path);
+        Assert.Contains("78234.22345678", path); Assert.Contains("78234.32345678", path); Assert.Contains("BootstrapHistory", path); Assert.Contains("LiveClosedCandle", path); Assert.Contains(first.AddSeconds(1).ToString("O"), path);
+    }
+
+    private static DemoStrategySessionCandle Candle(int symbolId, DateTimeOffset close, decimal price, DemoStrategySessionCandleObservationOrigin origin, DateTimeOffset observed) => new() { DemoStrategySessionSymbolId = symbolId, OpenTimeUtc = close.AddMinutes(-3), CloseTimeUtc = close, Open = price, High = price + 1m, Low = price - 1m, Close = price + .5m, Volume = 12.34567891m, Ema9 = price + .1m, Ema15 = price + .2m, Ema100 = null, ObservationOrigin = origin, ObservedAtUtc = observed };
 
     private async Task<int> SeedAsync(DemoStrategySessionStatus status)
     {

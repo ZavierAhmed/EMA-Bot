@@ -87,7 +87,10 @@ public sealed class DemoStrategyCoordinator(
             // independent worker lifetime.
             var proposed = new RuntimeSession(session, new CancellationTokenSource());
             foreach (var symbol in session.Symbols) proposed.Symbols[symbol.BrokerSymbol] = new RuntimeSymbol(symbol);
-            try { await WarmupAsync(proposed, token); }
+            var warmupOrigin = resume
+                ? DemoStrategySessionCandleObservationOrigin.RecoveryReplay
+                : DemoStrategySessionCandleObservationOrigin.BootstrapHistory;
+            try { await WarmupAsync(proposed, database, warmupOrigin, token); }
             catch
             {
                 proposed.Cancellation.Cancel(); proposed.Cancellation.Dispose();
@@ -181,7 +184,7 @@ public sealed class DemoStrategyCoordinator(
         await ProcessUpdateAsync(state, update, token);
     }
 
-    private async Task WarmupAsync(RuntimeSession state, CancellationToken token)
+    private async Task WarmupAsync(RuntimeSession state, EmaBotDbContext database, DemoStrategySessionCandleObservationOrigin origin, CancellationToken token)
     {
         var historical = historicalProviders.Resolve(MarketDataSource.Mt5Exness);
         foreach (var runtime in state.Symbols.Values)
@@ -189,7 +192,10 @@ public sealed class DemoStrategyCoordinator(
             var candles = await historical.GetLatestAsync(runtime.Symbol.BrokerSymbol, state.Session.Interval, 200, token);
             runtime.Candles.AddRange(candles.Where(item => item.IsClosed).OrderBy(item => item.OpenTimeUtc).TakeLast(200));
             runtime.LastClosedCandleUtc = runtime.Candles.LastOrDefault()?.CloseTimeUtc;
+            var evaluation = strategy.Evaluate(runtime.Candles, Settings(state.Session));
+            await AddClosedCandleEvidenceAsync(database, runtime, runtime.Candles, origin, evaluation.Snapshots, token);
         }
+        await database.SaveChangesAsync(token);
     }
 
     private async Task RunStreamAsync(RuntimeSession state)
@@ -220,18 +226,22 @@ public sealed class DemoStrategyCoordinator(
             }
             if (!update.IsClosed || runtime.LastClosedCandleUtc == update.CloseTimeUtc) return;
             var streamGap = runtime.LastClosedCandleUtc is { } previous && update.OpenTimeUtc > previous.AddMilliseconds(1);
-            if (streamGap) await ResyncAsync(state, runtime, update, token);
+            var recoveryEvaluation = streamGap ? await ResyncAsync(state, runtime, update, token) : null;
             runtime.LastClosedCandleUtc = update.CloseTimeUtc;
             runtime.Candles.RemoveAll(item => item.OpenTimeUtc == update.OpenTimeUtc);
-            runtime.Candles.Add(new Candle(update.OpenTimeUtc, update.CloseTimeUtc, update.Open, update.High, update.Low, update.Close, update.Volume, true));
+            var closed = new Candle(update.OpenTimeUtc, update.CloseTimeUtc, update.Open, update.High, update.Low, update.Close, update.Volume, true);
+            runtime.Candles.Add(closed);
             if (runtime.Candles.Count > 200) runtime.Candles.RemoveRange(0, runtime.Candles.Count - 200);
-            await PersistSymbolAsync(runtime, token);
+            // The same strategy engine produces the stored EMA values and, when signals
+            // are accepted, the existing event set below. No parallel EMA implementation
+            // or extra signal pass is introduced for the research ledger.
+            var evaluation = recoveryEvaluation ?? strategy.Evaluate(runtime.Candles, Settings(state.Session));
+            await PersistSymbolAndLiveCandleAsync(runtime, closed, evaluation.Snapshots, token);
             await SynchronizeReentryEligibilityAsync(state, runtime, token); // read-only reconciliation/classification only.
             // A gap reconstructs historical indicator state only.  The close that exposed the
             // gap is never allowed to manufacture an entry against a successor quote.
             if (streamGap) return;
             if (!state.AcceptSignals) return;
-            var evaluation = strategy.Evaluate(runtime.Candles, Settings(state.Session));
             var events = evaluation.Events.Where(item => item.Time == update.CloseTimeUtc).ToArray();
             await ObserveTrendRegimeAsync(state, runtime, events, token);
             var normalSignals = events.Where(item => item.Status is SignalStatus.LongSignal or SignalStatus.ShortSignal).ToArray();
@@ -537,7 +547,7 @@ public sealed class DemoStrategyCoordinator(
         catch (Exception exception) when (exception is not OperationCanceledException) { return "SessionBudgetBlocked: broker-native margin or stop-risk calculation is unavailable."; }
     }
 
-    private async Task ResyncAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
+    private async Task<StrategyEvaluation> ResyncAsync(RuntimeSession state, RuntimeSymbol runtime, MarketBarUpdate update, CancellationToken token)
     {
         var historical = historicalProviders.Resolve(MarketDataSource.Mt5Exness);
         var candles = await historical.GetLatestAsync(runtime.Symbol.BrokerSymbol, state.Session.Interval, 200, token);
@@ -546,16 +556,49 @@ public sealed class DemoStrategyCoordinator(
         runtime.Candles.Add(new Candle(update.OpenTimeUtc, update.CloseTimeUtc, update.Open, update.High, update.Low, update.Close, update.Volume, true));
         runtime.Candles.Sort((left, right) => left.OpenTimeUtc.CompareTo(right.OpenTimeUtc));
         if (runtime.Candles.Count > 200) runtime.Candles.RemoveRange(0, runtime.Candles.Count - 200);
+        await using var scope = scopeFactory.CreateAsyncScope();
+        var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
+        var evaluation = strategy.Evaluate(runtime.Candles, Settings(state.Session));
+        var replayed = runtime.Candles.Where(item => item.CloseTimeUtc != update.CloseTimeUtc).ToArray();
+        await AddClosedCandleEvidenceAsync(database, runtime, replayed, DemoStrategySessionCandleObservationOrigin.RecoveryReplay, evaluation.Snapshots, token);
+        await database.SaveChangesAsync(token);
         logger.LogInformation("Demo strategy session {SessionId} resynchronized {Symbol}; no historical entry was created.", state.Session.Id, runtime.Symbol.BrokerSymbol);
+        return evaluation;
     }
 
-    private async Task PersistSymbolAsync(RuntimeSymbol runtime, CancellationToken token)
+    private async Task PersistSymbolAndLiveCandleAsync(RuntimeSymbol runtime, Candle closed, IReadOnlyList<IndicatorSnapshot> snapshots, CancellationToken token)
     {
         await using var scope = scopeFactory.CreateAsyncScope();
         var database = scope.ServiceProvider.GetRequiredService<EmaBotDbContext>();
         var symbol = await database.DemoStrategySessionSymbols.SingleAsync(item => item.Id == runtime.Symbol.Id, token);
         symbol.LastProcessedClosedCandleUtc = runtime.LastClosedCandleUtc; symbol.LastMarketEventUtc = runtime.LastMarketEventUtc;
+        await AddClosedCandleEvidenceAsync(database, runtime, [closed], DemoStrategySessionCandleObservationOrigin.LiveClosedCandle, snapshots, token);
         await database.SaveChangesAsync(token);
+    }
+
+    private async Task AddClosedCandleEvidenceAsync(EmaBotDbContext database, RuntimeSymbol runtime, IReadOnlyList<Candle> candles, DemoStrategySessionCandleObservationOrigin origin, IReadOnlyList<IndicatorSnapshot> snapshots, CancellationToken token)
+    {
+        var closed = candles.Where(item => item.IsClosed).OrderBy(item => item.CloseTimeUtc).ToArray();
+        if (closed.Length == 0) return;
+        var indicators = snapshots.ToDictionary(item => item.Time);
+        var existing = await database.DemoStrategySessionCandles
+            .Where(item => item.DemoStrategySessionSymbolId == runtime.Symbol.Id)
+            .Select(item => item.CloseTimeUtc)
+            .ToArrayAsync(token);
+        var known = existing.ToHashSet(); var observedAt = DateTimeOffset.UtcNow;
+        foreach (var candle in closed)
+        {
+            if (known.Contains(candle.CloseTimeUtc)) continue;
+            indicators.TryGetValue(candle.CloseTimeUtc, out var indicator);
+            database.DemoStrategySessionCandles.Add(new DemoStrategySessionCandle
+            {
+                DemoStrategySessionSymbolId = runtime.Symbol.Id,
+                OpenTimeUtc = candle.OpenTimeUtc, CloseTimeUtc = candle.CloseTimeUtc,
+                Open = candle.Open, High = candle.High, Low = candle.Low, Close = candle.Close, Volume = candle.Volume,
+                Ema9 = indicator?.Ema9, Ema15 = indicator?.Ema15, Ema100 = indicator?.Ema100,
+                ObservedAtUtc = observedAt, ObservationOrigin = origin
+            });
+        }
     }
 
     private async Task MarkInterruptedAsync(RuntimeSession state, string message)

@@ -1297,6 +1297,101 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         Assert.Empty(harness.Recorder.Modifications); Assert.Equal(0, harness.Recorder.CloseCalls); Assert.Equal(DemoStrategyPositionManagementState.Closed, (await harness.ManagementAsync())!.State);
     }
 
+    [Fact]
+    public async Task BootstrapClosedCandles_PersistExactPipelineEvidenceAsBootstrapHistory()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync();
+
+        var candles = await harness.CandlesAsync(session.Id);
+        Assert.Equal(100, candles.Count); Assert.All(candles, item => Assert.Equal(DemoStrategySessionCandleObservationOrigin.BootstrapHistory, item.ObservationOrigin));
+        Assert.Equal(harness.LiveCandleAt(99).CloseTimeUtc, candles[^1].CloseTimeUtc); Assert.Equal(harness.LiveCandleAt(99).Close, candles[^1].Close); Assert.NotNull(candles[^1].Ema9); Assert.NotNull(candles[^1].Ema15); Assert.NotNull(candles[^1].Ema100);
+        Assert.Empty(await harness.IntentsAsync());
+    }
+
+    [Fact]
+    public async Task AcceptedClosedCandle_PersistsOnceAsLiveEvidenceWithoutAdditionalSignalCreation()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync(); var live = harness.LiveCandleAt(100);
+
+        await harness.DeliverAsync(harness.Closed(live)); await harness.DeliverAsync(harness.Closed(live));
+
+        var rows = await harness.CandlesAsync(session.Id); var stored = Assert.Single(rows, item => item.CloseTimeUtc == live.CloseTimeUtc);
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.LiveClosedCandle, stored.ObservationOrigin); Assert.Equal(live.Open, stored.Open); Assert.Equal(live.High, stored.High); Assert.Equal(live.Low, stored.Low); Assert.Equal(live.Close, stored.Close); Assert.Equal(live.Volume, stored.Volume);
+        var closes = Enumerable.Range(0, 101).Select(index => harness.LiveCandleAt(index).Close).ToArray();
+        Assert.Equal(EmaCalculator.Calculate(closes, 9)[^1], stored.Ema9); Assert.Equal(EmaCalculator.Calculate(closes, 15)[^1], stored.Ema15); Assert.Equal(EmaCalculator.Calculate(closes, 100)[^1], stored.Ema100);
+        Assert.Empty(await harness.IntentsAsync());
+    }
+
+    [Fact]
+    public async Task GapRecovery_PersistsMissingClosedBarsOnceAsRecoveryReplayAndCurrentBarAsLive()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync(); harness.SetRecoveryCandles(Enumerable.Range(0, 102).Select(harness.LiveCandleAt).ToArray());
+        var current = harness.LiveCandleAt(102);
+
+        await harness.DeliverAsync(harness.Closed(current)); await harness.DeliverAsync(harness.Closed(current));
+
+        var rows = await harness.CandlesAsync(session.Id);
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.RecoveryReplay, Assert.Single(rows, item => item.CloseTimeUtc == harness.LiveCandleAt(100).CloseTimeUtc).ObservationOrigin);
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.RecoveryReplay, Assert.Single(rows, item => item.CloseTimeUtc == harness.LiveCandleAt(101).CloseTimeUtc).ObservationOrigin);
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.LiveClosedCandle, Assert.Single(rows, item => item.CloseTimeUtc == current.CloseTimeUtc).ObservationOrigin);
+        Assert.Equal(103, rows.Count); Assert.Empty(await harness.IntentsAsync());
+    }
+
+    [Fact]
+    public async Task FormingCandle_IsNeverPersistedAsMarketPathEvidence()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync(); var before = (await harness.CandlesAsync(session.Id)).Count;
+
+        await harness.DeliverAsync(harness.Forming(harness.LiveCandleAt(100).OpenTimeUtc, 100m, 100.2m));
+
+        Assert.Equal(before, (await harness.CandlesAsync(session.Id)).Count);
+    }
+
+    [Fact]
+    public async Task ResumeWarmup_DoesNotDuplicateAlreadyPersistedMarketPathEvidence()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync();
+        var before = await harness.CandlesAsync(session.Id);
+
+        await harness.Coordinator.StopAsync(default);
+        await harness.UpdateSessionAsync(session.Id, item => { item.Status = DemoStrategySessionStatus.Interrupted; item.InterruptedAtUtc = DateTimeOffset.UtcNow; item.StoppedAtUtc = null; });
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+
+        var after = await harness.CandlesAsync(session.Id);
+        Assert.Equal(before.Count, after.Count);
+        Assert.Equal(before.Select(item => item.CloseTimeUtc), after.Select(item => item.CloseTimeUtc));
+        Assert.All(after, item => Assert.Equal(DemoStrategySessionCandleObservationOrigin.BootstrapHistory, item.ObservationOrigin));
+    }
+
+    [Fact]
+    public async Task ResumeWarmup_NewlyDiscoveredBarsAreRecoveryReplayAndExistingOriginsStayUnchanged()
+    {
+        await using var harness = new Harness(enabled: true);
+        var session = await harness.CreateAndStartAsync();
+        var live = harness.LiveCandleAt(100);
+        await harness.DeliverAsync(harness.Closed(live));
+        Assert.Empty(await harness.IntentsAsync());
+
+        await harness.Coordinator.StopAsync(default);
+        await harness.UpdateSessionAsync(session.Id, item => { item.Status = DemoStrategySessionStatus.Interrupted; item.InterruptedAtUtc = DateTimeOffset.UtcNow; item.StoppedAtUtc = null; });
+        harness.SetRecoveryCandles(Enumerable.Range(0, 103).Select(harness.LiveCandleAt).ToArray());
+        await harness.Coordinator.StartSessionAsync(session.Id, true, default);
+
+        var candles = await harness.CandlesAsync(session.Id);
+        Assert.Equal(103, candles.Count);
+        Assert.Equal(103, candles.Select(item => item.CloseTimeUtc).Distinct().Count());
+        Assert.All(candles.Where(item => item.CloseTimeUtc <= harness.LiveCandleAt(99).CloseTimeUtc), item => Assert.Equal(DemoStrategySessionCandleObservationOrigin.BootstrapHistory, item.ObservationOrigin));
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.LiveClosedCandle, Assert.Single(candles, item => item.CloseTimeUtc == live.CloseTimeUtc).ObservationOrigin);
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.RecoveryReplay, Assert.Single(candles, item => item.CloseTimeUtc == harness.LiveCandleAt(101).CloseTimeUtc).ObservationOrigin);
+        Assert.Equal(DemoStrategySessionCandleObservationOrigin.RecoveryReplay, Assert.Single(candles, item => item.CloseTimeUtc == harness.LiveCandleAt(102).CloseTimeUtc).ObservationOrigin);
+        Assert.Empty(await harness.IntentsAsync());
+    }
+
     private sealed class Harness : IAsyncDisposable
     {
         public static readonly InstrumentSpec Specification = new("MT5", "XAUUSDm", "XAUUSDm", AssetClass.Commodity, 2, .01m, 100m, .01m, 10m, .01m, "XAU", "USD", "USD", VolumeLimit: 5m, StopsLevelPoints: 10);
@@ -1363,6 +1458,8 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         public MarketBarUpdate Live(DateTimeOffset open, decimal? bid, decimal? ask) => new("XAUUSDm", "3m", open, open, open.AddMinutes(3).AddMilliseconds(-1), bid ?? ask ?? 100m, bid ?? ask ?? 100m, bid ?? ask ?? 100m, bid ?? ask ?? 100m, 1m, false, bid, ask);
         public Task DeliverAsync(MarketBarUpdate update) => Coordinator.ProcessUpdateForTestAsync(update);
         public Candle LiveCandleAt(int index) => liveCandles[index];
+        public void SetRecoveryCandles(IReadOnlyList<Candle> candles) => history.Candles = candles;
+        public async Task<IReadOnlyList<DemoStrategySessionCandle>> CandlesAsync(int sessionId) { await using var scope = provider.CreateAsyncScope(); return await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().DemoStrategySessionCandles.AsNoTracking().Where(item => item.DemoStrategySessionSymbol!.DemoStrategySessionId == sessionId).OrderBy(item => item.CloseTimeUtc).ToArrayAsync(); }
         public Candle FirstLiveCandleAfter(DateTimeOffset time) => liveCandles.First(item => item.CloseTimeUtc > time);
         public async Task AddPendingAsync(DemoStrategySession session, DateTimeOffset expected, decimal stop = 99m, decimal? target = null, Guid? id = null, SignalDirection direction = SignalDirection.Long)
         {
@@ -1448,7 +1545,7 @@ public sealed class DemoStrategyCoordinatorLifecycleTests
         public Task<DemoExecutionManagementAction?> FailClosedManagementActionAsync(Guid clientManagementActionId, CancellationToken token) => Task.FromResult<DemoExecutionManagementAction?>(null);
         public Task<DemoExecution?> GetAsync(Guid id, CancellationToken token) => database.DemoExecutions.SingleOrDefaultAsync(item => item.ClientExecutionId == id, token);
     }
-    private sealed class History(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider { public IReadOnlyList<Candle> Candles { get; } = candles; public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string timeframe, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token) => Task.FromResult(Candles); public Task<IReadOnlyList<Candle>> GetLatestAsync(string symbol, string timeframe, int count, CancellationToken token) => Task.FromResult<IReadOnlyList<Candle>>(Candles.Take(count).ToArray()); }
+    private sealed class History(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider { public IReadOnlyList<Candle> Candles { get; set; } = candles; public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string timeframe, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token) => Task.FromResult(Candles); public Task<IReadOnlyList<Candle>> GetLatestAsync(string symbol, string timeframe, int count, CancellationToken token) => Task.FromResult<IReadOnlyList<Candle>>(Candles.Take(count).ToArray()); }
     private sealed class Resolver(History history) : IHistoricalMarketDataProviderResolver { public IHistoricalMarketDataProvider Resolve(MarketDataSource source) => history; }
     private sealed class Stream : IMarketBarStreamProvider { public async Task StreamAsync(IReadOnlyCollection<string> symbols, string timeframe, Func<MarketBarUpdate, CancellationToken, Task> update, Action<string>? state, CancellationToken token) { state?.Invoke("Connected"); await Task.Delay(Timeout.InfiniteTimeSpan, token); } }
     private sealed class Catalog(InstrumentSpec spec, InstrumentTradeMode tradeMode) : IInstrumentCatalogProvider { public Task<IReadOnlyList<InstrumentCatalogItem>> GetAvailableAsync(CancellationToken token) => Task.FromResult<IReadOnlyList<InstrumentCatalogItem>>([]); public Task<InstrumentCatalogItem?> GetAsync(string symbol, CancellationToken token) => Task.FromResult<InstrumentCatalogItem?>(new InstrumentCatalogItem(spec, null, null, true, true, tradeMode)); }

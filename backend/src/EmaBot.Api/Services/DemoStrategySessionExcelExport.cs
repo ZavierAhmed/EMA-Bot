@@ -16,12 +16,14 @@ public static class DemoStrategySessionExcelExport
     {
         var session = await database.DemoStrategySessions.AsNoTracking()
             .Include(item => item.Symbols).ThenInclude(item => item.Intents).ThenInclude(item => item.DemoExecution).ThenInclude(item => item!.ManagementActions)
+            .Include(item => item.Symbols).ThenInclude(item => item.Candles)
             .Include(item => item.PositionManagement)
             .SingleAsync(item => item.Id == sessionId, token);
         var intents = session.Symbols.SelectMany(item => item.Intents).OrderBy(item => item.Id).ToArray();
         var linked = intents.Where(item => item.DemoExecution is not null).Select(item => new LinkedIntent(item, item.DemoExecution!)).DistinctBy(item => item.Execution.Id).OrderBy(item => item.Execution.Id).ToArray();
         var byExecution = linked.ToDictionary(item => item.Execution.Id, item => item.Intent);
         var budget = DemoStrategySessionBudgetEvaluator.Evaluate(session.InitialAllocation, linked.Select(item => item.Execution));
+        var marketPath = session.Symbols.SelectMany(symbol => symbol.Candles.Select(candle => new MarketPathCandle(symbol, candle))).OrderBy(item => item.Candle.CloseTimeUtc).ThenBy(item => item.Symbol.Id).ToArray();
         var sheets = new List<Sheet>
         {
             new("SESSION SUMMARY", SummaryRows(session, intents, linked, budget)),
@@ -31,6 +33,7 @@ public static class DemoStrategySessionExcelExport
             new("MANAGEMENT ACTIONS", ActionRows(session, linked, byExecution)),
             new("BROKER PNL EVIDENCE", PnlRows(session, linked))
         };
+        if (marketPath.Length != 0) sheets.Add(new("MARKET PATH", MarketPathRows(session, marketPath)));
         return Workbook(sheets);
     }
 
@@ -84,8 +87,17 @@ public static class DemoStrategySessionExcelExport
         return new[] { header }.Concat(linked.Select(link => { var item = link.Execution; var evidence = DemoExecutionBrokerMoneyEvidenceEvaluator.Evaluate(item); return new object?[] { item.Id, session.Id, link.Intent.Id, item.BrokerAccountCurrency, item.BrokerEntryProfit, item.BrokerEntryCommission, item.BrokerEntrySwap, item.BrokerEntryFee, item.BrokerEntryPnlObservedAtUtc, item.BrokerCurrentProfit, item.BrokerCurrentSwap, item.BrokerCurrentPnlObservedAtUtc, item.BrokerHistoryProfit, item.BrokerHistoryCommission, item.BrokerHistorySwap, item.BrokerHistoryFee, item.BrokerHistoryPnlObservedAtUtc, evidence.Available, evidence.Available ? evidence.Amount : null, evidence.Available ? (item.State == DemoExecutionState.Closed ? "Closed broker-history evidence" : "Open broker evidence") : null, evidence.Reason }; }));
     }
 
+    // Closed OHLC rows are candle-path evidence only. They cannot prove tick ordering
+    // when multiple levels are inside the range of a single candle.
+    private static IEnumerable<object?[]> MarketPathRows(DemoStrategySession session, IEnumerable<MarketPathCandle> marketPath)
+    {
+        var header = new object?[] { "SessionSymbolId", "BrokerSymbol", "Interval", "OpenTimeUtc", "CloseTimeUtc", "Open", "High", "Low", "Close", "Volume", "EMA9", "EMA15", "EMA100", "ObservationOrigin", "ObservedAtUtc" };
+        return new[] { header }.Concat(marketPath.Select(item => new object?[] { item.Symbol.Id, item.Symbol.BrokerSymbol, session.Interval, item.Candle.OpenTimeUtc, item.Candle.CloseTimeUtc, item.Candle.Open, item.Candle.High, item.Candle.Low, item.Candle.Close, item.Candle.Volume, item.Candle.Ema9, item.Candle.Ema15, item.Candle.Ema100, item.Candle.ObservationOrigin, item.Candle.ObservedAtUtc }));
+    }
+
     private static IEnumerable<object?[]> Fields(params (string Field, object? Value)[] fields) => [new object?[] { "Field", "Value" }, .. fields.Select(item => new object?[] { item.Field, item.Value })];
     private sealed record LinkedIntent(DemoStrategyIntent Intent, DemoExecution Execution);
+    private sealed record MarketPathCandle(DemoStrategySessionSymbol Symbol, DemoStrategySessionCandle Candle);
     private sealed record Sheet(string Name, IEnumerable<object?[]> Rows);
     private static byte[] Workbook(IReadOnlyList<Sheet> sheets)
     {

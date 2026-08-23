@@ -10,6 +10,7 @@ public enum DemoStrategyIntentStatus { Created, WaitingForEntryWindow, Submittin
 public enum DemoStrategyPositionManagementState { Active, ProtectionReconciliationRequired, ClosePending, CloseRequested, Closed, SuspendedAfterRestart, Blocked }
 public enum DemoStrategyTargetExtensionState { NotAttempted, Pending, Applied, Rejected }
 public enum DemoStrategyOppositeCloseState { None, Pending, CloseRequested, ReconciliationRequired, Closed, Blocked }
+public enum DemoStrategySessionCandleObservationOrigin { BootstrapHistory, LiveClosedCandle, RecoveryReplay }
 
 public sealed class DemoStrategySession
 {
@@ -97,6 +98,28 @@ public sealed class DemoStrategySessionSymbol
     public string? ReentryReason { get; set; }
     [JsonIgnore] public DemoExecution? ReentrySourceDemoExecution { get; set; }
     public List<DemoStrategyIntent> Intents { get; set; } = [];
+    public List<DemoStrategySessionCandle> Candles { get; set; } = [];
+}
+
+// Closed OHLC evidence only. It records the coordinator's observed indicator context;
+// it cannot establish tick ordering inside a bar.
+public sealed class DemoStrategySessionCandle
+{
+    public int Id { get; set; }
+    public int DemoStrategySessionSymbolId { get; set; }
+    [JsonIgnore] public DemoStrategySessionSymbol? DemoStrategySessionSymbol { get; set; }
+    public DateTimeOffset OpenTimeUtc { get; set; }
+    public DateTimeOffset CloseTimeUtc { get; set; }
+    public decimal Open { get; set; }
+    public decimal High { get; set; }
+    public decimal Low { get; set; }
+    public decimal Close { get; set; }
+    public decimal Volume { get; set; }
+    public decimal? Ema9 { get; set; }
+    public decimal? Ema15 { get; set; }
+    public decimal? Ema100 { get; set; }
+    public DateTimeOffset ObservedAtUtc { get; set; }
+    public DemoStrategySessionCandleObservationOrigin ObservationOrigin { get; set; }
 }
 
 public sealed class DemoStrategyIntent
