@@ -119,6 +119,19 @@ public sealed class DemoStrategySessionsController(EmaBotDbContext database, Tra
 
     [HttpGet("{id:int}")]
     public async Task<IActionResult> Get(int id, CancellationToken token) => await GetResponseAsync(id, token) is { } response ? Ok(response) : NotFound(new ApiMessage("Demo strategy session not found."));
+    [HttpGet("{id:int}/export/excel")]
+    public async Task<IActionResult> ExportExcel(int id, CancellationToken token)
+    {
+        var status = await database.DemoStrategySessions.AsNoTracking().Where(item => item.Id == id).Select(item => (DemoStrategySessionStatus?)item.Status).SingleOrDefaultAsync(token);
+        if (status is null) return NotFound(new ApiMessage("Demo strategy session not found."));
+        if (status is not DemoStrategySessionStatus.Stopped and not DemoStrategySessionStatus.Faulted)
+        {
+            return Conflict(new ApiMessage("Stop or finish the Exness Demo strategy session before exporting the final session workbook."));
+        }
+
+        var workbook = await DemoStrategySessionExcelExport.CreateAsync(database, id, token);
+        return File(workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-exness-demo-session-{id}.xlsx");
+    }
     [HttpGet("{id:int}/runtime")]
     public async Task<IActionResult> Runtime(int id, CancellationToken token)
     {
@@ -142,23 +155,8 @@ public sealed class DemoStrategySessionsController(EmaBotDbContext database, Tra
     private static DemoStrategyBudgetResponse Budget(DemoStrategySession session)
     {
         var executions = session.Symbols.SelectMany(symbol => symbol.Intents).Select(intent => intent.DemoExecution).Where(execution => execution is not null).Cast<DemoExecution>().DistinctBy(execution => execution.Id).ToArray();
-        string? currency = null; decimal realized = 0m; decimal unrealized = 0m;
-        foreach (var execution in executions)
-        {
-            if (execution.State is DemoExecutionState.Rejected or DemoExecutionState.Cancelled)
-            {
-                if (DemoStrategyBudgetEvidencePolicy.IsConclusiveNoFillTerminal(execution)) continue;
-                return new(session.InitialAllocation, null, null, null, null, null, false, "Rejected/cancelled execution has ambiguous broker exposure or monetary evidence.");
-            }
-            var evidence = DemoExecutionBrokerMoneyEvidenceEvaluator.Evaluate(execution);
-            if (!evidence.Available || evidence.Amount is null || string.IsNullOrWhiteSpace(evidence.AccountCurrency)) return new(session.InitialAllocation, null, null, null, null, null, false, evidence.Reason);
-            var current = evidence.AccountCurrency.Trim();
-            if (currency is not null && !string.Equals(currency, current, StringComparison.Ordinal)) return new(session.InitialAllocation, null, null, null, null, null, false, "Broker account currencies conflict.");
-            currency = current;
-            if (execution.State == DemoExecutionState.Closed) realized += evidence.Amount.Value; else unrealized += evidence.Amount.Value;
-        }
-        var balance = session.InitialAllocation + realized;
-        return new(session.InitialAllocation, currency, realized, unrealized, balance, balance + unrealized, true, null);
+        var budget = DemoStrategySessionBudgetEvaluator.Evaluate(session.InitialAllocation, executions);
+        return new(budget.InitialAllocation, budget.AccountCurrency, budget.RealizedPnl, budget.UnrealizedPnl, budget.Balance, budget.Equity, budget.EvidenceReady, budget.Reason);
     }
     private static DemoExecutionSummaryResponse Execution(DemoExecution item) => new(item.Id, item.ClientExecutionId, item.State.ToString(), item.Provider, item.BrokerSymbol, item.Side, item.VolumeLots, item.RequestedStopLoss, item.RequestedTakeProfit, item.CurrentStopLoss, item.CurrentTakeProfit, item.ProtectionObservedAtUtc, item.MagicNumber, item.PositionTicket, item.PositionIdentifier, item.OrderTicket, item.EntryDealTicket, item.ExitDealTicket, item.NativeExitReason, item.NativeExitReasonConflicted, item.FilledVolumeLots, item.AverageFillPrice, item.ClosedVolumeLots, item.AverageClosePrice, item.BrokerExecutedAtUtc, item.BrokerClosedAtUtc, item.BrokerRetcode, item.BrokerMessage, item.CreatedAtUtc, item.PreflightAtUtc, item.SubmittedAtUtc, item.BrokerAcceptedAtUtc, item.ClosedAtUtc, item.ReconciledAtUtc, item.ReconciliationNote, item.ReconciliationSource, item.ManagementActions.OrderByDescending(action => action.CreatedAtUtc).Take(25).Select(action => new DemoExecutionManagementActionResponse(action.Id, action.ClientManagementActionId, action.Kind.ToString(), action.State.ToString(), action.RequestedStopLoss, action.RequestedTakeProfit, action.ObservedBeforeStopLoss, action.ObservedBeforeTakeProfit, action.AppliedStopLoss, action.AppliedTakeProfit, action.BrokerRetcode, action.BrokerMessage, action.CreatedAtUtc, action.SubmittedAtUtc, action.CompletedAtUtc, action.ReconciledAtUtc, action.ReconciliationNote, action.ReconciliationSource)).ToArray());
     private static DemoStrategyManagementResponse Management(DemoStrategyPositionManagement item) => new(item.Id, item.DemoStrategyIntentId, item.DemoExecutionId, item.State.ToString(), item.OriginalEntryPrice, item.OriginalStopLoss, item.OriginalTakeProfit, item.BestFavorablePrice, item.BestFavorableProgressPercent, item.TakeProfitExtensionState.ToString(), item.TargetExtensionAppliedAtUtc, item.HighestAttemptedLockPercent, item.HighestAppliedLockPercent, item.PendingProtectionActionId, item.PendingProtectionLockPercent, item.PendingProtectionExtendsTarget, item.PendingDesiredStopLoss, item.PendingDesiredTakeProfit, item.OppositeSignalTimeUtc, item.OppositeSignalDirection, item.OppositeCloseState.ToString(), item.OppositeCloseRequestedAtUtc, item.LastManagedAtUtc, item.LastReason, item.CreatedAtUtc, item.UpdatedAtUtc);

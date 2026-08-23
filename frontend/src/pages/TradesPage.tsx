@@ -1,27 +1,29 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { downloadTradeExcel, downloadTradePdf, getMonitoredSymbols, getTrade, getTradeChart, getTrades, type TradeChartData, type TradeDetail, type TradeSummary } from '../api'
+import { ApiError, downloadTradeExcel, downloadTradePdf, getMonitoredSymbols, getTrade, getTradeChart, getTrades, type ExnessDemoTradeDetail, type TradeChartData, type TradeDetail, type TradeSummary } from '../api'
 import { TradeChart } from '../components/TradeChart'
+import { annotationsFromExnessDemo, annotationsFromTradeDetail, type TradeChartVisibility } from '../components/tradeChartAnnotations'
 
-const format = (value: number | null | undefined) => value === null || value === undefined ? '-' : value.toLocaleString(undefined, { maximumFractionDigits: 8 })
-const date = (value: string | null) => value ? new Date(value).toLocaleString() : '-'
+const format = (value: number | null | undefined) => value === null || value === undefined ? '—' : value.toLocaleString(undefined, { maximumFractionDigits: 8 })
+const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : '—'
+const isDemo = (detail: TradeDetail | ExnessDemoTradeDetail): detail is ExnessDemoTradeDetail => detail.summary.source === 'ExnessDemo'
 
 export function TradesPage() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const routeSource = params.get('source')
-  const normalizedSource = routeSource?.toLowerCase() === 'backtest' ? 'Backtest' : routeSource?.toLowerCase() === 'paper' ? 'Paper' : ''
-  const [filters, setFilters] = useState({ source: normalizedSource, symbol: '', interval: '', direction: '', outcome: '' })
+  const normalizedSource = routeSource?.toLowerCase() === 'backtest' ? 'Backtest' : routeSource?.toLowerCase() === 'paper' ? 'Paper' : routeSource?.toLowerCase() === 'exnessdemo' ? 'ExnessDemo' : ''
+  const [filters, setFilters] = useState({ source: normalizedSource, symbol: '', interval: '', direction: '', outcome: '', sessionId: params.get('sessionId') ?? '' })
   const [trades, setTrades] = useState<TradeSummary[]>([])
   const [symbols, setSymbols] = useState<string[]>([])
-  const [detail, setDetail] = useState<TradeDetail | null>(null)
+  const [detail, setDetail] = useState<TradeDetail | ExnessDemoTradeDetail | null>(null)
   const [chart, setChart] = useState<TradeChartData | null>(null)
   const [listLoading, setListLoading] = useState(true)
   const [listError, setListError] = useState<string | null>(null)
   const [detailError, setDetailError] = useState<string | null>(null)
   const [chartError, setChartError] = useState<string | null>(null)
   const [chartReload, setChartReload] = useState(0)
-  const [visibility, setVisibility] = useState({ ema9: true, ema15: true, ema100: true, levels: true, markers: true })
+  const [visibility, setVisibility] = useState<TradeChartVisibility>({ ema9: true, ema15: true, ema100: true, levels: true, markers: true, execution: true })
   const selectedSource = params.get('source')
   const selectedId = Number(params.get('id'))
 
@@ -49,37 +51,39 @@ export function TradesPage() {
       if (error.name !== 'AbortError') setDetailError('Trade details are currently unavailable.')
     })
     void getTradeChart(selectedSource, selectedId, controller.signal).then(setChart).catch(error => {
-      if (error.name !== 'AbortError') setChartError('Chart data is currently unavailable from the configured historical provider.')
+      if (error.name !== 'AbortError') setChartError(error instanceof ApiError ? error.message : 'Chart data is currently unavailable from the configured historical provider.')
     })
     return () => controller.abort()
   }, [chartReload, selectedSource, selectedId])
 
-  const select = (trade: TradeSummary) => navigate(`/trades?source=${trade.source.toLowerCase()}&id=${trade.id}`)
+  const annotations = useMemo(() => detail ? isDemo(detail) ? annotationsFromExnessDemo(detail) : annotationsFromTradeDetail(detail) : null, [detail])
+  const select = (trade: TradeSummary) => navigate(`/trades?source=${trade.source.toLowerCase()}${trade.source === 'ExnessDemo' && filters.sessionId ? `&sessionId=${filters.sessionId}` : ''}&id=${trade.id}`)
   const setFilter = (key: keyof typeof filters, value: string) => setFilters(current => ({ ...current, [key]: value }))
 
   return <div className="space-y-5">
     <div>
       <p className="text-sm font-medium text-slate-500">Analysis</p>
       <h1 className="mt-2 text-3xl font-semibold">Trade Explorer</h1>
-      <p className="mt-2 text-slate-600">Review simulated backtest and Paper trades with on-demand market chart context.</p>
+      <p className="mt-2 text-slate-600">Review Backtest, Paper, and broker-ledger Exness Demo executions with on-demand market chart context.</p>
     </div>
     {listError && <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{listError}</div>}
     <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-7">
-      <select value={filters.source} onChange={event => setFilter('source', event.target.value)}><option value="">All sources</option><option value="Backtest">Backtest</option><option value="Paper">Paper</option></select>
+      <select value={filters.source} onChange={event => setFilter('source', event.target.value)}><option value="">All sources</option><option value="Backtest">Backtest</option><option value="Paper">Paper</option><option value="ExnessDemo">Exness Demo</option></select>
+      {filters.source === 'ExnessDemo' && <input aria-label="Demo session ID" className="rounded border px-2" placeholder="Demo session ID" value={filters.sessionId} onChange={event => setFilter('sessionId', event.target.value)} />}
       <select value={filters.symbol} onChange={event => setFilter('symbol', event.target.value)}><option value="">All symbols</option>{symbols.map(symbol => <option key={symbol}>{symbol}</option>)}</select>
       <select value={filters.interval} onChange={event => setFilter('interval', event.target.value)}><option value="">All timeframes</option>{['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M'].map(value => <option key={value}>{value}</option>)}</select>
       <select value={filters.direction} onChange={event => setFilter('direction', event.target.value)}><option value="">All directions</option><option>Long</option><option>Short</option></select>
       <select value={filters.outcome} onChange={event => setFilter('outcome', event.target.value)}><option value="">All outcomes</option><option value="Win">Win</option><option value="Loss">Loss</option><option value="BreakEven">Break-even</option><option value="Open">Open</option></select>
-      <button className="rounded border border-slate-300 px-3 py-2 text-sm" onClick={() => void downloadTradeExcel(filters)}>Export Excel</button>
-      <button disabled={!selectedSource || !selectedId} className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-50" onClick={() => selectedSource && selectedId && void downloadTradePdf(selectedSource, selectedId)}>Export PDF</button>
+      <button disabled={filters.source === 'ExnessDemo'} className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-50" onClick={() => void downloadTradeExcel(filters)}>Export Excel</button>
+      <button disabled={!selectedSource || !selectedId || selectedSource.toLowerCase() === 'exnessdemo'} className="rounded border border-slate-300 px-3 py-2 text-sm disabled:opacity-50" onClick={() => selectedSource && selectedId && void downloadTradePdf(selectedSource, selectedId)}>Export PDF</button>
     </div>
     <div className="grid min-w-0 gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
       <aside className="min-w-0 rounded-lg border border-slate-200 bg-white p-4">
         <div className="space-y-2">
           {listLoading ? <p className="text-sm text-slate-500">Loading trades...</p> : trades.length === 0 ? <p className="text-sm text-slate-500">No trades match these filters.</p> : trades.map(trade => <button key={`${trade.source}-${trade.id}`} onClick={() => select(trade)} className={`w-full rounded border p-3 text-left text-sm ${selectedSource?.toLowerCase() === trade.source.toLowerCase() && selectedId === trade.id ? 'border-slate-950 bg-slate-50' : 'border-slate-200'}`}>
-            <div className="flex justify-between gap-2"><span className="font-medium">{trade.symbol} {trade.interval}</span><span className="text-xs">{trade.source}</span></div>
-            <p>{trade.direction} · {trade.status} · {trade.exitReason ?? '-'}</p>
-            <p className={trade.status === 'Open' ? '' : trade.netPnl >= 0 ? 'text-emerald-700' : 'text-red-700'}>{trade.status === 'Open' ? 'Unresolved / Open' : `Net ${format(trade.netPnl)} ${trade.accountCurrency}`} · R {format(trade.netRMultiple)}</p>
+            <div className="flex justify-between gap-2"><span className="font-medium">{trade.symbol} {trade.interval}</span><span className="text-xs">{trade.source === 'ExnessDemo' ? 'Exness Demo' : trade.source}</span></div>
+            <p>{trade.direction} · {trade.status} · {trade.isReentry ? 'Re-entry' : 'Normal Entry'} · {trade.nativeExitReason ?? trade.exitReason ?? '—'}</p>
+            <p className={trade.netPnl === null ? '' : trade.netPnl >= 0 ? 'text-emerald-700' : 'text-red-700'}>{trade.source === 'ExnessDemo' && !trade.pnlEvidenceAvailable ? 'Broker P/L unavailable' : `Net ${format(trade.netPnl)} ${trade.accountCurrency || '—'}`} · {trade.source === 'ExnessDemo' ? `Session #${trade.sessionId ?? '—'} · Intent #${trade.intentId ?? '—'}` : `R ${format(trade.netRMultiple)}`}</p>
             <p className="text-xs text-slate-500">{date(trade.entryTimeUtc)}</p>
           </button>)}
         </div>
@@ -87,11 +91,11 @@ export function TradesPage() {
       <section className="min-w-0 space-y-5">
         {!selectedSource || !selectedId ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-slate-500">Select a trade to inspect its reasoning and chart.</div> : detailError ? <div className="rounded-lg border border-red-200 bg-white p-5 text-red-700">{detailError}</div> : !detail ? <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">Loading trade details...</div> : <>
           <div className="rounded-lg border border-slate-200 bg-white p-4">
-            <div className="flex flex-wrap gap-3 text-sm"><strong>{detail.summary.symbol} {detail.summary.interval} · {detail.summary.direction}</strong><span>{detail.summary.status === 'Open' ? 'Unresolved / Open' : `Net ${format(detail.summary.netPnl)} ${detail.summary.accountCurrency}`}</span><span>{detail.summary.status}</span></div>
-            <div className="mt-3 flex flex-wrap gap-3 text-xs">{(['ema9', 'ema15', 'ema100', 'levels', 'markers'] as const).map(key => <label key={key}><input type="checkbox" checked={visibility[key]} onChange={() => setVisibility(current => ({ ...current, [key]: !current[key] }))} /> {key === 'levels' ? 'SL/TP' : key.toUpperCase()}</label>)}</div>
+            <div className="flex flex-wrap gap-3 text-sm"><strong>{detail.summary.symbol} {detail.summary.interval} · {isDemo(detail) ? 'Exness Demo · ' : ''}{detail.summary.direction}</strong><span>{isDemo(detail) ? detail.summary.pnlEvidenceAvailable ? `Net ${format(detail.summary.evaluatedBrokerPnl)} ${detail.summary.accountCurrency ?? '—'}` : 'Broker P/L unavailable' : detail.summary.status === 'Open' ? 'Unresolved / Open' : `Net ${format(detail.summary.netPnl)} ${detail.summary.accountCurrency || '—'}`}</span><span>{detail.summary.status}</span>{isDemo(detail) && <span>Session #{detail.summary.sessionId} · Intent #{detail.summary.intentId} · Execution #{detail.summary.id}</span>}</div>
+            <div className="mt-3 flex flex-wrap gap-3 text-xs">{(['ema9', 'ema15', 'ema100', 'levels', 'markers', 'execution'] as const).map(key => <label key={key}><input type="checkbox" checked={visibility[key]} onChange={() => setVisibility(current => ({ ...current, [key]: !current[key] }))} /> {key === 'levels' ? 'SL/TP' : key === 'execution' ? 'Execution' : key.toUpperCase()}</label>)}</div>
           </div>
-          {chart ? <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">{detail.summary.source === 'Paper' && detail.summary.marketDataSource === 'Mt5Exness' && <p className="mb-2 text-xs text-amber-800">Historical candle reconstruction. Paper execution uses executable Bid/Ask. Long exits/SL use Bid; Short exits/SL use Ask.</p>}<TradeChart data={chart} detail={detail} visibility={visibility} /></div> : <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">{chartError ?? 'Loading chart data...'} {chartError && <button className="ml-3 underline" onClick={() => setChartReload(value => value + 1)}>Retry Chart</button>}</div>}
-          <Details detail={detail} />
+          {chart && annotations ? <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3">{!isDemo(detail) && detail.summary.source === 'Paper' && detail.summary.marketDataSource === 'Mt5Exness' && <p className="mb-2 text-xs text-amber-800">Historical candle reconstruction. Paper execution uses executable Bid/Ask. Long exits/SL use Bid; Short exits/SL use Ask.</p>}{isDemo(detail) && <p className="mb-2 text-xs text-amber-800">Historical MT5 candle reconstruction. Broker Fill/Exit markers use exact Demo execution evidence when available.</p>}<TradeChart data={chart} annotations={annotations} visibility={visibility} /></div> : <div className="rounded-lg border border-slate-200 bg-white p-5 text-slate-500">{chartError ?? 'Loading chart data...'} {chartError && <button className="ml-3 underline" onClick={() => setChartReload(value => value + 1)}>Retry Chart</button>}</div>}
+          {isDemo(detail) ? <DemoDetails detail={detail} /> : <Details detail={detail} />}
         </>}
       </section>
     </div>
@@ -109,7 +113,7 @@ function Details({ detail }: { detail: TradeDetail }) {
       <dl className="mt-3 grid gap-2 text-slate-700">
         <div><dt className="font-medium text-slate-950">Entry</dt><dd>{date(detail.summary.entryTimeUtc)} at {format(detail.summary.entryPrice)} · Qty {format(detail.quantity)}</dd></div>
         <div><dt className="font-medium text-slate-950">Signal</dt><dd>Open {format(detail.signalOpen)}, close {format(detail.signalClose)} ({detail.signalOpen === null ? 'legacy record' : detail.signalClose > detail.signalOpen ? 'Bullish' : detail.signalClose < detail.signalOpen ? 'Bearish' : 'Doji'}), EMA9 {format(detail.signalEma9)}, EMA15 {format(detail.signalEma15)}, EMA100 {format(detail.signalEma100)}. Gap {format(detail.signalGapPercent)}% / minimum {format(detail.minEmaGapPercent)}%</dd></div>
-        <div><dt className="font-medium text-slate-950">Sizing</dt><dd>{detail.positionSizingMode}. Margin {format(detail.marginUsedUsdt)} USDT, leverage {format(detail.leverage)}x, notional {format(detail.entryNotionalUsdt)}, quantity {format(detail.quantity)}, margin return {detail.marginUsedUsdt ? `${format(detail.summary.netPnlUsdt / detail.marginUsedUsdt * 100)}%` : '-'}</dd></div>
+        <div><dt className="font-medium text-slate-950">Sizing</dt><dd>{detail.positionSizingMode}. Margin {format(detail.marginUsedUsdt)} USDT, leverage {format(detail.leverage)}x, notional {format(detail.entryNotionalUsdt)}, quantity {format(detail.quantity)}, margin return {detail.marginUsedUsdt && detail.summary.netPnlUsdt !== null ? `${format(detail.summary.netPnlUsdt / detail.marginUsedUsdt * 100)}%` : '—'}</dd></div>
         <div><dt className="font-medium text-slate-950">Risk levels</dt><dd>Initial SL {format(detail.initialStopLoss)} ({detail.stopSourceType}); final SL {format(detail.finalStopLoss)}. Original TP {format(detail.originalTakeProfit)}; final TP {format(detail.finalTakeProfit)}</dd></div>
         <div><dt className="font-medium text-slate-950">Exit and P&amp;L</dt><dd>Exit {date(detail.summary.exitTimeUtc)} at {format(detail.summary.exitPrice)} · {detail.summary.exitReason ?? 'Open'}. Gross {format(detail.summary.grossPnlUsdt)} · fees {format(detail.summary.totalFeesUsdt)} · net {format(detail.summary.netPnlUsdt)}</dd></div>
       </dl>
@@ -121,6 +125,20 @@ function Details({ detail }: { detail: TradeDetail }) {
       <div className="mt-3 space-y-2">{detail.events.map((event, index) => <p key={`${event.type}-${index}`}><strong>{event.type}</strong> · {date(event.timeUtc)} · price {format(event.marketPrice)}{event.newStop !== null ? ` · SL ${format(event.newStop)}` : ''}{event.newTakeProfit !== null ? ` · TP ${format(event.newTakeProfit)}` : ''}</p>)}</div>
       <p className="mt-3 text-slate-500">Source: {detail.summary.source} #{detail.summary.parentId}</p>
     </section>
+  </div>
+}
+
+function DemoDetails({ detail }: { detail: ExnessDemoTradeDetail }) {
+  const values = (record: Record<string, unknown>) => Object.entries(record).map(([key, value]) => <div key={key}><dt className="font-medium text-slate-950">{key}</dt><dd>{value === null || value === undefined || value === '' ? '—' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)}</dd></div>)
+  const unresolved = detail.execution.state === 'ReconciliationRequired'
+  return <div className="space-y-4">
+    {unresolved && <div className="rounded border border-amber-300 bg-amber-50 p-4 font-semibold text-amber-900">UNRESOLVED BROKER EVIDENCE</div>}
+    <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Exness Demo broker execution</h2><p className="mt-2 text-slate-600">This is a session-linked broker-ledger execution, not a Paper trade.</p><dl className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{values(detail.execution)}</dl></section>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Strategy decision / reasoning</h2><dl className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{values(detail.intent)}</dl></section>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Immutable session strategy snapshot</h2><dl className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{values(detail.session)}</dl></section>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Exact broker P/L evidence</h2><dl className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{values(detail.brokerPnl)}</dl></section>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Position management</h2>{detail.management.length === 0 ? <p className="mt-2 text-slate-500">—</p> : detail.management.map(item => <dl className="mt-3 grid gap-3 rounded border p-3 sm:grid-cols-2 xl:grid-cols-3" key={item.id}>{values(item as unknown as Record<string, unknown>)}</dl>)}</section>
+    <section className="rounded-lg border border-slate-200 bg-white p-4 text-sm"><h2 className="font-semibold">Management actions</h2>{detail.managementActions.length === 0 ? <p className="mt-2 text-slate-500">—</p> : detail.managementActions.map(item => <dl className="mt-3 grid gap-3 rounded border p-3 sm:grid-cols-2 xl:grid-cols-3" key={item.id}>{values(item as unknown as Record<string, unknown>)}</dl>)}</section>
   </div>
 }
 
