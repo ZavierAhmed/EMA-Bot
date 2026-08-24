@@ -1,9 +1,10 @@
 using EmaBot.Api.Market;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 
 namespace EmaBot.Api.Mt5Bridge;
 
-public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClient bridge) : IHistoricalMarketDataProvider
+public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClient bridge, ILogger<Mt5BridgeHistoricalMarketDataProvider>? logger = null) : IHistoricalMarketDataProvider
 {
     public const int MaximumCandles = 200_000;
     private const int PageBars = 1_000;
@@ -20,21 +21,30 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
     {
         ValidateTimeframe(timeframe);
         if (startUtc >= endUtc) throw new ArgumentException("Start UTC must be before end UTC.");
+        var total = Stopwatch.StartNew();
         var all = new SortedDictionary<DateTimeOffset, Mt5BarPayload>();
-        var cursor = startUtc;
+        var cursor = startUtc; var pageNumber = 0;
         var window = TimeframeSpan(timeframe) * PageBars;
         while (cursor < endUtc)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var candidateEnd = cursor + window;
             var windowEnd = candidateEnd < endUtc ? candidateEnd : endUtc;
+            pageNumber++;
+            logger?.LogInformation("MT5 historical page fetch started for {Operation} {BrokerSymbol} {Timeframe}, page {PageNumber}, from {StartUtc} to {EndUtc}.", Mt5BridgeOperation.GetBarsRange, symbol, timeframe, pageNumber, cursor, windowEnd);
+            var pageStopwatch = Stopwatch.StartNew();
             var page = await RequestBarsAsync(Mt5BridgeOperation.GetBarsRange, new Mt5GetBarsRangeRequest(symbol, timeframe, cursor.ToUnixTimeSeconds(), ToInclusiveStopUnixSeconds(windowEnd)), cancellationToken);
+            pageStopwatch.Stop();
+            logger?.LogInformation("MT5 historical page fetch completed for {Operation} {BrokerSymbol} {Timeframe}, page {PageNumber}, from {StartUtc} to {EndUtc}, with {BarCount} bars in {ElapsedMilliseconds} ms.", Mt5BridgeOperation.GetBarsRange, symbol, timeframe, pageNumber, cursor, windowEnd, page.Count, pageStopwatch.ElapsedMilliseconds);
             foreach (var bar in page) all[bar.OpenTimeUtc] = bar;
             if (all.Count > MaximumCandles) throw new ArgumentException($"Backtests cannot exceed {MaximumCandles:N0} candles.");
             if (windowEnd == endUtc) break;
             cursor = windowEnd;
         }
-        return MapClosed(all.Values).Where(candle => candle.OpenTimeUtc >= startUtc && candle.CloseTimeUtc <= endUtc).ToArray();
+        var candles = MapClosed(all.Values).Where(candle => candle.OpenTimeUtc >= startUtc && candle.CloseTimeUtc <= endUtc).ToArray();
+        total.Stop();
+        logger?.LogInformation("MT5 historical range fetch completed for {Operation} {BrokerSymbol} {Timeframe} from {StartUtc} to {EndUtc}: {PageCount} pages, {CandleCount} mapped closed candles in {ElapsedMilliseconds} ms.", Mt5BridgeOperation.GetBarsRange, symbol, timeframe, startUtc, endUtc, pageNumber, candles.Length, total.ElapsedMilliseconds);
+        return candles;
     }
 
     internal static IReadOnlyList<Candle> MapClosed(IEnumerable<Mt5BarPayload> source)
@@ -68,6 +78,7 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
             var response = await bridge.SendAsync(operation, request, cancellationToken);
             return response.DeserializePayload<IReadOnlyList<Mt5BarPayload>>() ?? throw new MarketDataProviderException("MT5 historical bars", MarketDataErrorKind.InvalidResponse, "MT5 returned invalid bar data.");
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception) { throw Translate(exception); }
     }
 

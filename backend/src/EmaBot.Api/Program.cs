@@ -1,6 +1,7 @@
 using EmaBot.Api.Auth;
 using EmaBot.Api.Binance;
 using EmaBot.Api.Configuration;
+using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
 using EmaBot.Api.Market;
 using EmaBot.Api.Mt5Bridge;
@@ -89,6 +90,7 @@ builder.Services.AddAntiforgery(options =>
 
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.Configure<BacktestRequestTimeoutOptions>(builder.Configuration.GetSection(BacktestRequestTimeoutOptions.SectionName));
 builder.Services.AddScoped<TradingSettingsService>();
 builder.Services.AddSingleton<BacktestEngine>();
 builder.Services.AddScoped<BacktestService>();

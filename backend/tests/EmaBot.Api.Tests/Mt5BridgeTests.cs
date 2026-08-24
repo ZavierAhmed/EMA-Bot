@@ -223,6 +223,7 @@ public sealed class Mt5BridgeServerTests
         await harness.Codec.WriteAsync(client, Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Response, requestA.Operation, requestA.RequestId, new { value = "first" }, TimeProvider.System), CancellationToken.None);
 
         Assert.Equal(requestA.RequestId, (await first).RequestId); Assert.Equal(requestB.RequestId, (await second).RequestId);
+        Assert.Equal(0, harness.Server.PendingRequestCount);
     }
 
     [Fact]
@@ -252,12 +253,93 @@ public sealed class Mt5BridgeServerTests
         await Assert.ThrowsAsync<Mt5BridgeRequestTimeoutException>(() => timeout);
         Assert.Equal(0, harness.Server.PendingRequestCount);
 
+        var retry = harness.Server.SendAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("terminal.symbol"), CancellationToken.None);
+        var retryRequest = (await harness.Codec.ReadAsync(client, CancellationToken.None))!;
+        await harness.Codec.WriteAsync(client, Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Response, retryRequest.Operation, retryRequest.RequestId, null, TimeProvider.System), CancellationToken.None);
+        await retry;
+        Assert.Equal(0, harness.Server.PendingRequestCount);
+
         var pending = harness.Server.SendAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("terminal.symbol"), CancellationToken.None);
         await harness.Codec.ReadAsync(client, CancellationToken.None);
         await client.DisposeAsync();
         await Assert.ThrowsAsync<Mt5BridgeDisconnectedException>(() => pending);
         await harness.WaitForAsync(status => status.ConnectionState == Mt5BridgeConnectionState.WaitingForClient);
         Assert.Equal(0, harness.Server.PendingRequestCount);
+    }
+
+    [Fact]
+    public async Task RequestDeadline_BoundsWriteLockAcquisitionAndCleansPendingRequest()
+    {
+        var stream = new BlockingWriteStream();
+        await using var session = new Mt5BridgeSession(stream, new Mt5BridgeFrameCodec(4_096), TimeProvider.System, TimeSpan.FromMilliseconds(50));
+        var lockOwner = session.WriteAsync(Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Heartbeat, Mt5BridgeOperation.Heartbeat, null, null, TimeProvider.System), CancellationToken.None);
+        await stream.WaitForWriteAsync();
+
+        try
+        {
+            await Assert.ThrowsAsync<Mt5BridgeRequestTimeoutException>(() => session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None));
+            Assert.Equal(0, session.PendingRequestCount);
+        }
+        finally { stream.Release(); await lockOwner; }
+
+        var responseTimeout = session.SendRequestAsync(
+            Mt5BridgeOperation.GetQuote,
+            new Mt5GetInstrumentRequest("BTCUSDm"),
+            CancellationToken.None);
+
+        await Assert.ThrowsAsync<Mt5BridgeRequestTimeoutException>(() => responseTimeout);
+        Assert.Equal(0, session.PendingRequestCount);
+    }
+
+    [Fact]
+    public async Task RequestDeadline_BoundsBlockedPipeWriteAndPoisonsPartialFrameSession()
+    {
+        var stream = new BlockingWriteStream();
+        await using var session = new Mt5BridgeSession(stream, new Mt5BridgeFrameCodec(4_096), TimeProvider.System, TimeSpan.FromMilliseconds(50));
+
+        var timeout = session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None);
+        await stream.WaitForWriteAsync();
+        await Assert.ThrowsAsync<Mt5BridgeRequestTimeoutException>(() => timeout);
+        Assert.Equal(0, session.PendingRequestCount);
+        await Assert.ThrowsAsync<Mt5BridgeDisconnectedException>(() => session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task PartialFrameCallerCancellation_PreservesCancellationAndPoisonsSession()
+    {
+        var stream = new HeaderThenBlockingPayloadStream();
+        await using var session = new Mt5BridgeSession(stream, new Mt5BridgeFrameCodec(4_096), TimeProvider.System, TimeSpan.FromSeconds(1));
+        using var caller = new CancellationTokenSource();
+        var cancelled = session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), caller.Token);
+        await stream.WaitForPayloadAsync(); caller.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+        Assert.Equal(0, session.PendingRequestCount);
+        await Assert.ThrowsAsync<Mt5BridgeDisconnectedException>(() => session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task PartialFrameDeadline_PoisonsSessionAfterHeaderWasWritten()
+    {
+        var stream = new HeaderThenBlockingPayloadStream();
+        await using var session = new Mt5BridgeSession(stream, new Mt5BridgeFrameCodec(4_096), TimeProvider.System, TimeSpan.FromMilliseconds(50));
+        var timeout = session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None);
+
+        await stream.WaitForPayloadAsync();
+        await Assert.ThrowsAsync<Mt5BridgeRequestTimeoutException>(() => timeout);
+        Assert.Equal(0, session.PendingRequestCount);
+        await Assert.ThrowsAsync<Mt5BridgeDisconnectedException>(() => session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RequestDeadline_DisconnectDuringBlockedWriteRemainsDisconnected()
+    {
+        var stream = new BlockingWriteStream();
+        await using var session = new Mt5BridgeSession(stream, new Mt5BridgeFrameCodec(4_096), TimeProvider.System, TimeSpan.FromSeconds(1));
+        var pending = session.SendRequestAsync(Mt5BridgeOperation.GetQuote, new Mt5GetInstrumentRequest("BTCUSDm"), CancellationToken.None);
+        await stream.WaitForWriteAsync(); session.Disconnect();
+
+        await Assert.ThrowsAsync<Mt5BridgeDisconnectedException>(() => pending);
+        Assert.Equal(0, session.PendingRequestCount);
     }
 
     [Fact]
@@ -358,6 +440,32 @@ public sealed class Mt5BridgeServerTests
         }
 
         public async ValueTask DisposeAsync() => await Server.DisposeAsync();
+    }
+
+    private sealed class BlockingWriteStream : Stream
+    {
+        private TaskCompletionSource writeStarted = NewSource();
+        private TaskCompletionSource release = NewSource();
+        public override bool CanRead => false; public override bool CanSeek => false; public override bool CanWrite => true; public override long Length => 0; public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public Task WaitForWriteAsync() => writeStarted.Task;
+        public void Release() => release.TrySetResult();
+        public void Reset() { writeStarted = NewSource(); release = NewSource(); }
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default) => WaitAsync(cancellationToken);
+        private async ValueTask WaitAsync(CancellationToken cancellationToken) { writeStarted.TrySetResult(); await release.Task.WaitAsync(cancellationToken); }
+        private static TaskCompletionSource NewSource() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override void Flush() { } public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask; public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException(); public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException(); public override void SetLength(long value) => throw new NotSupportedException(); public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class HeaderThenBlockingPayloadStream : Stream
+    {
+        private readonly TaskCompletionSource payloadStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int writes;
+        public override bool CanRead => false; public override bool CanSeek => false; public override bool CanWrite => true; public override long Length => 0; public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public Task WaitForPayloadAsync() => payloadStarted.Task;
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+            => Interlocked.Increment(ref writes) == 1 ? ValueTask.CompletedTask : BlockPayloadAsync(cancellationToken);
+        private async ValueTask BlockPayloadAsync(CancellationToken cancellationToken) { payloadStarted.TrySetResult(); await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+        public override void Flush() { } public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask; public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException(); public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException(); public override void SetLength(long value) => throw new NotSupportedException(); public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }
 

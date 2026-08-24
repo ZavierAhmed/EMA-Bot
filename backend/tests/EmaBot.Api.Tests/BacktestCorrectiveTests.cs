@@ -7,10 +7,13 @@ using EmaBot.Api.Binance;
 using EmaBot.Api.Configuration;
 using EmaBot.Api.Controllers;
 using EmaBot.Api.Data;
+using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -321,6 +324,107 @@ public sealed class BacktestServiceCorrectiveTests
 
     private sealed class StaticHistorical(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider
     { public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset start, DateTimeOffset end, CancellationToken token) => Task.FromResult(candles); }
+}
+
+public sealed class BacktestTimeoutTests
+{
+    [Fact]
+    public async Task ProviderTimeout_MapsToGatewayTimeout()
+    {
+        await using var harness = await Harness.CreateAsync(new ThrowingHistorical(new MarketDataProviderException("MT5 historical bars", MarketDataErrorKind.Timeout, "timed out")));
+
+        var result = await harness.Controller.Run(harness.Request, CancellationToken.None);
+
+        var response = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status504GatewayTimeout, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task UnavailableHistory_MapsToServiceUnavailable()
+    {
+        await using var harness = await Harness.CreateAsync(new ThrowingHistorical(new MarketDataProviderException("MT5 historical bars", MarketDataErrorKind.Unavailable, "unavailable")));
+
+        var result = await harness.Controller.Run(harness.Request, CancellationToken.None);
+
+        var response = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ServerDeadline_ReturnsGatewayTimeoutAndDoesNotPersistBacktestRun()
+    {
+        var historical = new WaitingHistorical();
+        await using var harness = await Harness.CreateAsync(historical, TimeSpan.FromMilliseconds(25));
+
+        var result = await harness.Controller.Run(harness.Request, CancellationToken.None);
+
+        var response = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status504GatewayTimeout, response.StatusCode);
+        Assert.Equal(0, await harness.Database.BacktestRuns.CountAsync());
+        Assert.True(historical.CancellationObserved);
+    }
+
+    [Fact]
+    public async Task HtfEnabledBacktest_PreservesExecutionAndHtfHistoryFetches()
+    {
+        var historical = new RecordingHistorical(Candles(110));
+        await using var harness = await Harness.CreateAsync(historical);
+        harness.Database.TradingSettings.Add(new TradingSettings { Id = TradingSettings.GlobalId, UseHtfRegimeFilter = true, RiskReward = 2m, FixedOrderSizeUsdt = 100m, UpdatedAtUtc = DateTimeOffset.UtcNow });
+        await harness.Database.SaveChangesAsync();
+
+        var result = await harness.Controller.Run(harness.Request, CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+        Assert.Equal(["3m", "15m"], historical.Requests.Select(item => item.Interval));
+        Assert.Equal(harness.Request.StartUtc - HigherTimeframeRegime.WarmupDuration("15m"), historical.Requests[1].StartUtc);
+        Assert.Equal(1, await harness.Database.BacktestRuns.CountAsync());
+    }
+
+    private static IReadOnlyList<Candle> Candles(int count) => Enumerable.Range(0, count).Select(index =>
+    {
+        var open = DateTimeOffset.UnixEpoch.AddMinutes(index * 3);
+        return new Candle(open, open.AddMinutes(3).AddMilliseconds(-1), 100m, 101m, 99m, 100m, 1m, true);
+    }).ToArray();
+
+    private sealed class Harness : IAsyncDisposable
+    {
+        public EmaBotDbContext Database { get; }
+        public BacktestsController Controller { get; }
+        public BacktestRequest Request { get; } = new("BTCUSDm", "3m", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddHours(6));
+
+        private Harness(EmaBotDbContext database, BacktestsController controller) { Database = database; Controller = controller; }
+
+        public static async Task<Harness> CreateAsync(IHistoricalMarketDataProvider historical, TimeSpan? deadline = null)
+        {
+            var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+            database.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "BTCUSDm", IsEnabled = true });
+            await database.SaveChangesAsync();
+            var settings = new TradingSettingsService(database, Options.Create(new TradingDefaultsOptions()));
+            var service = new BacktestService(database, historical, settings, new BacktestEngine(new EmaSignalEngine()));
+            var options = Options.Create(new BacktestRequestTimeoutOptions { RequestTimeout = deadline ?? TimeSpan.FromSeconds(1) });
+            return new Harness(database, new BacktestsController(database, service, options));
+        }
+
+        public ValueTask DisposeAsync() => Database.DisposeAsync();
+    }
+
+    private sealed class ThrowingHistorical(Exception exception) : IHistoricalMarketDataProvider
+    { public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token) => Task.FromException<IReadOnlyList<Candle>>(exception); }
+    private sealed class WaitingHistorical : IHistoricalMarketDataProvider
+    {
+        public bool CancellationObserved { get; private set; }
+        public async Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token)
+        {
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { CancellationObserved = true; throw; }
+            return [];
+        }
+    }
+    private sealed class RecordingHistorical(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider
+    {
+        public List<(string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc)> Requests { get; } = [];
+        public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token) { Requests.Add((interval, startUtc, endUtc)); return Task.FromResult(candles); }
+    }
 }
 
 public sealed class BacktestApiCorrectiveTests : IClassFixture<EmaBotApiFactory>

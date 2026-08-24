@@ -1,12 +1,10 @@
 using System.Collections.Concurrent;
-using System.Diagnostics;
-using System.IO.Pipes;
 
 namespace EmaBot.Api.Mt5Bridge;
 
 public sealed class Mt5BridgeSession : IAsyncDisposable
 {
-    private readonly NamedPipeServerStream _pipe;
+    private readonly Stream _pipe;
     private readonly Mt5BridgeFrameCodec _codec;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _requestTimeout;
@@ -14,7 +12,7 @@ public sealed class Mt5BridgeSession : IAsyncDisposable
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly CancellationTokenSource _stopped = new();
 
-    public Mt5BridgeSession(NamedPipeServerStream pipe, Mt5BridgeFrameCodec codec, TimeProvider timeProvider, TimeSpan requestTimeout)
+    public Mt5BridgeSession(Stream pipe, Mt5BridgeFrameCodec codec, TimeProvider timeProvider, TimeSpan requestTimeout)
     {
         _pipe = pipe;
         _codec = codec;
@@ -67,14 +65,20 @@ public sealed class Mt5BridgeSession : IAsyncDisposable
         var requestId = Guid.NewGuid();
         var pending = new TaskCompletionSource<Mt5BridgeEnvelope>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (!_pending.TryAdd(requestId, pending)) throw new Mt5BridgeProtocolException("Could not register bridge request.");
+        using var deadline = new CancellationTokenSource(_requestTimeout);
+        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopped.Token, deadline.Token);
+        var frameWriteStarted = false;
+        var frameWriteCompleted = false;
         try
         {
-            await WriteAsync(Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Request, operation, requestId, payload, _timeProvider), cancellationToken);
-            using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stopped.Token);
-            try { return await pending.Task.WaitAsync(_requestTimeout, waitCancellation.Token); }
-            catch (TimeoutException) { throw new Mt5BridgeRequestTimeoutException("MT5 bridge request timed out."); }
-            catch (OperationCanceledException) when (_stopped.IsCancellationRequested) { throw new Mt5BridgeDisconnectedException("MT5 bridge client disconnected."); }
+            await WriteRequestAsync(Mt5BridgeEnvelope.Create(Mt5BridgeFrameKind.Request, operation, requestId, payload, _timeProvider), requestCancellation.Token, () => frameWriteStarted = true);
+            frameWriteCompleted = true;
+            return await pending.Task.WaitAsync(requestCancellation.Token);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { PoisonPartialFrame(frameWriteStarted, frameWriteCompleted); throw; }
+        catch (OperationCanceledException) when (_stopped.IsCancellationRequested) { PoisonPartialFrame(frameWriteStarted, frameWriteCompleted); throw new Mt5BridgeDisconnectedException("MT5 bridge client disconnected."); }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { PoisonPartialFrame(frameWriteStarted, frameWriteCompleted); throw new Mt5BridgeRequestTimeoutException("MT5 bridge request timed out."); }
+        catch { PoisonPartialFrame(frameWriteStarted, frameWriteCompleted); throw; }
         finally { _pending.TryRemove(requestId, out _); }
     }
 
@@ -83,6 +87,22 @@ public sealed class Mt5BridgeSession : IAsyncDisposable
         await _writeLock.WaitAsync(cancellationToken);
         try { await _codec.WriteAsync(_pipe, envelope, cancellationToken); }
         finally { _writeLock.Release(); }
+    }
+
+    private async Task WriteRequestAsync(Mt5BridgeEnvelope envelope, CancellationToken cancellationToken, Action onFrameWriteStarted)
+    {
+        await _writeLock.WaitAsync(cancellationToken);
+        try
+        {
+            onFrameWriteStarted();
+            await _codec.WriteAsync(_pipe, envelope, cancellationToken);
+        }
+        finally { _writeLock.Release(); }
+    }
+
+    private void PoisonPartialFrame(bool frameWriteStarted, bool frameWriteCompleted)
+    {
+        if (frameWriteStarted && !frameWriteCompleted) Disconnect();
     }
 
     public void Disconnect() => _stopped.Cancel();

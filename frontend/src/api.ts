@@ -63,8 +63,8 @@ export class ApiError extends Error {
   }
 }
 
-async function antiforgeryToken(): Promise<string> {
-  const response = await request<AntiforgeryResponse>('/api/auth/antiforgery')
+async function antiforgeryToken(signal?: AbortSignal): Promise<string> {
+  const response = await request<AntiforgeryResponse>('/api/auth/antiforgery', { signal })
   return response.token
 }
 
@@ -114,9 +114,9 @@ export const startDemoStrategySession = (id: number) => protectedRequest<DemoStr
 export const resumeDemoStrategySession = (id: number) => protectedRequest<DemoStrategySession>(`/api/demo-strategy-sessions/${id}/resume`, 'POST')
 export const stopDemoStrategySession = (id: number) => protectedRequest<void>(`/api/demo-strategy-sessions/${id}/stop`, 'POST')
 
-async function protectedRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
-  const token = await antiforgeryToken()
-  return request<T>(path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token }, body: body === undefined ? undefined : JSON.stringify(body) })
+async function protectedRequest<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const token = await antiforgeryToken(signal)
+  return request<T>(path, { method, headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token }, body: body === undefined ? undefined : JSON.stringify(body), signal })
 }
 
 export const getMonitoredSymbols = () => request<MonitoredSymbol[]>('/api/symbols')
@@ -129,7 +129,7 @@ export const getTradingSettings = () => request<TradingSettings>('/api/settings/
 export const updateTradingSettings = (settings: Omit<TradingSettings, 'updatedAtUtc'>) => protectedRequest<TradingSettings>('/api/settings/trading', 'PUT', settings)
 export const getBacktests = () => request<BacktestRunSummary[]>('/api/backtests')
 export const getBacktest = (id: number) => request<BacktestRun>(`/api/backtests/${id}`)
-export const runBacktest = (requestBody: { symbol: string; interval: string; startUtc: string; endUtc: string }) => protectedRequest<BacktestRun>('/api/backtests', 'POST', requestBody)
+export const runBacktest = (requestBody: { symbol: string; interval: string; startUtc: string; endUtc: string }, signal?: AbortSignal) => protectedRequest<BacktestRun>('/api/backtests', 'POST', requestBody, signal)
 export const deleteBacktest = (id: number) => protectedRequest<void>(`/api/backtests/${id}`, 'DELETE')
 export const getOptimizerOptions = () => request<OptimizerOptions>('/api/strategy-optimizer/options')
 export const getOptimizerRuns = () => request<OptimizerRun[]>('/api/strategy-optimizer/runs')
