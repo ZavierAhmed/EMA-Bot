@@ -131,6 +131,7 @@ export const getBacktests = () => request<BacktestRunSummary[]>('/api/backtests'
 export const getBacktest = (id: number) => request<BacktestRun>(`/api/backtests/${id}`)
 export const runBacktest = (requestBody: { symbol: string; interval: string; startUtc: string; endUtc: string }, signal?: AbortSignal) => protectedRequest<BacktestRun>('/api/backtests', 'POST', requestBody, signal)
 export const deleteBacktest = (id: number) => protectedRequest<void>(`/api/backtests/${id}`, 'DELETE')
+export async function downloadBacktestExcel(id: number) { await download(`/api/backtests/${id}/export/excel`, `ema-bot-backtest-${id}.xlsx`) }
 export const getOptimizerOptions = () => request<OptimizerOptions>('/api/strategy-optimizer/options')
 export const getOptimizerRuns = () => request<OptimizerRun[]>('/api/strategy-optimizer/runs')
 export const getOptimizerRun = (id: number) => request<OptimizerRun>(`/api/strategy-optimizer/runs/${id}`)

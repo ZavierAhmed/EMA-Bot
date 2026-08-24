@@ -29,7 +29,20 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
     }
     [HttpGet] public async Task<IActionResult> List(CancellationToken token) => Ok((await service.ListAsync(token)).Select(BacktestResponseMapper.ToSummary));
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id, CancellationToken token) => (await service.GetAsync(id, token)) is { } run ? Ok(BacktestResponseMapper.ToDetail(run)) : NotFound(new ApiMessage("Backtest not found."));
+    [HttpGet("{id:int}/export/excel")]
+    public async Task<IActionResult> ExportExcel(int id, CancellationToken token)
+    {
+        var workbook = await BacktestExcelExport.CreateAsync(database, id, token);
+        if (workbook is null) return NotFound(new ApiMessage("Backtest not found."));
+        return File(workbook.Bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"ema-bot-backtest-{id}-{FilenamePart(workbook.Symbol)}-{FilenamePart(workbook.Interval)}.xlsx");
+    }
     [HttpDelete("{id:int}")] public async Task<IActionResult> Delete(int id, CancellationToken token) => await service.DeleteAsync(id, token) ? NoContent() : NotFound(new ApiMessage("Backtest not found."));
+
+    private static string FilenamePart(string value)
+    {
+        var safe = new string(value.Where(character => char.IsLetterOrDigit(character) || character is '-' or '_').ToArray());
+        return string.IsNullOrEmpty(safe) ? "unknown" : safe;
+    }
 }
 public sealed record BacktestRequest(string Symbol, string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc);
 public sealed class BacktestRequestTimeoutOptions
