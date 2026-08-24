@@ -7,7 +7,7 @@ namespace EmaBot.Api.Mt5Bridge;
 public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClient bridge, ILogger<Mt5BridgeHistoricalMarketDataProvider>? logger = null) : IHistoricalMarketDataProvider
 {
     public const int MaximumCandles = 200_000;
-    private const int PageBars = 1_000;
+    internal const int HistoryPageBars = 1_000;
 
     public async Task<IReadOnlyList<Candle>> GetLatestAsync(string symbol, string timeframe, int count, CancellationToken cancellationToken)
     {
@@ -24,7 +24,7 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
         var total = Stopwatch.StartNew();
         var all = new SortedDictionary<DateTimeOffset, Mt5BarPayload>();
         var cursor = startUtc; var pageNumber = 0;
-        var window = TimeframeSpan(timeframe) * PageBars;
+        var window = TimeframeSpan(timeframe) * HistoryPageBars;
         while (cursor < endUtc)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -82,7 +82,17 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
         catch (Exception exception) { throw Translate(exception); }
     }
 
-    private static TimeSpan TimeframeSpan(string timeframe) => timeframe switch { "3m" => TimeSpan.FromMinutes(3), "5m" => TimeSpan.FromMinutes(5), "15m" => TimeSpan.FromMinutes(15), "30m" => TimeSpan.FromMinutes(30), "1h" => TimeSpan.FromHours(1), "2h" => TimeSpan.FromHours(2), "4h" => TimeSpan.FromHours(4), "6h" => TimeSpan.FromHours(6), "8h" => TimeSpan.FromHours(8), "12h" => TimeSpan.FromHours(12), "1d" => TimeSpan.FromDays(1), "1w" => TimeSpan.FromDays(7), "1M" => TimeSpan.FromDays(31), _ => throw new ArgumentException("Unsupported MT5 timeframe.") };
+    internal static TimeSpan TimeframeSpan(string timeframe) => timeframe switch { "3m" => TimeSpan.FromMinutes(3), "5m" => TimeSpan.FromMinutes(5), "15m" => TimeSpan.FromMinutes(15), "30m" => TimeSpan.FromMinutes(30), "1h" => TimeSpan.FromHours(1), "2h" => TimeSpan.FromHours(2), "4h" => TimeSpan.FromHours(4), "6h" => TimeSpan.FromHours(6), "8h" => TimeSpan.FromHours(8), "12h" => TimeSpan.FromHours(12), "1d" => TimeSpan.FromDays(1), "1w" => TimeSpan.FromDays(7), "1M" => TimeSpan.FromDays(31), _ => throw new ArgumentException("Unsupported MT5 timeframe.") };
+
+    internal static int EstimateRangePageCount(string timeframe, DateTimeOffset startUtc, DateTimeOffset endUtc)
+    {
+        ValidateTimeframe(timeframe);
+        if (startUtc >= endUtc) throw new ArgumentException("Start UTC must be before end UTC.");
+        var windowTicks = checked(TimeframeSpan(timeframe).Ticks * HistoryPageBars);
+        var durationTicks = (endUtc - startUtc).Ticks;
+        var fullWindows = durationTicks / windowTicks;
+        return checked((int)(fullWindows + (durationTicks % windowTicks == 0 ? 0 : 1)));
+    }
     internal static MarketDataProviderException Translate(Exception exception) => exception switch
     {
         MarketDataProviderException market => market,

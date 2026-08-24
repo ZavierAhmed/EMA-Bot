@@ -354,14 +354,57 @@ public sealed class BacktestTimeoutTests
     public async Task ServerDeadline_ReturnsGatewayTimeoutAndDoesNotPersistBacktestRun()
     {
         var historical = new WaitingHistorical();
-        await using var harness = await Harness.CreateAsync(historical, TimeSpan.FromMilliseconds(25));
+        await using var harness = await Harness.CreateAsync(historical, TinyTimeoutOptions());
 
         var result = await harness.Controller.Run(harness.Request, CancellationToken.None);
 
         var response = Assert.IsType<ObjectResult>(result.Result);
         Assert.Equal(StatusCodes.Status504GatewayTimeout, response.StatusCode);
+        Assert.Equal("Backtest exceeded its allowed processing time for this research window. Retry, or use a smaller date range if the problem persists.", Assert.IsType<ApiMessage>(response.Value).Message);
         Assert.Equal(0, await harness.Database.BacktestRuns.CountAsync());
         Assert.True(historical.CancellationObserved);
+    }
+
+    [Fact]
+    public async Task LargeRange_UsesCalculatedWorkloadDeadlineRatherThanTheSmallRangeMinimum()
+    {
+        var options = new BacktestRequestTimeoutOptions { MinimumRequestTimeout = TimeSpan.FromMilliseconds(100), BaseProcessingBudget = TimeSpan.Zero, PerEstimatedHistoryPageBudget = TimeSpan.FromMilliseconds(50), MaximumRequestTimeout = TimeSpan.FromSeconds(2) };
+        await using var small = await Harness.CreateAsync(new DelayedHistorical(TimeSpan.FromMilliseconds(200)), options);
+
+        var smallResult = await small.Controller.Run(small.Request, CancellationToken.None);
+
+        Assert.Equal(StatusCodes.Status504GatewayTimeout, Assert.IsType<ObjectResult>(smallResult.Result).StatusCode);
+        Assert.Equal(0, await small.Database.BacktestRuns.CountAsync());
+
+        await using var large = await Harness.CreateAsync(new DelayedHistorical(TimeSpan.FromMilliseconds(200)), options);
+        var largeRequest = large.Request with { EndUtc = large.Request.StartUtc.AddDays(30) };
+
+        var largeResult = await large.Controller.Run(largeRequest, CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(largeResult.Result);
+        Assert.Equal(1, await large.Database.BacktestRuns.CountAsync());
+    }
+
+    [Fact]
+    public async Task CallerCancellation_IsNotTranslatedToGatewayTimeout()
+    {
+        await using var harness = await Harness.CreateAsync(new WaitingHistorical());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromMilliseconds(20));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => harness.Controller.Run(harness.Request, cancellation.Token));
+        Assert.Equal(0, await harness.Database.BacktestRuns.CountAsync());
+    }
+
+    [Fact]
+    public async Task SmallRange_SuccessfulBacktestStillCreatesRun()
+    {
+        await using var harness = await Harness.CreateAsync(new RecordingHistorical(Candles(110)));
+
+        var result = await harness.Controller.Run(harness.Request, CancellationToken.None);
+
+        Assert.IsType<CreatedAtActionResult>(result.Result);
+        Assert.Equal(1, await harness.Database.BacktestRuns.CountAsync());
     }
 
     [Fact]
@@ -394,14 +437,14 @@ public sealed class BacktestTimeoutTests
 
         private Harness(EmaBotDbContext database, BacktestsController controller) { Database = database; Controller = controller; }
 
-        public static async Task<Harness> CreateAsync(IHistoricalMarketDataProvider historical, TimeSpan? deadline = null)
+        public static async Task<Harness> CreateAsync(IHistoricalMarketDataProvider historical, BacktestRequestTimeoutOptions? timeoutOptions = null)
         {
             var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
             database.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "BTCUSDm", IsEnabled = true });
             await database.SaveChangesAsync();
             var settings = new TradingSettingsService(database, Options.Create(new TradingDefaultsOptions()));
             var service = new BacktestService(database, historical, settings, new BacktestEngine(new EmaSignalEngine()));
-            var options = Options.Create(new BacktestRequestTimeoutOptions { RequestTimeout = deadline ?? TimeSpan.FromSeconds(1) });
+            var options = Options.Create(timeoutOptions ?? new BacktestRequestTimeoutOptions());
             return new Harness(database, new BacktestsController(database, service, options));
         }
 
@@ -420,11 +463,27 @@ public sealed class BacktestTimeoutTests
             return [];
         }
     }
+    private sealed class DelayedHistorical(TimeSpan delay) : IHistoricalMarketDataProvider
+    {
+        public async Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token)
+        {
+            await Task.Delay(delay, token);
+            return [];
+        }
+    }
     private sealed class RecordingHistorical(IReadOnlyList<Candle> candles) : IHistoricalMarketDataProvider
     {
         public List<(string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc)> Requests { get; } = [];
         public Task<IReadOnlyList<Candle>> GetRangeAsync(string symbol, string interval, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken token) { Requests.Add((interval, startUtc, endUtc)); return Task.FromResult(candles); }
     }
+
+    private static BacktestRequestTimeoutOptions TinyTimeoutOptions() => new()
+    {
+        MinimumRequestTimeout = TimeSpan.FromMilliseconds(25),
+        BaseProcessingBudget = TimeSpan.Zero,
+        PerEstimatedHistoryPageBudget = TimeSpan.FromMilliseconds(1),
+        MaximumRequestTimeout = TimeSpan.FromMilliseconds(25)
+    };
 }
 
 public sealed class BacktestApiCorrectiveTests : IClassFixture<EmaBotApiFactory>

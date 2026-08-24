@@ -72,6 +72,31 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
+    public async Task RangePaging_UsesUnchangedOneThousandBarWindows()
+    {
+        var start = Time(0, 0);
+        var window = Mt5BridgeHistoricalMarketDataProvider.TimeframeSpan("3m") * Mt5BridgeHistoricalMarketDataProvider.HistoryPageBars;
+        var bridge = new PagingBridge(Response(Mt5BridgeOperation.GetBarsRange, Array.Empty<Mt5BarPayload>()));
+        var provider = new Mt5BridgeHistoricalMarketDataProvider(bridge);
+
+        await provider.GetRangeAsync("XAUUSDm", "3m", start, start + window + TimeSpan.FromTicks(1), CancellationToken.None);
+
+        var requests = bridge.Payloads.Cast<Mt5GetBarsRangeRequest>().ToArray();
+        Assert.Equal(2, requests.Length);
+        Assert.Equal(start.ToUnixTimeSeconds(), requests[0].StartUnixSeconds);
+        Assert.Equal((start + window).ToUnixTimeSeconds(), requests[0].EndUnixSeconds);
+        Assert.Equal((start + window).ToUnixTimeSeconds(), requests[1].StartUnixSeconds);
+        Assert.Equal((start + window).ToUnixTimeSeconds() + 1, requests[1].EndUnixSeconds);
+    }
+
+    [Fact]
+    public void DefaultBridgeRequestTimeout_RemainsFiveSeconds()
+    {
+        using var scope = _factory.Services.CreateScope();
+        Assert.Equal(5, scope.ServiceProvider.GetRequiredService<IOptions<Mt5BridgeOptions>>().Value.RequestTimeoutSeconds);
+    }
+
+    [Fact]
     public async Task StreamBaselineRolloverAndDuplicateSuppressionPreserveCurrentPrice()
     {
         var state = new Mt5BridgeMarketBarStreamProvider.StreamState(); var updates = new List<MarketBarUpdate>();
@@ -109,4 +134,16 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
     private static Mt5BarPayload Bar(int hour, int minute, bool current, decimal close = 101m, long realVolume = 0) => new("XAUUSDm", "3m", Time(hour, minute), 100m, 105m, 99m, close, 20, realVolume, 4, current);
     private static Mt5BarPayload BarAt(DateTimeOffset open, bool current) => new("XAUUSDm", "3m", open, 100m, 105m, 99m, 101m, 20, 0, 4, current);
     private static DateTimeOffset Time(int hour, int minute, int second = 0, int millisecond = 0) => new(2026, 8, 13, hour, minute, second, millisecond, TimeSpan.Zero);
+
+    private sealed class PagingBridge(Mt5BridgeEnvelope response) : IMt5BridgeRequestClient
+    {
+        public List<object?> Payloads { get; } = [];
+        public bool IsConnected => true;
+        public Mt5BridgeStatus GetStatus() => throw new NotSupportedException();
+        public Task<Mt5BridgeEnvelope> SendAsync(Mt5BridgeOperation operation, object? payload, CancellationToken cancellationToken)
+        {
+            Payloads.Add(payload);
+            return Task.FromResult(response);
+        }
+    }
 }

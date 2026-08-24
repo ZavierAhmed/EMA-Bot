@@ -34,7 +34,14 @@ public static class AdaptiveInitialStopRules
         var atr = AtrCalculator.Wilder14(candles, signalIndex);
         if (!atr.HasValue) throw new InvalidOperationException("ATR14 is unavailable for the signal candle.");
 
-        var score = ReversalPower(signal, candles[signalIndex], atr.Value, direction);
+        return Find(candles, signalIndex, signal, direction, atr.Value);
+    }
+
+    internal static InitialStopSelection Find(IReadOnlyList<Candle> candles, int signalIndex, IndicatorSnapshot signal, SignalDirection direction, decimal atr)
+    {
+        if (signalIndex < 0 || signalIndex >= candles.Count || candles[signalIndex].CloseTimeUtc > signal.Time) throw new ArgumentOutOfRangeException(nameof(signalIndex));
+
+        var score = ReversalPower(signal, candles[signalIndex], atr, direction);
         var band = score < 45m ? ReversalPowerBand.Weak : score < 70m ? ReversalPowerBand.Normal : ReversalPowerBand.Strong;
         var lookback = band == ReversalPowerBand.Weak ? 1 : band == ReversalPowerBand.Normal ? 2 : 3;
         var start = Math.Max(0, signalIndex - lookback + 1);
@@ -44,7 +51,7 @@ public static class AdaptiveInitialStopRules
             : structural.Aggregate((best, candidate) => candidate.High > best.High ? candidate : best);
         var anchor = direction == SignalDirection.Long ? anchorCandle.Low : anchorCandle.High;
         var multiplier = band == ReversalPowerBand.Weak ? .10m : band == ReversalPowerBand.Normal ? .20m : .30m;
-        var buffer = atr.Value * multiplier;
+        var buffer = atr * multiplier;
         var price = direction == SignalDirection.Long ? anchor - buffer : anchor + buffer;
         var source = band == ReversalPowerBand.Weak ? StopSourceType.AdaptiveSignalCandle : StopSourceType.AdaptiveMicroStructure;
         return new(price, source, anchorCandle.CloseTimeUtc, true, atr, score, band, anchor, buffer);

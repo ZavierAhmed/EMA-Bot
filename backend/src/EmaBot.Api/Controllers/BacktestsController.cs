@@ -11,20 +11,22 @@ using Microsoft.Extensions.Options;
 namespace EmaBot.Api.Controllers;
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/backtests")]
-public sealed class BacktestsController(EmaBotDbContext database, BacktestService service, IOptions<BacktestRequestTimeoutOptions> timeoutOptions) : ControllerBase
+public sealed class BacktestsController(EmaBotDbContext database, BacktestService service, IOptions<BacktestRequestTimeoutOptions> timeoutOptions, ILogger<BacktestsController>? logger = null) : ControllerBase
 {
     [HttpPost]
     public async Task<ActionResult<BacktestRunDetailResponse>> Run(BacktestRequest request, CancellationToken token)
     {
         if (!Mt5NativeTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use an MT5-native interval and a valid UTC date range. The 3d timeframe is not available for MT5 research."));
         var symbol = request.Symbol.Trim(); if (string.IsNullOrWhiteSpace(symbol) || !await database.MonitoredSymbols.AnyAsync(x => x.Source == MarketDataSource.Mt5Exness && x.Symbol == symbol && x.IsEnabled, token)) return BadRequest(new ApiMessage("The exact MT5 instrument must be monitored and enabled."));
+        var budget = BacktestRequestBudgetCalculator.Calculate(request.Interval, request.StartUtc, request.EndUtc, timeoutOptions.Value);
+        logger?.LogInformation("Backtest workload budget for {BrokerSymbol} {Timeframe} from {StartUtc} to {EndUtc}: executionPages={ExecutionPages}, htf={PotentialHigherTimeframe}, htfPages={HigherTimeframePages}, totalPages={TotalPages}, timeoutMs={TimeoutMilliseconds}.", symbol, request.Interval, request.StartUtc, request.EndUtc, budget.EstimatedExecutionHistoryPages, budget.PotentialHigherTimeframe, budget.EstimatedHigherTimeframeHistoryPages, budget.EstimatedTotalHistoryPages, budget.ChosenRequestTimeout.TotalMilliseconds);
         var requestAborted = ControllerContext.HttpContext?.RequestAborted ?? token;
-        using var deadline = new CancellationTokenSource(timeoutOptions.Value.RequestTimeout);
+        using var deadline = new CancellationTokenSource(budget.ChosenRequestTimeout);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token, requestAborted, deadline.Token);
         try { var run = await service.RunAsync(symbol, request.Interval, request.StartUtc, request.EndUtc, operation.Token); return CreatedAtAction(nameof(Get), new { id = run.Id }, BacktestResponseMapper.ToDetail(run)); }
         catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); }
         catch (OperationCanceledException) when (token.IsCancellationRequested || requestAborted.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest timed out while waiting for MT5 historical data. Check the MT5 bridge/history state and retry.")); }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest exceeded its allowed processing time for this research window. Retry, or use a smaller date range if the problem persists.")); }
         catch (MarketDataProviderException exception) { return StatusCode(exception.Kind == MarketDataErrorKind.RateLimited ? 429 : exception.Kind == MarketDataErrorKind.Timeout ? 504 : 503, new ApiMessage(exception.Message.Contains("history", StringComparison.OrdinalIgnoreCase) ? "MT5 history is still loading. Retry shortly." : "MT5 historical market data is currently unavailable.")); }
     }
     [HttpGet] public async Task<IActionResult> List(CancellationToken token) => Ok((await service.ListAsync(token)).Select(BacktestResponseMapper.ToSummary));
@@ -45,8 +47,3 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
     }
 }
 public sealed record BacktestRequest(string Symbol, string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc);
-public sealed class BacktestRequestTimeoutOptions
-{
-    public const string SectionName = "Backtest";
-    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromMinutes(2);
-}

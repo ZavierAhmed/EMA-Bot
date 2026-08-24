@@ -90,7 +90,8 @@ builder.Services.AddAntiforgery(options =>
 
 builder.Services.AddAuthorization();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.Configure<BacktestRequestTimeoutOptions>(builder.Configuration.GetSection(BacktestRequestTimeoutOptions.SectionName));
+builder.Services.AddOptions<BacktestRequestTimeoutOptions>().Bind(builder.Configuration.GetSection(BacktestRequestTimeoutOptions.SectionName)).ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<BacktestRequestTimeoutOptions>, BacktestRequestTimeoutOptionsValidator>();
 builder.Services.AddScoped<TradingSettingsService>();
 builder.Services.AddSingleton<BacktestEngine>();
 builder.Services.AddScoped<BacktestService>();
