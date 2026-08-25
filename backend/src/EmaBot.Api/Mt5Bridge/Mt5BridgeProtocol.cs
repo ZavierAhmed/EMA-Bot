@@ -29,7 +29,7 @@ public sealed record Mt5HelloAckPayload(int ProtocolVersion, Guid SessionId, str
 public sealed record Mt5HeartbeatPayload(DateTimeOffset? ClientTimeUtc);
 public sealed record Mt5BridgeErrorPayload(string Code, string Message, bool Retryable, int? NativeCode = null);
 public sealed record Mt5AccountPayload(long Login, string Server, string Currency, decimal Balance, decimal Equity, decimal Margin, decimal FreeMargin, decimal MarginLevel, string TradeMode);
-public sealed record Mt5InstrumentSpecPayload(string BrokerSymbol, string DisplaySymbol, string AssetClass, int Digits, decimal PointSize, decimal ContractSize, decimal VolumeMin, decimal VolumeMax, decimal VolumeStep, decimal? TickSize, decimal? TickValueProfit, decimal? TickValueLoss, decimal? VolumeLimit, int? StopsLevelPoints, int? FreezeLevelPoints, string? CurrencyBase, string? CurrencyProfit, string? CurrencyMargin);
+public sealed record Mt5InstrumentSpecPayload(string BrokerSymbol, string DisplaySymbol, string AssetClass, int Digits, decimal PointSize, decimal ContractSize, decimal VolumeMin, decimal VolumeMax, decimal VolumeStep, decimal? TickSize, decimal? TickValueProfit, decimal? TickValueLoss, decimal? VolumeLimit, int? StopsLevelPoints, int? FreezeLevelPoints, string? CurrencyBase, string? CurrencyProfit, string? CurrencyMargin, string? ChartMode = null);
 public sealed record Mt5InstrumentCatalogItemPayload(Mt5InstrumentSpecPayload Spec, string? Description, string? Path, bool IsSelected, bool IsVisible, string TradeMode);
 public sealed record Mt5GetInstrumentRequest(string BrokerSymbol);
 public sealed record Mt5QuotePayload(string BrokerSymbol, DateTimeOffset TimeUtc, decimal Bid, decimal Ask, decimal? Last, decimal? Volume);

@@ -94,7 +94,12 @@ builder.Services.AddOptions<BacktestRequestTimeoutOptions>().Bind(builder.Config
 builder.Services.AddSingleton<IValidateOptions<BacktestRequestTimeoutOptions>, BacktestRequestTimeoutOptionsValidator>();
 builder.Services.AddScoped<TradingSettingsService>();
 builder.Services.AddSingleton<BacktestEngine>();
-builder.Services.AddScoped<BacktestService>();
+builder.Services.AddSingleton<Mt5HistoricalBacktestEngine>();
+// New submitted Backtests are explicitly MT5-native; BacktestEngine remains DI-visible for the legacy optimizer.
+builder.Services.AddScoped<BacktestService>(provider => new BacktestService(
+    provider.GetRequiredService<EmaBotDbContext>(), provider.GetRequiredService<Mt5BridgeHistoricalMarketDataProvider>(), provider.GetRequiredService<TradingSettingsService>(),
+    provider.GetRequiredService<BacktestEngine>(), provider.GetRequiredService<Mt5HistoricalBacktestEngine>(), provider.GetRequiredService<IInstrumentCatalogProvider>(), provider.GetRequiredService<IMt5AccountReader>(),
+    provider.GetService<ILogger<BacktestService>>()));
 builder.Services.AddScoped<StrategyRegimeDiagnosticsService>();
 builder.Services.AddSingleton<StrategyOptimizationService>();
 builder.Services.AddSingleton<EmaSignalEngine>();

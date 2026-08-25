@@ -37,9 +37,10 @@ public static class BacktestExcelExport
         ("RequestedStartUtc", run.RequestedStartUtc), ("RequestedEndUtc", run.RequestedEndUtc), ("ActualStartUtc", run.ActualStartUtc), ("ActualEndUtc", run.ActualEndUtc),
         ("CreatedAtUtc", run.CreatedAtUtc), ("CompletedAtUtc", run.CompletedAtUtc), ("CandleCount", run.CandleCount),
         ("TotalTrades", run.TotalTrades), ("WinningTrades", run.WinningTrades), ("LosingTrades", run.LosingTrades), ("BreakEvenTrades", run.BreakEvenTrades), ("LongTrades", run.LongTrades), ("ShortTrades", run.ShortTrades), ("WinRatePercent", run.WinRatePercent),
-        ("GrossPnlUsdt", run.GrossPnlUsdt), ("TotalFeesUsdt", run.TotalFeesUsdt), ("NetPnlUsdt", run.NetPnlUsdt), ("ProfitFactor", run.ProfitFactor), ("AverageNetPnlUsdt", run.AverageNetPnlUsdt), ("AverageRMultiple", run.AverageRMultiple), ("MaxDrawdownUsdt", run.MaxDrawdownUsdt),
+        ("GrossPnlUsdt", run.GrossPnlUsdt), ("TotalFeesUsdt", run.TotalFeesUsdt), ("NetPnlUsdt", run.NetPnlUsdt), ("Legacy Gross Profit Factor", run.ProfitFactor), ("Gross Profit Factor", run.GrossProfitFactor), ("Net Profit Factor", run.NetProfitFactor), ("AverageNetPnlUsdt", run.AverageNetPnlUsdt), ("AverageRMultiple", run.AverageRMultiple), ("MaxDrawdownUsdt", run.MaxDrawdownUsdt),
         ("StartingBalanceUsdt", run.StartingBalanceUsdt), ("EndingBalanceUsdt", run.EndingBalanceUsdt),
-        ("Note", "Research simulation using MT5 / Exness historical market data. Economics are the BacktestRun's saved compatibility-model assumptions, not actual broker execution evidence."),
+        ("EconomicsMode", run.EconomicsMode), ("AccountCurrency", run.AccountCurrency), ("BrokerSymbol", run.BrokerSymbol), ("HistoricalSpreadModel", run.HistoricalSpreadModel),
+        ("Note", run.EconomicsMode == BacktestEconomicsMode.Mt5HistoricalBidAsk ? "MT5 native historical Bid/Ask simulation. Spread is MqlRates bar spread held constant inside each bar; it is not tick-accurate. Swap and slippage are not modeled." : "Research simulation using MT5 / Exness historical market data. Economics are the BacktestRun's saved compatibility-model assumptions, not actual broker execution evidence."),
         ("HoldingMinutesDefinition", "ExitTimeUtc minus EntryTimeUtc, in minutes."),
         ("InitialRiskPriceDistanceDefinition", "abs(EntryPrice - InitialStopLoss)."),
         ("InitialRiskPercentOfEntryDefinition", "InitialRiskPriceDistance / EntryPrice * 100 when EntryPrice is non-zero."),
@@ -54,7 +55,8 @@ public static class BacktestExcelExport
         ("WaitForConfirmationCandle", run.WaitForConfirmationCandle), ("UseEma100Filter", run.UseEma100Filter), ("UseHtfRegimeFilter", run.UseHtfRegimeFilter),
         ("TrailingStopEnabled", run.TrailingStopEnabled), ("UseAdaptiveInitialStop", run.UseAdaptiveInitialStop),
         ("SameTrendReentryEnabled", run.SameTrendReentryEnabled), ("MaxReentryAgeBars", run.MaxReentryAgeBars),
-        ("ExitOnOppositeCrossover", run.ExitOnOppositeCrossover), ("FeePercentPerSide", run.FeePercentPerSide));
+        ("ExitOnOppositeCrossover", run.ExitOnOppositeCrossover), ("FeePercentPerSide", run.FeePercentPerSide),
+        ("EconomicsMode", run.EconomicsMode), ("AccountCurrency", run.AccountCurrency), ("BrokerSymbol", run.BrokerSymbol), ("HistoricalChartMode", run.HistoricalChartMode), ("HistoricalSpreadModel", run.HistoricalSpreadModel), ("StartingBalance", run.StartingBalance), ("EndingBalance", run.EndingBalance), ("CommissionPerLotPerSide", run.CommissionPerLotPerSide), ("ContractSize", run.ContractSize), ("VolumeMin", run.VolumeMin), ("VolumeMax", run.VolumeMax), ("VolumeStep", run.VolumeStep), ("VolumeLimit", run.VolumeLimit), ("PointSize", run.PointSize), ("TickSize", run.TickSize), ("TickValueProfit", run.TickValueProfit), ("TickValueLoss", run.TickValueLoss), ("StopsLevelPoints", run.StopsLevelPoints), ("TradeMode", run.TradeMode));
 
     private static IEnumerable<object?[]> TradeRows(IEnumerable<BacktestTrade> trades)
     {
@@ -65,6 +67,7 @@ public static class BacktestExcelExport
             "EntryFeeUsdt", "ExitFeeUsdt", "TotalFeesUsdt", "GrossPnlUsdt", "NetPnlUsdt", "NetPnlPercent", "GrossRMultiple", "NetRMultiple", "MfePrice", "MfePercent", "MaePrice", "MaePercent",
             "SignalOpen", "SignalClose", "SignalEma9", "SignalEma15", "SignalEma100", "SignalGapPercent", "SignalGapState", "UseAdaptiveInitialStop", "SignalAtr14", "ReversalPowerScore", "ReversalPowerBand", "StopAnchorPrice", "StopBuffer",
             "HtfTimeframe", "SignalHtfCandleCloseTimeUtc", "SignalHtfEma100Slope20Percent", "SignalHtfAtr14Percent", "TrendRegimeCrossoverTimeUtc",
+            "Lots", "EntryBid", "EntryAsk", "EntrySpread", "ExitBid", "ExitAsk", "ExitSpread", "RequiredMargin", "MarginUsed", "AccountEquityAtEntry", "EntryCommission", "ExitCommission", "RoundTripCommission", "GrossPnl", "NetPnl", "InitialRiskAmount",
             "HoldingMinutes", "InitialRiskPriceDistance", "InitialRiskPercentOfEntry", "InitialRiskAmountUsdt", "MfeInitialR", "MaeInitialR", "TargetDistancePrice"
         };
         return new[] { header }.Concat(trades.Select(trade =>
@@ -78,6 +81,7 @@ public static class BacktestExcelExport
                 trade.EntryFeeUsdt, trade.ExitFeeUsdt, trade.TotalFeesUsdt, trade.GrossPnlUsdt, trade.NetPnlUsdt, trade.NetPnlPercent, trade.GrossRMultiple, trade.NetRMultiple, trade.MfePrice, trade.MfePercent, trade.MaePrice, trade.MaePercent,
                 trade.SignalOpen, trade.SignalClose, trade.SignalEma9, trade.SignalEma15, trade.SignalEma100, trade.SignalGapPercent, trade.SignalGapState, trade.UseAdaptiveInitialStop, trade.SignalAtr14, trade.ReversalPowerScore, trade.ReversalPowerBand, trade.StopAnchorPrice, trade.StopBuffer,
                 trade.HtfTimeframe, trade.SignalHtfCandleCloseTimeUtc, trade.SignalHtfEma100Slope20Percent, trade.SignalHtfAtr14Percent, trade.TrendRegimeCrossoverTimeUtc,
+                trade.Lots, trade.EntryBid, trade.EntryAsk, trade.EntrySpread, trade.ExitBid, trade.ExitAsk, trade.ExitSpread, trade.RequiredMargin, trade.MarginUsed, trade.AccountEquityAtEntry, trade.EntryCommission, trade.ExitCommission, trade.RoundTripCommission, trade.GrossPnl, trade.NetPnl, trade.InitialRiskAmount,
                 (decimal)(trade.ExitTimeUtc - trade.EntryTimeUtc).TotalMinutes, riskDistance, trade.EntryPrice == 0m ? null : riskDistance / trade.EntryPrice * 100m, riskDistance * trade.Quantity, riskPositive ? trade.MfePrice / riskDistance : null, riskPositive ? trade.MaePrice / riskDistance : null, decimal.Abs(trade.OriginalTakeProfit - trade.EntryPrice)
             };
         }));

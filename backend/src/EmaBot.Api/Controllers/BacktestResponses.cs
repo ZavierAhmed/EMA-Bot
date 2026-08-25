@@ -13,7 +13,8 @@ public sealed record BacktestRunSummaryResponse(
     decimal WinRatePercent, decimal GrossPnlUsdt, decimal NetPnlUsdt, decimal TotalFeesUsdt, decimal? ProfitFactor,
     decimal AverageNetPnlUsdt, decimal AverageRMultiple, decimal MaxDrawdownUsdt, int TotalCrossovers,
     int LongSignals, int ShortSignals, int RejectedByEma100, int RejectedByHtfRegime, int ConfirmationFailed, int InvalidStopLoss,
-    int SkippedWhilePositionOpen, int NoEntryCandle, BacktestRunStatus Status, string? FailureMessage);
+    int SkippedWhilePositionOpen, int NoEntryCandle, BacktestRunStatus Status, string? FailureMessage,
+    BacktestEconomicsMode? EconomicsMode = null, string? AccountCurrency = null, string? BrokerSymbol = null, string? HistoricalSpreadModel = null, string? HistoricalChartMode = null, decimal? CommissionPerLotPerSide = null, decimal? StartingBalance = null, decimal? EndingBalance = null, decimal? GrossProfitFactor = null, decimal? NetProfitFactor = null, int RejectedByTradingCosts = 0, int Mt5EconomicsCallCount = 0, long Mt5EconomicsElapsedMilliseconds = 0);
 
 public sealed record BacktestRunDetailResponse(
     int Id, string Symbol, MarketDataSource MarketDataSource, string MarketDataSourceLabel, string Interval, DateTimeOffset RequestedStartUtc, DateTimeOffset RequestedEndUtc,
@@ -25,7 +26,8 @@ public sealed record BacktestRunDetailResponse(
     decimal AverageNetPnlUsdt, decimal AverageRMultiple, decimal MaxDrawdownUsdt, int TotalCrossovers,
     int LongSignals, int ShortSignals, int RejectedByEma100, int RejectedByHtfRegime, int ConfirmationFailed, int InvalidStopLoss,
     int SkippedWhilePositionOpen, int NoEntryCandle, BacktestRunStatus Status, string? FailureMessage,
-    IReadOnlyList<BacktestTradeResponse> Trades);
+    IReadOnlyList<BacktestTradeResponse> Trades,
+    BacktestEconomicsMode? EconomicsMode = null, string? AccountCurrency = null, string? BrokerSymbol = null, string? HistoricalSpreadModel = null, string? HistoricalChartMode = null, decimal? CommissionPerLotPerSide = null, decimal? StartingBalance = null, decimal? EndingBalance = null, decimal? GrossProfitFactor = null, decimal? NetProfitFactor = null, int RejectedByTradingCosts = 0, int Mt5EconomicsCallCount = 0, long Mt5EconomicsElapsedMilliseconds = 0);
 
 public sealed record BacktestTradeResponse(
     int Id, int BacktestRunId, SignalDirection Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc,
@@ -36,7 +38,8 @@ public sealed record BacktestTradeResponse(
     decimal TotalFeesUsdt, decimal GrossPnlUsdt, decimal NetPnlUsdt, decimal NetPnlPercent, decimal GrossRMultiple,
     decimal NetRMultiple, decimal MfePrice, decimal MfePercent, decimal MaePrice, decimal MaePercent, decimal SignalClose,
     decimal? SignalEma9, decimal? SignalEma15, decimal? SignalEma100, decimal? SignalGapPercent, GapState SignalGapState,
-    string? HtfTimeframe, DateTimeOffset? SignalHtfCandleCloseTimeUtc, decimal? SignalHtfEma100Slope20Percent, decimal? SignalHtfAtr14Percent);
+    string? HtfTimeframe, DateTimeOffset? SignalHtfCandleCloseTimeUtc, decimal? SignalHtfEma100Slope20Percent, decimal? SignalHtfAtr14Percent,
+    decimal? Lots = null, decimal? EntryBid = null, decimal? EntryAsk = null, decimal? EntrySpread = null, decimal? ExitBid = null, decimal? ExitAsk = null, decimal? ExitSpread = null, decimal? RequiredMargin = null, decimal? MarginUsed = null, decimal? AccountEquityAtEntry = null, decimal? EntryCommission = null, decimal? ExitCommission = null, decimal? RoundTripCommission = null, decimal? GrossPnl = null, decimal? NetPnl = null, decimal? InitialRiskAmount = null);
 
 public static class BacktestResponseMapper
 {
@@ -48,7 +51,7 @@ public static class BacktestResponseMapper
         run.WinRatePercent, run.GrossPnlUsdt, run.NetPnlUsdt, run.TotalFeesUsdt, run.ProfitFactor,
         run.AverageNetPnlUsdt, run.AverageRMultiple, run.MaxDrawdownUsdt, run.TotalCrossovers, run.LongSignals,
         run.ShortSignals, run.RejectedByEma100, run.RejectedByHtfRegime, run.ConfirmationFailed, run.InvalidStopLoss, run.SkippedWhilePositionOpen,
-        run.NoEntryCandle, run.Status, run.FailureMessage);
+        run.NoEntryCandle, run.Status, run.FailureMessage, run.EconomicsMode, run.AccountCurrency, run.BrokerSymbol, run.HistoricalSpreadModel, run.HistoricalChartMode, run.CommissionPerLotPerSide, run.StartingBalance, run.EndingBalance, run.GrossProfitFactor, run.NetProfitFactor, run.RejectedByTradingCosts, run.Mt5EconomicsCallCount, run.Mt5EconomicsElapsedMilliseconds);
 
     public static BacktestRunDetailResponse ToDetail(BacktestRun run)
     {
@@ -62,7 +65,7 @@ public static class BacktestResponseMapper
             summary.AverageRMultiple, summary.MaxDrawdownUsdt, summary.TotalCrossovers, summary.LongSignals,
             summary.ShortSignals, summary.RejectedByEma100, summary.RejectedByHtfRegime, summary.ConfirmationFailed, summary.InvalidStopLoss,
             summary.SkippedWhilePositionOpen, summary.NoEntryCandle, summary.Status, summary.FailureMessage,
-            run.Trades.OrderBy(trade => trade.EntryTimeUtc).Select(ToTrade).ToArray());
+            run.Trades.OrderBy(trade => trade.EntryTimeUtc).Select(ToTrade).ToArray(), summary.EconomicsMode, summary.AccountCurrency, summary.BrokerSymbol, summary.HistoricalSpreadModel, summary.HistoricalChartMode, summary.CommissionPerLotPerSide, summary.StartingBalance, summary.EndingBalance, summary.GrossProfitFactor, summary.NetProfitFactor, summary.RejectedByTradingCosts, summary.Mt5EconomicsCallCount, summary.Mt5EconomicsElapsedMilliseconds);
     }
 
     private static BacktestTradeResponse ToTrade(BacktestTrade trade) => new(
@@ -73,5 +76,5 @@ public static class BacktestResponseMapper
         trade.TotalFeesUsdt, trade.GrossPnlUsdt, trade.NetPnlUsdt, trade.NetPnlPercent, trade.GrossRMultiple,
         trade.NetRMultiple, trade.MfePrice, trade.MfePercent, trade.MaePrice, trade.MaePercent, trade.SignalClose,
         trade.SignalEma9, trade.SignalEma15, trade.SignalEma100, trade.SignalGapPercent, trade.SignalGapState,
-        trade.HtfTimeframe, trade.SignalHtfCandleCloseTimeUtc, trade.SignalHtfEma100Slope20Percent, trade.SignalHtfAtr14Percent);
+        trade.HtfTimeframe, trade.SignalHtfCandleCloseTimeUtc, trade.SignalHtfEma100Slope20Percent, trade.SignalHtfAtr14Percent, trade.Lots, trade.EntryBid, trade.EntryAsk, trade.EntrySpread, trade.ExitBid, trade.ExitAsk, trade.ExitSpread, trade.RequiredMargin, trade.MarginUsed, trade.AccountEquityAtEntry, trade.EntryCommission, trade.ExitCommission, trade.RoundTripCommission, trade.GrossPnl, trade.NetPnl, trade.InitialRiskAmount);
 }

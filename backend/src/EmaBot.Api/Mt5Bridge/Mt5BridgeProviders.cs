@@ -33,7 +33,7 @@ public sealed class Mt5BridgeInstrumentCatalogProvider(IMt5BridgeRequestClient b
         if (string.IsNullOrWhiteSpace(spec.BrokerSymbol) || spec.PointSize <= 0m || spec.ContractSize <= 0m || spec.VolumeMin <= 0m || spec.VolumeMax < spec.VolumeMin || spec.VolumeStep <= 0m)
             throw new MarketDataProviderException("MT5 instrument catalog", MarketDataErrorKind.InvalidResponse, "MT5 returned an invalid instrument specification.");
         return new InstrumentCatalogItem(
-            new InstrumentSpec(broker, spec.BrokerSymbol, spec.DisplaySymbol, AssetClass.Unknown, spec.Digits, spec.PointSize, spec.ContractSize, spec.VolumeMin, spec.VolumeMax, spec.VolumeStep, spec.CurrencyBase, spec.CurrencyProfit, spec.CurrencyMargin, spec.TickSize, spec.TickValueProfit, spec.TickValueLoss, spec.VolumeLimit, spec.StopsLevelPoints, spec.FreezeLevelPoints),
+            new InstrumentSpec(broker, spec.BrokerSymbol, spec.DisplaySymbol, AssetClass.Unknown, spec.Digits, spec.PointSize, spec.ContractSize, spec.VolumeMin, spec.VolumeMax, spec.VolumeStep, spec.CurrencyBase, spec.CurrencyProfit, spec.CurrencyMargin, spec.TickSize, spec.TickValueProfit, spec.TickValueLoss, spec.VolumeLimit, spec.StopsLevelPoints, spec.FreezeLevelPoints, Enum.TryParse<HistoricalChartMode>(spec.ChartMode, false, out var chartMode) ? chartMode : HistoricalChartMode.Unknown),
             item.Description, item.Path, item.IsSelected, item.IsVisible,
             Enum.TryParse<InstrumentTradeMode>(item.TradeMode, false, out var tradeMode) ? tradeMode : InstrumentTradeMode.Unknown);
     }

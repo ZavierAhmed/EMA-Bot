@@ -284,6 +284,31 @@ namespace EmaBot.Api.Migrations
                     b.Property<int>("WinningTrades")
                         .HasColumnType("int");
 
+                    b.Property<string>("AccountCurrency").HasMaxLength(16).HasColumnType("varchar(16)");
+                    b.Property<string>("BrokerSymbol").HasMaxLength(64).HasColumnType("varchar(64)");
+                    b.Property<int?>("EconomicsMode").HasColumnType("int");
+                    b.Property<string>("HistoricalChartMode").HasMaxLength(16).HasColumnType("varchar(16)");
+                    b.Property<string>("HistoricalSpreadModel").HasMaxLength(128).HasColumnType("varchar(128)");
+                    b.Property<string>("TradeMode").HasMaxLength(16).HasColumnType("varchar(16)");
+                    b.Property<int>("RejectedByTradingCosts").HasColumnType("int");
+                    b.Property<int>("Mt5EconomicsCallCount").HasColumnType("int");
+                    b.Property<long>("Mt5EconomicsElapsedMilliseconds").HasColumnType("bigint");
+                    b.Property<int?>("StopsLevelPoints").HasColumnType("int");
+                    b.Property<decimal?>("CommissionPerLotPerSide").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("ContractSize").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("VolumeMin").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("VolumeMax").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("VolumeStep").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("VolumeLimit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("PointSize").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("TickSize").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("TickValueProfit").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("TickValueLoss").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("StartingBalance").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("EndingBalance").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("GrossProfitFactor").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("NetProfitFactor").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+
                     b.HasKey("Id");
 
                     b.ToTable("BacktestRuns");
@@ -400,6 +425,9 @@ namespace EmaBot.Api.Migrations
                         .HasPrecision(8, 4)
                         .HasColumnType("decimal(8,4)");
 
+                    b.Property<int?>("ReentryAgeBars")
+                        .HasColumnType("int");
+
                     b.Property<bool>("SameCandleExitConflict")
                         .HasColumnType("tinyint(1)");
 
@@ -466,6 +494,23 @@ namespace EmaBot.Api.Migrations
 
                     b.Property<bool>("UseAdaptiveInitialStop")
                         .HasColumnType("tinyint(1)");
+
+                    b.Property<decimal?>("Lots").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("EntryBid").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("EntryAsk").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("EntrySpread").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("ExitBid").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("ExitAsk").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("ExitSpread").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("RequiredMargin").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("MarginUsed").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("AccountEquityAtEntry").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("EntryCommission").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("ExitCommission").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("RoundTripCommission").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("GrossPnl").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("NetPnl").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
+                    b.Property<decimal?>("InitialRiskAmount").HasPrecision(18, 8).HasColumnType("decimal(18,8)");
 
                     b.HasKey("Id");
 

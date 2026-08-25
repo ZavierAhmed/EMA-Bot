@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 namespace EmaBot.Api.Models;
 
 public enum BacktestRunStatus { Completed, Failed }
+public enum BacktestEconomicsMode { LegacyCompatibility, Mt5HistoricalBidAsk }
 public enum StopSourceType { Pivot, FallbackLookback, AdaptiveSignalCandle, AdaptiveMicroStructure, AdaptiveLegacyFallback }
 public enum ReversalPowerBand { Weak, Normal, Strong }
 public enum BacktestExitReason { StopLoss, TakeProfit, EndOfData, TrailingStop, OppositeCrossover }
@@ -69,6 +70,31 @@ public sealed class BacktestRun
     public int NoEntryCandle { get; set; }
     public BacktestRunStatus Status { get; set; }
     public string? FailureMessage { get; set; }
+    // Nullable additive evidence keeps historical compatibility rows intact.
+    public BacktestEconomicsMode? EconomicsMode { get; set; }
+    public string? AccountCurrency { get; set; }
+    public string? BrokerSymbol { get; set; }
+    public string? HistoricalSpreadModel { get; set; }
+    public string? HistoricalChartMode { get; set; }
+    public decimal? CommissionPerLotPerSide { get; set; }
+    public decimal? ContractSize { get; set; }
+    public decimal? VolumeMin { get; set; }
+    public decimal? VolumeMax { get; set; }
+    public decimal? VolumeStep { get; set; }
+    public decimal? VolumeLimit { get; set; }
+    public decimal? PointSize { get; set; }
+    public decimal? TickSize { get; set; }
+    public decimal? TickValueProfit { get; set; }
+    public decimal? TickValueLoss { get; set; }
+    public int? StopsLevelPoints { get; set; }
+    public string? TradeMode { get; set; }
+    public decimal? StartingBalance { get; set; }
+    public decimal? EndingBalance { get; set; }
+    public decimal? GrossProfitFactor { get; set; }
+    public decimal? NetProfitFactor { get; set; }
+    public int RejectedByTradingCosts { get; set; }
+    public int Mt5EconomicsCallCount { get; set; }
+    public long Mt5EconomicsElapsedMilliseconds { get; set; }
     public List<BacktestTrade> Trades { get; set; } = [];
 }
 
@@ -125,13 +151,29 @@ public sealed class BacktestTrade
     public GapState SignalGapState { get; set; }
     public bool IsReentry { get; set; }
     public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; }
-    [NotMapped] public int? ReentryAgeBars { get; set; }
+    public int? ReentryAgeBars { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
     public decimal? SignalAtr14 { get; set; }
     public decimal? ReversalPowerScore { get; set; }
     public ReversalPowerBand? ReversalPowerBand { get; set; }
     public decimal? StopAnchorPrice { get; set; }
     public decimal? StopBuffer { get; set; }
+    public decimal? Lots { get; set; }
+    public decimal? EntryBid { get; set; }
+    public decimal? EntryAsk { get; set; }
+    public decimal? EntrySpread { get; set; }
+    public decimal? ExitBid { get; set; }
+    public decimal? ExitAsk { get; set; }
+    public decimal? ExitSpread { get; set; }
+    public decimal? RequiredMargin { get; set; }
+    public decimal? MarginUsed { get; set; }
+    public decimal? AccountEquityAtEntry { get; set; }
+    public decimal? EntryCommission { get; set; }
+    public decimal? ExitCommission { get; set; }
+    public decimal? RoundTripCommission { get; set; }
+    public decimal? GrossPnl { get; set; }
+    public decimal? NetPnl { get; set; }
+    public decimal? InitialRiskAmount { get; set; }
     public List<BacktestTradeEvent> Events { get; set; } = [];
 }
 

@@ -1,6 +1,7 @@
 namespace EmaBot.Api.Market;
 
 public enum AssetClass { Unknown, Forex, Crypto, Commodity, Index, Stock }
+public enum HistoricalChartMode { Unknown, Bid, Last }
 
 public sealed record InstrumentSpec(
     string Broker,
@@ -21,4 +22,5 @@ public sealed record InstrumentSpec(
     decimal? TickValueLoss = null,
     decimal? VolumeLimit = null,
     int? StopsLevelPoints = null,
-    int? FreezeLevelPoints = null);
+    int? FreezeLevelPoints = null,
+    HistoricalChartMode HistoricalChartMode = HistoricalChartMode.Unknown);

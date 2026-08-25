@@ -1,6 +1,9 @@
 using EmaBot.Api.Binance;
 using EmaBot.Api.Market;
 using EmaBot.Api.Mt5Bridge;
+using EmaBot.Api.Models;
+using EmaBot.Api.Services;
+using EmaBot.Api.Strategy;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -51,6 +54,34 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
         var candles = await provider.GetRangeAsync("XAUUSDm", "3m", Time(12, 0), Time(12, 6), CancellationToken.None);
 
         Assert.Equal(2, candles.Count); Assert.Equal(Time(12, 0), candles[0].OpenTimeUtc); Assert.Equal(Time(12, 3), candles[1].OpenTimeUtc); Assert.All(candles, candle => Assert.True(candle.CloseTimeUtc <= Time(12, 6)));
+    }
+
+    [Fact]
+    public void ExecutionMapping_PreservesSpreadWithoutChangingStrategyCandles()
+    {
+        var source = new[] { Bar(12, 0, false), Bar(12, 3, false), Bar(12, 6, true) };
+
+        var execution = Mt5BridgeHistoricalMarketDataProvider.MapClosedExecution(source);
+        var candles = Mt5BridgeHistoricalMarketDataProvider.MapClosed(source);
+
+        Assert.Equal(candles.Select(item => (item.OpenTimeUtc, item.CloseTimeUtc, item.Open, item.High, item.Low, item.Close, item.Volume)), execution.Select(item => (item.OpenTimeUtc, item.CloseTimeUtc, item.Open, item.High, item.Low, item.Close, (decimal)item.Volume)));
+        Assert.All(execution, item => Assert.Equal(4, item.SpreadPoints));
+    }
+
+    [Fact]
+    public void NativeStrategyProjection_HasIdenticalSignalEvaluationToBrokerNeutralCandles()
+    {
+        var source = new[] { Bar(12, 0, false), Bar(12, 3, false), Bar(12, 6, false), Bar(12, 9, true) };
+        var execution = Mt5BridgeHistoricalMarketDataProvider.MapClosedExecution(source);
+        var settings = new TradingSettings { MinEmaGapPercent = 0m };
+        var strategy = new EmaSignalEngine();
+        var native = new Mt5HistoricalBacktestEngine(strategy, new UnusedCalculator());
+
+        var expected = strategy.Evaluate(Mt5BridgeHistoricalMarketDataProvider.MapClosed(source), settings);
+        var actual = native.EvaluateStrategy(execution, settings);
+
+        Assert.Equal(expected.Events, actual.Events);
+        Assert.Equal(expected.Snapshots, actual.Snapshots);
     }
 
     [Fact]
@@ -145,5 +176,10 @@ public sealed class Mt5BridgeBarProviderTests : IClassFixture<EmaBotApiFactory>
             Payloads.Add(payload);
             return Task.FromResult(response);
         }
+    }
+    private sealed class UnusedCalculator : IMt5TradeCalculator
+    {
+        public Task<Mt5MarginCalculationPayload> CalculateMarginAsync(Mt5CalculateMarginRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
+        public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken cancellationToken) => throw new NotSupportedException();
     }
 }

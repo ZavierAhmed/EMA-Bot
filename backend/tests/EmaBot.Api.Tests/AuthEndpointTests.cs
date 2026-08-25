@@ -221,6 +221,10 @@ public sealed class EmaBotApiFactory : WebApplicationFactory<Program>
             services.AddSingleton<IBinanceHistoricalKlineClient>(BinanceClient);
             services.RemoveAll<IHistoricalMarketDataProvider>();
             services.AddSingleton<IHistoricalMarketDataProvider>(provider => provider.GetRequiredService<BinanceHistoricalMarketDataProvider>());
+            // API regression fixtures intentionally reproduce the legacy saved-artifact path; production
+            // registration explicitly selects the MT5-native executor for enabled MT5 submissions.
+            services.RemoveAll<BacktestService>();
+            services.AddScoped<BacktestService>(provider => new BacktestService(provider.GetRequiredService<EmaBotDbContext>(), provider.GetRequiredService<IHistoricalMarketDataProvider>(), provider.GetRequiredService<TradingSettingsService>(), provider.GetRequiredService<BacktestEngine>()));
             services.RemoveAll<IMarketBarStreamProvider>();
             services.AddSingleton<IMarketBarStreamProvider>(StreamClient);
             services.RemoveAll(typeof(DbContextOptions<EmaBotDbContext>));

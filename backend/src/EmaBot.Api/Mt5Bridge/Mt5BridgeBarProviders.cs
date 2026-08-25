@@ -4,6 +4,11 @@ using System.Diagnostics;
 
 namespace EmaBot.Api.Mt5Bridge;
 
+public sealed record Mt5HistoricalExecutionBar(string BrokerSymbol, string Timeframe, DateTimeOffset OpenTimeUtc, DateTimeOffset CloseTimeUtc, decimal Open, decimal High, decimal Low, decimal Close, long Volume, int SpreadPoints, bool IsClosed)
+{
+    public Candle ToCandle() => new(OpenTimeUtc, CloseTimeUtc, Open, High, Low, Close, Volume, IsClosed);
+}
+
 public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClient bridge, ILogger<Mt5BridgeHistoricalMarketDataProvider>? logger = null) : IHistoricalMarketDataProvider
 {
     public const int MaximumCandles = 200_000;
@@ -47,6 +52,26 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
         return candles;
     }
 
+    // Execution metadata deliberately stays separate from Candle so EMA indicators remain broker-neutral.
+    public async Task<IReadOnlyList<Mt5HistoricalExecutionBar>> GetExecutionRangeAsync(string symbol, string timeframe, DateTimeOffset startUtc, DateTimeOffset endUtc, CancellationToken cancellationToken)
+    {
+        ValidateTimeframe(timeframe);
+        if (startUtc >= endUtc) throw new ArgumentException("Start UTC must be before end UTC.");
+        var all = new SortedDictionary<DateTimeOffset, Mt5BarPayload>();
+        var cursor = startUtc; var window = TimeframeSpan(timeframe) * HistoryPageBars;
+        while (cursor < endUtc)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var windowEnd = cursor + window < endUtc ? cursor + window : endUtc;
+            var page = await RequestBarsAsync(Mt5BridgeOperation.GetBarsRange, new Mt5GetBarsRangeRequest(symbol, timeframe, cursor.ToUnixTimeSeconds(), ToInclusiveStopUnixSeconds(windowEnd)), cancellationToken);
+            foreach (var bar in page) all[bar.OpenTimeUtc] = bar;
+            if (all.Count > MaximumCandles) throw new ArgumentException($"Backtests cannot exceed {MaximumCandles:N0} candles.");
+            if (windowEnd == endUtc) break;
+            cursor = windowEnd;
+        }
+        return MapClosedExecution(all.Values).Where(bar => bar.OpenTimeUtc >= startUtc && bar.CloseTimeUtc <= endUtc).ToArray();
+    }
+
     internal static IReadOnlyList<Candle> MapClosed(IEnumerable<Mt5BarPayload> source)
     {
         var bars = source.GroupBy(bar => bar.OpenTimeUtc).Select(group => group.Last()).OrderBy(bar => bar.OpenTimeUtc).ToArray();
@@ -58,6 +83,19 @@ public sealed class Mt5BridgeHistoricalMarketDataProvider(IMt5BridgeRequestClien
             candles.Add(new Candle(bar.OpenTimeUtc, successor.OpenTimeUtc.AddMilliseconds(-1), bar.Open, bar.High, bar.Low, bar.Close, bar.RealVolume > 0 ? bar.RealVolume : bar.TickVolume, true));
         }
         return candles;
+    }
+
+    internal static IReadOnlyList<Mt5HistoricalExecutionBar> MapClosedExecution(IEnumerable<Mt5BarPayload> source)
+    {
+        var bars = source.GroupBy(bar => bar.OpenTimeUtc).Select(group => group.Last()).OrderBy(bar => bar.OpenTimeUtc).ToArray();
+        var mapped = new List<Mt5HistoricalExecutionBar>();
+        for (var index = 0; index < bars.Length - 1; index++)
+        {
+            var bar = bars[index]; var successor = bars[index + 1];
+            if (bar.IsCurrent || successor.OpenTimeUtc <= bar.OpenTimeUtc) continue;
+            mapped.Add(new(bar.BrokerSymbol, bar.Timeframe, bar.OpenTimeUtc, successor.OpenTimeUtc.AddMilliseconds(-1), bar.Open, bar.High, bar.Low, bar.Close, bar.RealVolume > 0 ? bar.RealVolume : bar.TickVolume, bar.SpreadPoints, true));
+        }
+        return mapped;
     }
 
     internal static void ValidateTimeframe(string timeframe)

@@ -29,6 +29,13 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
         catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest exceeded its allowed processing time for this research window. Retry, or use a smaller date range if the problem persists.")); }
         catch (MarketDataProviderException exception) { return StatusCode(exception.Kind == MarketDataErrorKind.RateLimited ? 429 : exception.Kind == MarketDataErrorKind.Timeout ? 504 : 503, new ApiMessage(exception.Message.Contains("history", StringComparison.OrdinalIgnoreCase) ? "MT5 history is still loading. Retry shortly." : "MT5 historical market data is currently unavailable.")); }
     }
+    [HttpGet("economics-preview")]
+    public async Task<IActionResult> EconomicsPreview([FromQuery] string symbol, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(symbol)) return BadRequest(new ApiMessage("A broker symbol is required."));
+        try { return Ok(await service.GetMt5EconomicsPreviewAsync(symbol.Trim(), token)); }
+        catch (MarketDataProviderException exception) { return Ok(new Mt5HistoricalBacktestEconomicsPreview(false, exception.Message, symbol.Trim())); }
+    }
     [HttpGet] public async Task<IActionResult> List(CancellationToken token) => Ok((await service.ListAsync(token)).Select(BacktestResponseMapper.ToSummary));
     [HttpGet("{id:int}")] public async Task<IActionResult> Get(int id, CancellationToken token) => (await service.GetAsync(id, token)) is { } run ? Ok(BacktestResponseMapper.ToDetail(run)) : NotFound(new ApiMessage("Backtest not found."));
     [HttpGet("{id:int}/export/excel")]
