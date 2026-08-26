@@ -5,7 +5,7 @@ using EmaBot.Api.Strategy;
 namespace EmaBot.Api.Services;
 
 public sealed record BacktestCalculation(IReadOnlyList<BacktestTrade> Trades, BacktestDiagnostics Diagnostics, decimal EndingEquityUsdt);
-public sealed record BacktestDiagnostics(int TotalCrossovers, int LongSignals, int ShortSignals, int RejectedByEma100, int RejectedByEmaGap, int RejectedByStopDistance, int RejectedByFees, int ConfirmationFailed, int InvalidStopLoss, int SkippedWhilePositionOpen, int NoEntryCandle, int RejectedByHtfRegime = 0);
+public sealed record BacktestDiagnostics(int TotalCrossovers, int LongSignals, int ShortSignals, int RejectedByEma100, int RejectedByEmaGap, int RejectedByStopDistance, int RejectedByFees, int ConfirmationFailed, int InvalidStopLoss, int SkippedWhilePositionOpen, int NoEntryCandle, int RejectedByHtfRegime = 0, int RejectedByInsufficientMargin = 0, int RejectedByInvalidVolume = 0, int RejectedByTradeMode = 0);
 
 public sealed class BacktestEngine(EmaSignalEngine strategy)
 {

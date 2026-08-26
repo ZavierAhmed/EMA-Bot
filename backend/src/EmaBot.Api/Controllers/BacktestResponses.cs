@@ -14,7 +14,7 @@ public sealed record BacktestRunSummaryResponse(
     decimal AverageNetPnlUsdt, decimal AverageRMultiple, decimal MaxDrawdownUsdt, int TotalCrossovers,
     int LongSignals, int ShortSignals, int RejectedByEma100, int RejectedByHtfRegime, int ConfirmationFailed, int InvalidStopLoss,
     int SkippedWhilePositionOpen, int NoEntryCandle, BacktestRunStatus Status, string? FailureMessage,
-    BacktestEconomicsMode? EconomicsMode = null, string? AccountCurrency = null, string? BrokerSymbol = null, string? HistoricalSpreadModel = null, string? HistoricalChartMode = null, decimal? CommissionPerLotPerSide = null, decimal? StartingBalance = null, decimal? EndingBalance = null, decimal? GrossProfitFactor = null, decimal? NetProfitFactor = null, int RejectedByTradingCosts = 0, int Mt5EconomicsCallCount = 0, long Mt5EconomicsElapsedMilliseconds = 0);
+    BacktestEconomicsMode? EconomicsMode = null, string? AccountCurrency = null, string? BrokerSymbol = null, string? HistoricalSpreadModel = null, string? HistoricalChartMode = null, decimal? CommissionPerLotPerSide = null, decimal? StartingBalance = null, decimal? EndingBalance = null, decimal? GrossProfitFactor = null, decimal? NetProfitFactor = null, int RejectedByTradingCosts = 0, int Mt5EconomicsCallCount = 0, long Mt5EconomicsElapsedMilliseconds = 0, int RejectedByInsufficientMargin = 0, int RejectedByInvalidVolume = 0, int RejectedByTradeMode = 0);
 
 public sealed record BacktestRunDetailResponse(
     int Id, string Symbol, MarketDataSource MarketDataSource, string MarketDataSourceLabel, string Interval, DateTimeOffset RequestedStartUtc, DateTimeOffset RequestedEndUtc,
@@ -27,7 +27,7 @@ public sealed record BacktestRunDetailResponse(
     int LongSignals, int ShortSignals, int RejectedByEma100, int RejectedByHtfRegime, int ConfirmationFailed, int InvalidStopLoss,
     int SkippedWhilePositionOpen, int NoEntryCandle, BacktestRunStatus Status, string? FailureMessage,
     IReadOnlyList<BacktestTradeResponse> Trades,
-    BacktestEconomicsMode? EconomicsMode = null, string? AccountCurrency = null, string? BrokerSymbol = null, string? HistoricalSpreadModel = null, string? HistoricalChartMode = null, decimal? CommissionPerLotPerSide = null, decimal? StartingBalance = null, decimal? EndingBalance = null, decimal? GrossProfitFactor = null, decimal? NetProfitFactor = null, int RejectedByTradingCosts = 0, int Mt5EconomicsCallCount = 0, long Mt5EconomicsElapsedMilliseconds = 0);
+    BacktestEconomicsMode? EconomicsMode = null, string? AccountCurrency = null, string? BrokerSymbol = null, string? HistoricalSpreadModel = null, string? HistoricalChartMode = null, decimal? CommissionPerLotPerSide = null, decimal? StartingBalance = null, decimal? EndingBalance = null, decimal? GrossProfitFactor = null, decimal? NetProfitFactor = null, int RejectedByTradingCosts = 0, int Mt5EconomicsCallCount = 0, long Mt5EconomicsElapsedMilliseconds = 0, int RejectedByInsufficientMargin = 0, int RejectedByInvalidVolume = 0, int RejectedByTradeMode = 0);
 
 public sealed record BacktestTradeResponse(
     int Id, int BacktestRunId, SignalDirection Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc,
@@ -51,7 +51,7 @@ public static class BacktestResponseMapper
         run.WinRatePercent, run.GrossPnlUsdt, run.NetPnlUsdt, run.TotalFeesUsdt, run.ProfitFactor,
         run.AverageNetPnlUsdt, run.AverageRMultiple, run.MaxDrawdownUsdt, run.TotalCrossovers, run.LongSignals,
         run.ShortSignals, run.RejectedByEma100, run.RejectedByHtfRegime, run.ConfirmationFailed, run.InvalidStopLoss, run.SkippedWhilePositionOpen,
-        run.NoEntryCandle, run.Status, run.FailureMessage, run.EconomicsMode, run.AccountCurrency, run.BrokerSymbol, run.HistoricalSpreadModel, run.HistoricalChartMode, run.CommissionPerLotPerSide, run.StartingBalance, run.EndingBalance, run.GrossProfitFactor, run.NetProfitFactor, run.RejectedByTradingCosts, run.Mt5EconomicsCallCount, run.Mt5EconomicsElapsedMilliseconds);
+        run.NoEntryCandle, run.Status, run.FailureMessage, run.EconomicsMode, run.AccountCurrency, run.BrokerSymbol, run.HistoricalSpreadModel, run.HistoricalChartMode, run.CommissionPerLotPerSide, run.StartingBalance, run.EndingBalance, run.GrossProfitFactor, run.NetProfitFactor, run.RejectedByTradingCosts, run.Mt5EconomicsCallCount, run.Mt5EconomicsElapsedMilliseconds, run.RejectedByInsufficientMargin, run.RejectedByInvalidVolume, run.RejectedByTradeMode);
 
     public static BacktestRunDetailResponse ToDetail(BacktestRun run)
     {
@@ -65,7 +65,7 @@ public static class BacktestResponseMapper
             summary.AverageRMultiple, summary.MaxDrawdownUsdt, summary.TotalCrossovers, summary.LongSignals,
             summary.ShortSignals, summary.RejectedByEma100, summary.RejectedByHtfRegime, summary.ConfirmationFailed, summary.InvalidStopLoss,
             summary.SkippedWhilePositionOpen, summary.NoEntryCandle, summary.Status, summary.FailureMessage,
-            run.Trades.OrderBy(trade => trade.EntryTimeUtc).Select(ToTrade).ToArray(), summary.EconomicsMode, summary.AccountCurrency, summary.BrokerSymbol, summary.HistoricalSpreadModel, summary.HistoricalChartMode, summary.CommissionPerLotPerSide, summary.StartingBalance, summary.EndingBalance, summary.GrossProfitFactor, summary.NetProfitFactor, summary.RejectedByTradingCosts, summary.Mt5EconomicsCallCount, summary.Mt5EconomicsElapsedMilliseconds);
+            run.Trades.OrderBy(trade => trade.EntryTimeUtc).Select(ToTrade).ToArray(), summary.EconomicsMode, summary.AccountCurrency, summary.BrokerSymbol, summary.HistoricalSpreadModel, summary.HistoricalChartMode, summary.CommissionPerLotPerSide, summary.StartingBalance, summary.EndingBalance, summary.GrossProfitFactor, summary.NetProfitFactor, summary.RejectedByTradingCosts, summary.Mt5EconomicsCallCount, summary.Mt5EconomicsElapsedMilliseconds, summary.RejectedByInsufficientMargin, summary.RejectedByInvalidVolume, summary.RejectedByTradeMode);
     }
 
     private static BacktestTradeResponse ToTrade(BacktestTrade trade) => new(

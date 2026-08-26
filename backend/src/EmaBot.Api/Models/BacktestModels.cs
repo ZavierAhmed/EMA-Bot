@@ -93,6 +93,11 @@ public sealed class BacktestRun
     public decimal? GrossProfitFactor { get; set; }
     public decimal? NetProfitFactor { get; set; }
     public int RejectedByTradingCosts { get; set; }
+    // Additive native-execution diagnostics. Existing rows retain their persisted zero values;
+    // they are not retroactively interpreted from the historical combined skip counter.
+    public int RejectedByInsufficientMargin { get; set; }
+    public int RejectedByInvalidVolume { get; set; }
+    public int RejectedByTradeMode { get; set; }
     public int Mt5EconomicsCallCount { get; set; }
     public long Mt5EconomicsElapsedMilliseconds { get; set; }
     public List<BacktestTrade> Trades { get; set; } = [];

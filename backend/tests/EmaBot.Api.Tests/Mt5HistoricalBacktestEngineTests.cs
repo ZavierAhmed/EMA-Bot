@@ -183,8 +183,55 @@ public sealed class Mt5HistoricalBacktestEngineTests
     public async Task NativeEngine_TradeModesRejectNewEntries(InstrumentTradeMode mode)
     {
         var h = new NativeHarness { TradeMode = mode };
-        Assert.Empty((await h.RunAsync()).Trades);
+        var result = await h.RunAsync();
+        Assert.Empty(result.Trades); Assert.True(result.Diagnostics.RejectedByTradeMode > 0); Assert.Equal(0, result.Diagnostics.SkippedWhilePositionOpen);
         Assert.Empty(h.Calculator.MarginCalls);
+    }
+
+    [Fact]
+    public async Task NativeEngine_OccupiedPositionIncrementsOnlyOccupiedPositionCounter()
+    {
+        var result = await new NativeHarness { MultipleSignals = true }.RunAsync();
+
+        Assert.True(result.Diagnostics.SkippedWhilePositionOpen > 0);
+        Assert.Equal(0, result.Diagnostics.RejectedByInsufficientMargin);
+        Assert.Equal(0, result.Diagnostics.RejectedByInvalidVolume);
+        Assert.Equal(0, result.Diagnostics.RejectedByTradeMode);
+    }
+
+    [Fact]
+    public async Task NativeEngine_InsufficientMarginDoesNotIncrementOccupiedPositionCounter()
+    {
+        var result = await new NativeHarness { SizingMode = PaperPositionSizingMode.MarginPercent, StartingBalance = 100m, MarginPercent = 1m, MarginPerLot = 200m }.RunAsync();
+
+        Assert.Empty(result.Trades);
+        Assert.True(result.Diagnostics.RejectedByInsufficientMargin > 0);
+        Assert.Equal(0, result.Diagnostics.SkippedWhilePositionOpen);
+        Assert.Equal(0, result.Diagnostics.RejectedByInvalidVolume);
+        Assert.Equal(0, result.Diagnostics.RejectedByTradeMode);
+    }
+
+    [Fact]
+    public async Task NativeEngine_InvalidFixedLotsDoesNotIncrementOccupiedPositionCounter()
+    {
+        var result = await new NativeHarness { FixedLots = .015m }.RunAsync();
+
+        Assert.Empty(result.Trades);
+        Assert.True(result.Diagnostics.RejectedByInvalidVolume > 0);
+        Assert.Equal(0, result.Diagnostics.SkippedWhilePositionOpen);
+        Assert.Equal(0, result.Diagnostics.RejectedByInsufficientMargin);
+        Assert.Equal(0, result.Diagnostics.RejectedByTradeMode);
+    }
+
+    [Fact]
+    public async Task NativeEngine_ValidTradeLeavesNativeRejectionCountersAtZero()
+    {
+        var result = await new NativeHarness().RunAsync();
+
+        Assert.Single(result.Trades);
+        Assert.Equal(0, result.Diagnostics.RejectedByInsufficientMargin);
+        Assert.Equal(0, result.Diagnostics.RejectedByInvalidVolume);
+        Assert.Equal(0, result.Diagnostics.RejectedByTradeMode);
     }
 
     [Fact]

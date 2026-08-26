@@ -34,6 +34,8 @@ public sealed class BacktestNativeEconomicsPersistenceTests
         Assert.Equal(BacktestEconomicsMode.Mt5HistoricalBidAsk, detail.EconomicsMode);
         Assert.Equal(4m / 3m, detail.GrossProfitFactor); Assert.Equal(.4m, detail.NetProfitFactor);
         Assert.Equal(detail.GrossProfitFactor, list.GrossProfitFactor); Assert.Equal(detail.NetProfitFactor, list.NetProfitFactor);
+        Assert.Equal(3, detail.RejectedByInsufficientMargin); Assert.Equal(2, detail.RejectedByInvalidVolume); Assert.Equal(1, detail.RejectedByTradeMode);
+        Assert.Equal(detail.RejectedByInsufficientMargin, list.RejectedByInsufficientMargin); Assert.Equal(detail.RejectedByInvalidVolume, list.RejectedByInvalidVolume); Assert.Equal(detail.RejectedByTradeMode, list.RejectedByTradeMode);
         Assert.Equal(4m / 3m, detail.ProfitFactor); // retained native compatibility field is explicitly gross.
     }
 
@@ -47,9 +49,12 @@ public sealed class BacktestNativeEconomicsPersistenceTests
         using var archive = new ZipArchive(new MemoryStream(workbook.Bytes), ZipArchiveMode.Read);
         using var reader = new StreamReader(archive.GetEntry("xl/worksheets/sheet1.xml")!.Open());
         var xml = XDocument.Parse(reader.ReadToEnd()).ToString();
+        using var diagnosticsReader = new StreamReader(archive.GetEntry("xl/worksheets/sheet5.xml")!.Open());
+        var diagnostics = XDocument.Parse(diagnosticsReader.ReadToEnd()).ToString();
         Assert.Contains("Gross Profit Factor", xml); Assert.Contains("Net Profit Factor", xml);
         Assert.Contains("1.3333333333333333333333333333", xml); Assert.Contains("0.4", xml);
         Assert.Contains("Mt5HistoricalBidAsk", xml); Assert.Contains("USD", xml); Assert.Contains(Mt5HistoricalBacktestEngine.SpreadModel, xml);
+        Assert.Contains("RejectedByInsufficientMargin", diagnostics); Assert.Contains("RejectedByInvalidVolume", diagnostics); Assert.Contains("RejectedByTradeMode", diagnostics);
     }
 
     private static EmaBotDbContext Database() => new(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
@@ -60,7 +65,7 @@ public sealed class BacktestNativeEconomicsPersistenceTests
         {
             MarketDataSource = MarketDataSource.Mt5Exness, Symbol = "BTCUSDm", BrokerSymbol = "BTCUSDm", Interval = "3m", RequestedStartUtc = now, RequestedEndUtc = now.AddHours(1), CreatedAtUtc = now, CompletedAtUtc = now.AddHours(1), Status = BacktestRunStatus.Completed,
             EconomicsMode = BacktestEconomicsMode.Mt5HistoricalBidAsk, AccountCurrency = "USD", HistoricalSpreadModel = Mt5HistoricalBacktestEngine.SpreadModel, HistoricalChartMode = "Bid", CommissionPerLotPerSide = 500m, StartingBalance = 1000m, EndingBalance = 985m,
-            ProfitFactor = 4m / 3m, GrossProfitFactor = 4m / 3m, NetProfitFactor = .4m, PositionSizingMode = PositionSizingMode.FixedNotional,
+            ProfitFactor = 4m / 3m, GrossProfitFactor = 4m / 3m, NetProfitFactor = .4m, PositionSizingMode = PositionSizingMode.FixedNotional, RejectedByInsufficientMargin = 3, RejectedByInvalidVolume = 2, RejectedByTradeMode = 1,
             Trades = [Trade(now.AddMinutes(3), 20m, 10m), Trade(now.AddMinutes(6), -15m, -25m)]
         };
     }
