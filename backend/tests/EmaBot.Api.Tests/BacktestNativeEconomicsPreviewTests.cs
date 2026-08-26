@@ -37,7 +37,7 @@ public sealed class BacktestNativeEconomicsPreviewTests
 
         Assert.True(preview.Ready); Assert.Null(preview.Reason); Assert.Equal("BTCUSDm", preview.BrokerSymbol); Assert.Equal("USD", preview.AccountCurrency); Assert.Equal(1000m, preview.StartingBalance);
         Assert.Equal(PaperPositionSizingMode.FixedLots, preview.SizingMode); Assert.Equal(.01m, preview.FixedLots); Assert.Equal(10m, preview.MarginPerTradePercent); Assert.Equal(0m, preview.CommissionPerLotPerSide);
-        Assert.Equal(Mt5HistoricalBacktestEngine.SpreadModel, preview.HistoricalSpreadModel); Assert.Equal(HistoricalChartMode.Bid.ToString(), preview.ChartMode); Assert.Equal(.1m, preview.PointSize); Assert.Equal(1m, preview.ContractSize); Assert.Equal(.01m, preview.VolumeMin); Assert.Equal(1m, preview.VolumeMax); Assert.Equal(.01m, preview.VolumeStep); Assert.Equal(0, preview.StopsLevelPoints);
+        Assert.Equal(Mt5HistoricalBacktestEngine.SpreadModel, preview.HistoricalSpreadModel); Assert.Equal(HistoricalChartMode.Bid.ToString(), preview.ChartMode); Assert.Equal(.1m, preview.PointSize); Assert.Equal(1m, preview.ContractSize); Assert.Equal(.01m, preview.VolumeMin); Assert.Equal(1m, preview.VolumeMax); Assert.Equal(.01m, preview.VolumeStep); Assert.Equal(5m, preview.VolumeLimit); Assert.Equal(0, preview.StopsLevelPoints); Assert.Equal(InstrumentTradeMode.Full.ToString(), preview.TradeMode);
     }
 
     [Fact]
@@ -158,7 +158,7 @@ public sealed class BacktestNativeEconomicsPreviewTests
             new Catalog(missing ? null : new InstrumentCatalogItem(spec, null, null, true, true, InstrumentTradeMode.Full), catalogUnavailable), new Account(currency, accountUnavailable));
     }
     private static EmaBotDbContext Database() => new(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
-    private static InstrumentSpec Spec() => new("Exness", "BTCUSDm", "BTCUSD", AssetClass.Crypto, 1, .1m, 1m, .01m, 1m, .01m, "BTC", "USD", "USD", .1m, 1m, 1m, null, 0, null, HistoricalChartMode.Bid);
+    private static InstrumentSpec Spec() => new("Exness", "BTCUSDm", "BTCUSD", AssetClass.Crypto, 1, .1m, 1m, .01m, 1m, .01m, "BTC", "USD", "USD", .1m, 1m, 1m, 5m, 0, null, HistoricalChartMode.Bid);
     private sealed class Catalog(InstrumentCatalogItem? item, bool unavailable = false) : IInstrumentCatalogProvider
     {
         public Task<IReadOnlyList<InstrumentCatalogItem>> GetAvailableAsync(CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<InstrumentCatalogItem>>([]);

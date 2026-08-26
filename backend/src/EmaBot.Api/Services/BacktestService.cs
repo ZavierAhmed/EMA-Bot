@@ -81,7 +81,26 @@ public sealed class BacktestService
         catch { return new(false, "MT5 account evidence is unavailable.", BrokerSymbol: symbol); }
         if (string.IsNullOrWhiteSpace(account.Currency)) return new(false, "MT5 account currency is unavailable.", BrokerSymbol: symbol);
         var settings = await settingsService.GetAsync(token);
-        return new(true, null, instrument.Spec.BrokerSymbol, account.Currency, settings.PaperStartingBalance, settings.PaperPositionSizingMode, settings.PaperFixedLots, settings.PaperMarginPerTradePercent, monitored.PaperCommissionPerLotPerSide, Mt5HistoricalBacktestEngine.SpreadModel, instrument.Spec.HistoricalChartMode.ToString(), instrument.Spec.ContractSize, instrument.Spec.VolumeMin, instrument.Spec.VolumeMax, instrument.Spec.VolumeStep, instrument.Spec.StopsLevelPoints, instrument.Spec.PointSize);
+        return new(
+            Ready: true,
+            Reason: null,
+            BrokerSymbol: instrument.Spec.BrokerSymbol,
+            AccountCurrency: account.Currency,
+            StartingBalance: settings.PaperStartingBalance,
+            SizingMode: settings.PaperPositionSizingMode,
+            FixedLots: settings.PaperFixedLots,
+            MarginPerTradePercent: settings.PaperMarginPerTradePercent,
+            CommissionPerLotPerSide: monitored.PaperCommissionPerLotPerSide,
+            HistoricalSpreadModel: Mt5HistoricalBacktestEngine.SpreadModel,
+            ChartMode: instrument.Spec.HistoricalChartMode.ToString(),
+            ContractSize: instrument.Spec.ContractSize,
+            VolumeMin: instrument.Spec.VolumeMin,
+            VolumeMax: instrument.Spec.VolumeMax,
+            VolumeStep: instrument.Spec.VolumeStep,
+            VolumeLimit: instrument.Spec.VolumeLimit,
+            StopsLevelPoints: instrument.Spec.StopsLevelPoints,
+            TradeMode: instrument.TradeMode.ToString(),
+            PointSize: instrument.Spec.PointSize);
     }
 
     private async Task<BacktestRun> RunMt5NativeAsync(string symbol, string interval, DateTimeOffset start, DateTimeOffset end, CancellationToken token)
@@ -155,4 +174,4 @@ public sealed class BacktestService
     private static decimal? ProfitFactor(IEnumerable<decimal> values) { var valuesArray = values.ToArray(); var loss = valuesArray.Where(value => value < 0m).Sum(value => -value); return loss == 0m ? null : valuesArray.Where(value => value > 0m).Sum() / loss; }
 }
 
-public sealed record Mt5HistoricalBacktestEconomicsPreview(bool Ready, string? Reason, string? BrokerSymbol = null, string? AccountCurrency = null, decimal? StartingBalance = null, PaperPositionSizingMode? SizingMode = null, decimal? FixedLots = null, decimal? MarginPerTradePercent = null, decimal? CommissionPerLotPerSide = null, string? HistoricalSpreadModel = null, string? ChartMode = null, decimal? ContractSize = null, decimal? VolumeMin = null, decimal? VolumeMax = null, decimal? VolumeStep = null, int? StopsLevelPoints = null, decimal? PointSize = null);
+public sealed record Mt5HistoricalBacktestEconomicsPreview(bool Ready, string? Reason, string? BrokerSymbol = null, string? AccountCurrency = null, decimal? StartingBalance = null, PaperPositionSizingMode? SizingMode = null, decimal? FixedLots = null, decimal? MarginPerTradePercent = null, decimal? CommissionPerLotPerSide = null, string? HistoricalSpreadModel = null, string? ChartMode = null, decimal? ContractSize = null, decimal? VolumeMin = null, decimal? VolumeMax = null, decimal? VolumeStep = null, decimal? VolumeLimit = null, int? StopsLevelPoints = null, string? TradeMode = null, decimal? PointSize = null);
