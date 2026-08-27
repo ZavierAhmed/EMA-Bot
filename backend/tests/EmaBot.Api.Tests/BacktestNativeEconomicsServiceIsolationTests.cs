@@ -79,6 +79,29 @@ public sealed class BacktestNativeEconomicsServiceIsolationTests
         Assert.Equal(1, longRun.Catalog.GetCalls); Assert.Equal(1, longRun.Account.GetCalls);
     }
 
+    [Fact]
+    public async Task NativeBacktestService_PersistsFixedLotsSizingProvenanceWithoutChangingExecution()
+    {
+        await using var harness = await NativeHarness.CreateAsync(feePercentPerSide: 0m, commissionPerLotPerSide: 2m, sizingMode: PaperPositionSizingMode.FixedLots, paperFixedLots: .01m, paperMarginPerTradePercent: 2m, paperStartingBalance: 100m);
+
+        var run = await harness.RunAsync();
+
+        Assert.Equal(PaperPositionSizingMode.FixedLots, run.NativePositionSizingMode); Assert.Equal(.01m, run.NativeFixedLots); Assert.Equal(2m, run.NativeMarginPerTradePercent); Assert.Equal(100m, run.StartingBalance);
+        Assert.All(run.Trades, item => Assert.Equal(PaperPositionSizingMode.FixedLots, item.NativePositionSizingMode));
+        Assert.All(run.Trades, item => Assert.Equal(.01m, item.Lots));
+    }
+
+    [Fact]
+    public async Task NativeBacktestService_PersistsMarginPercentSizingProvenanceWithoutReinterpretingLegacyMode()
+    {
+        await using var harness = await NativeHarness.CreateAsync(feePercentPerSide: 0m, commissionPerLotPerSide: 2m, sizingMode: PaperPositionSizingMode.MarginPercent, paperFixedLots: .01m, paperMarginPerTradePercent: 2m, paperStartingBalance: 100m);
+
+        var run = await harness.RunAsync();
+
+        Assert.Equal(PositionSizingMode.FixedNotional, run.PositionSizingMode); Assert.Equal(PaperPositionSizingMode.MarginPercent, run.NativePositionSizingMode); Assert.Equal(.01m, run.NativeFixedLots); Assert.Equal(2m, run.NativeMarginPerTradePercent); Assert.Equal(100m, run.StartingBalance);
+        Assert.All(run.Trades, item => Assert.Equal(PaperPositionSizingMode.MarginPercent, item.NativePositionSizingMode));
+    }
+
     private static void AssertTradesEqual(IReadOnlyList<BacktestTrade> left, IReadOnlyList<BacktestTrade> right)
     {
         Assert.Equal(left.Count, right.Count);
@@ -98,11 +121,11 @@ public sealed class BacktestNativeEconomicsServiceIsolationTests
         public Account Account { get; } = account;
         public RecordingCalculator Calculator { get; } = calculator;
 
-        public static async Task<NativeHarness> CreateAsync(decimal feePercentPerSide, decimal commissionPerLotPerSide, int totalBars = 61)
+        public static async Task<NativeHarness> CreateAsync(decimal feePercentPerSide, decimal commissionPerLotPerSide, int totalBars = 61, PaperPositionSizingMode sizingMode = PaperPositionSizingMode.FixedLots, decimal paperFixedLots = .01m, decimal paperMarginPerTradePercent = 10m, decimal paperStartingBalance = 1000m)
         {
             var database = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
             database.MonitoredSymbols.Add(new MonitoredSymbol { Source = MarketDataSource.Mt5Exness, Symbol = "BTCUSDm", IsEnabled = true, PaperCommissionPerLotPerSide = commissionPerLotPerSide });
-            database.TradingSettings.Add(new TradingSettings { Id = TradingSettings.GlobalId, RiskReward = 2m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = feePercentPerSide, PaperPositionSizingMode = PaperPositionSizingMode.FixedLots, PaperFixedLots = .01m, PaperStartingBalance = 1000m, SimulatedAccountBalanceUsdt = 1000m, PaperMarginPerTradePercent = 10m, MarginPerTradePercent = 10m, Leverage = 5m, MinEmaGapPercent = 0m, MaxStopDistancePercent = 0m, WaitForConfirmationCandle = false, UseEma100Filter = false, UseHtfRegimeFilter = false, TrailingStopEnabled = false });
+            database.TradingSettings.Add(new TradingSettings { Id = TradingSettings.GlobalId, RiskReward = 2m, FixedOrderSizeUsdt = 100m, FeePercentPerSide = feePercentPerSide, PaperPositionSizingMode = sizingMode, PaperFixedLots = paperFixedLots, PaperStartingBalance = paperStartingBalance, SimulatedAccountBalanceUsdt = 1000m, PaperMarginPerTradePercent = paperMarginPerTradePercent, MarginPerTradePercent = 10m, Leverage = 5m, MinEmaGapPercent = 0m, MaxStopDistancePercent = 0m, WaitForConfirmationCandle = false, UseEma100Filter = false, UseHtfRegimeFilter = false, TrailingStopEnabled = false });
             await database.SaveChangesAsync();
 
             var bridge = new TestMt5BridgeRequestClient(); bridge.Responses[Mt5BridgeOperation.GetBarsRange] = Response(Mt5BridgeOperation.GetBarsRange, Bars(totalBars));

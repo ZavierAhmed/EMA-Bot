@@ -89,6 +89,11 @@ public sealed class BacktestRun
     public int? StopsLevelPoints { get; set; }
     public string? TradeMode { get; set; }
     public decimal? StartingBalance { get; set; }
+    // Native sizing provenance is intentionally nullable: historical runs did not capture it.
+    // The legacy PositionSizingMode remains compatibility metadata and is never reinterpreted.
+    public PaperPositionSizingMode? NativePositionSizingMode { get; set; }
+    public decimal? NativeFixedLots { get; set; }
+    public decimal? NativeMarginPerTradePercent { get; set; }
     public decimal? EndingBalance { get; set; }
     public decimal? GrossProfitFactor { get; set; }
     public decimal? NetProfitFactor { get; set; }
@@ -119,6 +124,8 @@ public sealed class BacktestTrade
     public decimal Quantity { get; set; }
     public decimal EntryNotionalUsdt { get; set; }
     public PositionSizingMode PositionSizingMode { get; set; }
+    // Nullable native sizing provenance avoids fabricating a mode for historical trades.
+    public PaperPositionSizingMode? NativePositionSizingMode { get; set; }
     public decimal? AccountEquityAtEntryUsdt { get; set; }
     public decimal? MarginUsedUsdt { get; set; }
     public decimal? Leverage { get; set; }
