@@ -25,6 +25,12 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token, requestAborted, deadline.Token);
         try { var run = await service.RunAsync(symbol, request.Interval, request.StartUtc, request.EndUtc, operation.Token); return CreatedAtAction(nameof(Get), new { id = run.Id }, BacktestResponseMapper.ToDetail(run)); }
         catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); }
+        catch (Mt5RiskPercentConfigurationException exception) { return BadRequest(new ApiMessage(exception.Message)); }
+        catch (Mt5NativeEconomicsUnavailableException exception)
+        {
+            var operationName = exception.FailureReason == Mt5NativeRiskSizingFailure.MarginCalculationUnavailable ? "margin" : "stop-risk";
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage($"MT5 RiskPercent {operationName} calculation became unavailable. No backtest was saved. Verify the MT5 bridge is connected and retry."));
+        }
         catch (OperationCanceledException) when (token.IsCancellationRequested || requestAborted.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest exceeded its allowed processing time for this research window. Retry, or use a smaller date range if the problem persists.")); }
         catch (MarketDataProviderException exception) { return StatusCode(exception.Kind == MarketDataErrorKind.RateLimited ? 429 : exception.Kind == MarketDataErrorKind.Timeout ? 504 : 503, new ApiMessage(exception.Message.Contains("history", StringComparison.OrdinalIgnoreCase) ? "MT5 history is still loading. Retry shortly." : "MT5 historical market data is currently unavailable.")); }

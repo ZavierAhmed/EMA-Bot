@@ -472,8 +472,8 @@ public sealed class PaperTradingCoordinator(
         }
         catch (PaperSizingException failure)
         {
-            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "MarginCalculationUnavailable", pending.Direction, failure.Message, EntryPrice: entry.Value, Lots: failure.RequestedLots), token);
-            await FaultSessionAsync(state, "MT5 margin calculation is unavailable; no Paper trade was created.", token);
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, failure.Kind.ToString(), pending.Direction, failure.Message, EntryPrice: entry.Value, Lots: failure.RequestedLots), token);
+            await FaultSessionAsync(state, failure.Kind == PaperSizingFailureKind.MarginCalculationUnavailable ? "MT5 margin calculation is unavailable; no Paper trade was created." : "MT5 RiskPercent sizing could not be established safely; no Paper trade was created.", token);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
         }
@@ -818,9 +818,14 @@ public sealed class PaperTradingCoordinator(
                     Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume => PaperSizingFailureKind.RiskBelowMinimumVolume,
                     Mt5NativeRiskSizingFailure.InsufficientMargin => PaperSizingFailureKind.InsufficientFreeMargin,
                     Mt5NativeRiskSizingFailure.InvalidVolume => PaperSizingFailureKind.InvalidVolumeStep,
+                    Mt5NativeRiskSizingFailure.InvalidRiskConfiguration => PaperSizingFailureKind.InvalidRiskConfiguration,
+                    Mt5NativeRiskSizingFailure.RiskCannotBeSafelySized => PaperSizingFailureKind.RiskCannotBeSafelySized,
+                    Mt5NativeRiskSizingFailure.RiskCalculationUnavailable => PaperSizingFailureKind.RiskCalculationUnavailable,
+                    Mt5NativeRiskSizingFailure.MarginCalculationUnavailable => PaperSizingFailureKind.MarginCalculationUnavailable,
                     _ => PaperSizingFailureKind.RiskCalculationUnavailable
                 };
-                throw new PaperSizingException(kind, kind == PaperSizingFailureKind.RiskBelowMinimumVolume ? "Entry rejected because broker minimum volume would exceed the configured initial-stop risk budget." : "Entry rejected because MT5 RiskPercent sizing could not be established safely.");
+                var message = kind == PaperSizingFailureKind.RiskBelowMinimumVolume ? "Entry rejected because broker minimum volume would exceed the configured initial-stop risk budget." : kind == PaperSizingFailureKind.RiskCannotBeSafelySized ? "Entry rejected because no broker-valid volume could satisfy the configured initial-stop risk budget." : $"Entry rejected because MT5 RiskPercent sizing failed closed with {result.FailureReason}.";
+                throw new PaperSizingException(kind, message);
             }
             default:
                 throw new PaperSizingException(PaperSizingFailureKind.UnsupportedSizingMode, "The selected Paper sizing mode is unsupported; no Paper trade was created.");
@@ -874,7 +879,7 @@ public sealed class PaperTradingCoordinator(
     private sealed record PendingEntry(SignalDirection Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, InitialStopSelection InitialStop, IndicatorSnapshot Snapshot, bool IsReentry, DateTimeOffset? TrendRegimeCrossoverTimeUtc, int? ReentryAgeBars) { public decimal Stop => InitialStop.Price; public StopSourceType StopSource => InitialStop.Source; public DateTimeOffset StopTimeUtc => InitialStop.Time; }
     private sealed record PendingOppositeExit(DateTimeOffset SignalTimeUtc, SignalDirection Direction);
     private sealed record Mt5PaperSize(decimal Lots, decimal RequiredMargin, decimal Equity, decimal? TargetRiskPercent = null, decimal? TargetRiskAmount = null);
-    private enum PaperSizingFailureKind { InvalidFixedLotsBelowMinimum, InvalidFixedLotsAboveMaximum, InvalidVolumeStep, InsufficientFreeMargin, MarginCalculationUnavailable, RiskBelowMinimumVolume, RiskCalculationUnavailable, UnsupportedSizingMode }
+    private enum PaperSizingFailureKind { InvalidFixedLotsBelowMinimum, InvalidFixedLotsAboveMaximum, InvalidVolumeStep, InsufficientFreeMargin, MarginCalculationUnavailable, RiskBelowMinimumVolume, RiskCalculationUnavailable, RiskCannotBeSafelySized, InvalidRiskConfiguration, UnsupportedSizingMode }
     private sealed class PaperSizingException(PaperSizingFailureKind kind, string message, decimal? requestedLots = null, decimal? requiredMargin = null, decimal? availableFreeMargin = null, Exception? innerException = null) : Exception(message, innerException)
     {
         public PaperSizingFailureKind Kind { get; } = kind;

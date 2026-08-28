@@ -3,13 +3,14 @@ using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Mt5Bridge;
 using EmaBot.Api.Strategy;
+using Microsoft.Extensions.Logging;
 
 namespace EmaBot.Api.Services;
 
 // Deliberately separate from BacktestEngine: that engine remains the legacy/optimizer path.
 // This executor consumes the same ordinary strategy candles, but reconstructs executable
 // Bid/Ask prices from MT5 MqlRates spread evidence.
-public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5TradeCalculator calculator)
+public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5TradeCalculator calculator, ILogger<Mt5HistoricalBacktestEngine>? logger = null)
 {
     public const string SpreadModel = "MT5 MqlRates bar spread, constant within bar";
 
@@ -67,7 +68,8 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
                 if (sizing.FailureReason == NativeSizingFailure.InsufficientMargin) rejectedInsufficientMargin++;
                 else if (sizing.FailureReason == NativeSizingFailure.InvalidVolume) rejectedInvalidVolume++;
                 else if (sizing.FailureReason == NativeSizingFailure.RiskBelowMinimumVolume) rejectedRiskBelowMinimumVolume++;
-                else throw new InvalidOperationException("MT5 RiskPercent sizing could not be established safely.");
+                else if (sizing.FailureReason == NativeSizingFailure.RiskCannotBeSafelySized) { logger?.LogWarning("RiskPercent sizing could not safely size signal for {BrokerSymbol} {Direction} at {SignalTimeUtc}; entry={Entry}, stop={InitialStop}, equity={Equity}, calls={CalculationCalls}.", instrument.Spec.BrokerSymbol, direction, signal.Time, entry, stop.Price, equity, sizing.RiskResult?.CalculationCalls); continue; }
+                else ThrowRiskSizingFailure(sizing, instrument.Spec.BrokerSymbol, direction, signal.Time, entry, stop.Price, equity, settings.PaperRiskPerTradePercent);
                 continue;
             }
             var sizedLots = sizing.Lots!;
@@ -102,7 +104,8 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
                         if (reentrySizing.FailureReason == NativeSizingFailure.InsufficientMargin) rejectedInsufficientMargin++;
                         else if (reentrySizing.FailureReason == NativeSizingFailure.InvalidVolume) rejectedInvalidVolume++;
                         else if (reentrySizing.FailureReason == NativeSizingFailure.RiskBelowMinimumVolume) rejectedRiskBelowMinimumVolume++;
-                        else throw new InvalidOperationException("MT5 RiskPercent sizing could not be established safely.");
+                        else if (reentrySizing.FailureReason == NativeSizingFailure.RiskCannotBeSafelySized) { logger?.LogWarning("RiskPercent re-entry could not safely size for {BrokerSymbol} {Direction} at {SignalTimeUtc}; entry={Entry}, stop={InitialStop}, equity={Equity}, calls={CalculationCalls}.", instrument.Spec.BrokerSymbol, direction, reentrySnapshot.Time, reentryEntry, reentryStop.Price, equity, reentrySizing.RiskResult?.CalculationCalls); break; }
+                        else ThrowRiskSizingFailure(reentrySizing, instrument.Spec.BrokerSymbol, direction, reentrySnapshot.Time, reentryEntry, reentryStop.Price, equity, settings.PaperRiskPerTradePercent);
                         break;
                     }
                     var reentryLots = reentrySizing.Lots!;
@@ -197,13 +200,17 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
                 if (result.IsSuccess) return NativeSizingResult.For(new(result.Lots!.Value, result.RequiredMargin!.Value, equity, result.TargetRiskPercent, result.TargetRiskAmount));
                 return result.FailureReason switch
                 {
-                    Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume => NativeSizingResult.RiskBelowMinimumVolume,
-                    Mt5NativeRiskSizingFailure.InsufficientMargin => NativeSizingResult.InsufficientMargin,
-                    Mt5NativeRiskSizingFailure.InvalidVolume => NativeSizingResult.InvalidVolume,
-                    _ => NativeSizingResult.Unavailable
+                    Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume => NativeSizingResult.Failed(NativeSizingFailure.RiskBelowMinimumVolume, result),
+                    Mt5NativeRiskSizingFailure.InsufficientMargin => NativeSizingResult.Failed(NativeSizingFailure.InsufficientMargin, result),
+                    Mt5NativeRiskSizingFailure.InvalidVolume => NativeSizingResult.Failed(NativeSizingFailure.InvalidVolume, result),
+                    Mt5NativeRiskSizingFailure.InvalidRiskConfiguration => NativeSizingResult.Failed(NativeSizingFailure.InvalidRiskConfiguration, result),
+                    Mt5NativeRiskSizingFailure.RiskCannotBeSafelySized => NativeSizingResult.Failed(NativeSizingFailure.RiskCannotBeSafelySized, result),
+                    Mt5NativeRiskSizingFailure.RiskCalculationUnavailable => NativeSizingResult.Failed(NativeSizingFailure.RiskCalculationUnavailable, result),
+                    Mt5NativeRiskSizingFailure.MarginCalculationUnavailable => NativeSizingResult.Failed(NativeSizingFailure.MarginCalculationUnavailable, result),
+                    _ => NativeSizingResult.Failed(NativeSizingFailure.Unknown, result)
                 };
             }
-            default: return NativeSizingResult.Unavailable;
+            default: return new NativeSizingResult(null, NativeSizingFailure.Unknown);
         }
     }
 
@@ -233,15 +240,26 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
         return settings.MinEmaGapPercent == 0m || snapshot.GapPercent >= settings.MinEmaGapPercent;
     }
     private static QuoteBar Quote(Mt5HistoricalExecutionBar bar, decimal point) { var spread = bar.SpreadPoints * point; return new(bar.Open, bar.High, bar.Low, bar.Close, bar.Open + spread, bar.High + spread, bar.Low + spread, bar.Close + spread, spread); }
-    private enum NativeSizingFailure { InsufficientMargin, InvalidVolume, RiskBelowMinimumVolume, Unavailable }
-    private sealed record NativeSizingResult(Mt5Lots? Lots, NativeSizingFailure? FailureReason)
+    private void ThrowRiskSizingFailure(NativeSizingResult sizing, string brokerSymbol, SignalDirection direction, DateTimeOffset signalTimeUtc, decimal entry, decimal initialStop, decimal equity, decimal riskPercent)
+    {
+        if (sizing.FailureReason == NativeSizingFailure.InvalidRiskConfiguration) throw new Mt5RiskPercentConfigurationException();
+        if (sizing.FailureReason is NativeSizingFailure.RiskCalculationUnavailable or NativeSizingFailure.MarginCalculationUnavailable)
+        {
+            var detail = sizing.RiskResult?.Diagnostic;
+            logger?.LogError("MT5 RiskPercent native economics unavailable. Reason={SizingFailureReason} Symbol={BrokerSymbol} Direction={Direction} SignalTimeUtc={SignalTimeUtc} Entry={Entry} InitialStop={InitialStop} Equity={Equity} RiskPercent={RiskPercent} TargetRiskAmount={TargetRiskAmount} Lots={Lots} Calls={CalculationCalls} Operation={Operation} ExceptionType={ExceptionType} SafeMessage={SafeMessage}", sizing.FailureReason, brokerSymbol, direction, signalTimeUtc, entry, initialStop, equity, riskPercent, sizing.RiskResult?.TargetRiskAmount, detail?.Lots, sizing.RiskResult?.CalculationCalls, detail?.Operation, detail?.ExceptionType, detail?.SafeMessage);
+            throw new Mt5NativeEconomicsUnavailableException(sizing.RiskResult!.FailureReason!.Value, detail);
+        }
+        throw new InvalidOperationException($"MT5 RiskPercent sizing failed closed with {sizing.FailureReason}.");
+    }
+
+    private enum NativeSizingFailure { InsufficientMargin, InvalidVolume, RiskBelowMinimumVolume, InvalidRiskConfiguration, RiskCannotBeSafelySized, RiskCalculationUnavailable, MarginCalculationUnavailable, Unknown }
+    private sealed record NativeSizingResult(Mt5Lots? Lots, NativeSizingFailure? FailureReason, Mt5NativeRiskSizingResult? RiskResult = null)
     {
         public bool Success => Lots is not null;
         public static NativeSizingResult For(Mt5Lots lots) => new(lots, null);
         public static NativeSizingResult InsufficientMargin { get; } = new(null, NativeSizingFailure.InsufficientMargin);
         public static NativeSizingResult InvalidVolume { get; } = new(null, NativeSizingFailure.InvalidVolume);
-        public static NativeSizingResult RiskBelowMinimumVolume { get; } = new(null, NativeSizingFailure.RiskBelowMinimumVolume);
-        public static NativeSizingResult Unavailable { get; } = new(null, NativeSizingFailure.Unavailable);
+        public static NativeSizingResult Failed(NativeSizingFailure reason, Mt5NativeRiskSizingResult result) => new(null, reason, result);
     }
     private sealed record Mt5Lots(decimal Lots, decimal Margin, decimal Equity, decimal? TargetRiskPercent = null, decimal? TargetRiskAmount = null);
     private sealed record Mt5HistoricalExecution(BacktestTrade Trade, int ExitIndex);

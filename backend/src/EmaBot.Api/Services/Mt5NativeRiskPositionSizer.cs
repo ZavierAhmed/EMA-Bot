@@ -24,28 +24,31 @@ public sealed class Mt5NativeRiskPositionSizer(IMt5TradeCalculator calculator)
         var targetRisk = request.Equity * request.RiskPercent / 100m;
         if (targetRisk <= 0m) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.InvalidRiskConfiguration);
         var calls = 0;
-        async Task<decimal?> LossAsync(decimal lots)
+        Mt5NativeRiskSizingDiagnostic Diagnostic(string operation, decimal lots, Exception? exception = null, string? detail = null)
+            => new(operation, request.BrokerSymbol, request.Direction, request.EntryPrice, request.InitialStopPrice, lots, request.Equity, request.RiskPercent, targetRisk, exception?.GetType().Name, exception?.Message ?? detail);
+        async Task<(decimal? Loss, Mt5NativeRiskSizingDiagnostic? Diagnostic)> LossAsync(decimal lots)
         {
             try
             {
                 calls++;
-                return decimal.Abs((await calculator.CalculateProfitAsync(new Mt5CalculateProfitRequest(request.BrokerSymbol, request.Direction.ToString(), lots, request.EntryPrice, request.InitialStopPrice), token)).Profit);
+                var loss = decimal.Abs((await calculator.CalculateProfitAsync(new Mt5CalculateProfitRequest(request.BrokerSymbol, request.Direction.ToString(), lots, request.EntryPrice, request.InitialStopPrice), token)).Profit);
+                return loss > 0m ? (loss, null) : (null, Diagnostic("CalculateProfit", lots, detail: "MT5 CalculateProfit returned a non-positive stop-risk value."));
             }
             catch (OperationCanceledException) { throw; }
-            catch { return null; }
+            catch (Exception exception) { return (null, Diagnostic("CalculateProfit", lots, exception)); }
         }
 
-        var referenceLoss = await LossAsync(request.VolumeMin);
-        if (referenceLoss is not > 0m) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, calls);
-        if (referenceLoss.Value > targetRisk + RiskTolerance)
+        var reference = await LossAsync(request.VolumeMin);
+        if (reference.Loss is not > 0m) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, calls, targetRisk, diagnostic: reference.Diagnostic);
+        if (reference.Loss.Value > targetRisk + RiskTolerance)
             return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume, calls, targetRisk);
 
-        var candidate = NormalizeDown(Math.Min(maximum, request.VolumeMin * targetRisk / referenceLoss.Value), request.VolumeMin, request.VolumeStep);
+        var candidate = NormalizeDown(Math.Min(maximum, request.VolumeMin * targetRisk / reference.Loss.Value), request.VolumeMin, request.VolumeStep);
         for (var attempt = 0; attempt < MaxRiskRevalidationAttempts && candidate >= request.VolumeMin; attempt++)
         {
-            var actualRisk = await LossAsync(candidate);
-            if (actualRisk is null) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, calls, targetRisk);
-            if (actualRisk.Value <= targetRisk + RiskTolerance)
+            var actual = await LossAsync(candidate);
+            if (actual.Loss is null) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, calls, targetRisk, diagnostic: actual.Diagnostic);
+            if (actual.Loss.Value <= targetRisk + RiskTolerance)
             {
                 decimal margin;
                 try
@@ -54,10 +57,10 @@ public sealed class Mt5NativeRiskPositionSizer(IMt5TradeCalculator calculator)
                     margin = (await calculator.CalculateMarginAsync(new Mt5CalculateMarginRequest(request.BrokerSymbol, request.Direction.ToString(), candidate, request.EntryPrice), token)).RequiredMargin;
                 }
                 catch (OperationCanceledException) { throw; }
-                catch { return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, calls, targetRisk); }
-                if (margin <= 0m) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, calls, targetRisk);
-                if (margin > request.Equity) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.InsufficientMargin, calls, targetRisk, actualRisk);
-                return Mt5NativeRiskSizingResult.Success(candidate, margin, request.Equity, request.RiskPercent, targetRisk, actualRisk.Value, calls);
+                catch (Exception exception) { return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, calls, targetRisk, diagnostic: Diagnostic("CalculateMargin", candidate, exception)); }
+                if (margin <= 0m) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, calls, targetRisk, diagnostic: Diagnostic("CalculateMargin", candidate, detail: "MT5 CalculateMargin returned a non-positive margin value."));
+                if (margin > request.Equity) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.InsufficientMargin, calls, targetRisk, actual.Loss);
+                return Mt5NativeRiskSizingResult.Success(candidate, margin, request.Equity, request.RiskPercent, targetRisk, actual.Loss.Value, calls);
             }
             candidate = NormalizeDown(candidate - request.VolumeStep, request.VolumeMin, request.VolumeStep);
         }
@@ -70,10 +73,14 @@ public sealed class Mt5NativeRiskPositionSizer(IMt5TradeCalculator calculator)
 
 public sealed record Mt5NativeRiskSizingRequest(string BrokerSymbol, SignalDirection Direction, decimal EntryPrice, decimal InitialStopPrice, decimal Equity, decimal RiskPercent, decimal VolumeMin, decimal VolumeMax, decimal VolumeStep, decimal? VolumeLimit);
 public enum Mt5NativeRiskSizingFailure { InvalidRiskConfiguration, InvalidVolume, RiskBelowMinimumVolume, RiskCannotBeSafelySized, RiskCalculationUnavailable, MarginCalculationUnavailable, InsufficientMargin }
-public sealed record Mt5NativeRiskSizingResult(decimal? Lots, decimal? RequiredMargin, decimal Equity, decimal? TargetRiskPercent, decimal? TargetRiskAmount, decimal? ActualInitialRiskAmount, int CalculationCalls, Mt5NativeRiskSizingFailure? FailureReason)
+public sealed record Mt5NativeRiskSizingDiagnostic(string Operation, string BrokerSymbol, SignalDirection Direction, decimal EntryPrice, decimal InitialStopPrice, decimal Lots, decimal Equity, decimal RiskPercent, decimal TargetRiskAmount, string? ExceptionType, string? SafeMessage);
+public sealed class Mt5NativeEconomicsUnavailableException(Mt5NativeRiskSizingFailure failureReason, Mt5NativeRiskSizingDiagnostic? diagnostic) : InvalidOperationException($"MT5 RiskPercent {failureReason}.")
+{ public Mt5NativeRiskSizingFailure FailureReason { get; } = failureReason; public Mt5NativeRiskSizingDiagnostic? Diagnostic { get; } = diagnostic; }
+public sealed class Mt5RiskPercentConfigurationException : InvalidOperationException { public Mt5RiskPercentConfigurationException() : base("MT5 RiskPercent configuration is invalid.") { } }
+public sealed record Mt5NativeRiskSizingResult(decimal? Lots, decimal? RequiredMargin, decimal Equity, decimal? TargetRiskPercent, decimal? TargetRiskAmount, decimal? ActualInitialRiskAmount, int CalculationCalls, Mt5NativeRiskSizingFailure? FailureReason, Mt5NativeRiskSizingDiagnostic? Diagnostic = null)
 {
     public bool IsSuccess => Lots is not null;
     public decimal? ActualInitialRiskPercent => ActualInitialRiskAmount is not null && Equity > 0m ? ActualInitialRiskAmount / Equity * 100m : null;
     public static Mt5NativeRiskSizingResult Success(decimal lots, decimal margin, decimal equity, decimal targetPercent, decimal targetAmount, decimal actualAmount, int calls) => new(lots, margin, equity, targetPercent, targetAmount, actualAmount, calls, null);
-    public static Mt5NativeRiskSizingResult Failure(Mt5NativeRiskSizingFailure reason, int calls = 0, decimal? targetAmount = null, decimal? actualAmount = null) => new(null, null, 0m, null, targetAmount, actualAmount, calls, reason);
+    public static Mt5NativeRiskSizingResult Failure(Mt5NativeRiskSizingFailure reason, int calls = 0, decimal? targetAmount = null, decimal? actualAmount = null, Mt5NativeRiskSizingDiagnostic? diagnostic = null) => new(null, null, 0m, null, targetAmount, actualAmount, calls, reason, diagnostic);
 }

@@ -260,6 +260,37 @@ public sealed class Mt5HistoricalBacktestEngineTests
         Assert.Empty(h.Calculator.ProfitCalls);
     }
 
+    [Fact]
+    public async Task NativeEngine_RiskProfitUnavailableAbortsWithTypedException()
+    {
+        var h = new NativeHarness { SizingMode = PaperPositionSizingMode.RiskPercent, BrokerProfitResolver = _ => throw new InvalidOperationException("test profit transport failure") };
+
+        var exception = await Assert.ThrowsAsync<Mt5NativeEconomicsUnavailableException>(() => h.RunAsync());
+
+        Assert.Equal(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, exception.FailureReason);
+        Assert.Equal("CalculateProfit", exception.Diagnostic?.Operation);
+    }
+
+    [Fact]
+    public async Task NativeEngine_RiskMarginUnavailableAbortsWithTypedException()
+    {
+        var h = new NativeHarness { SizingMode = PaperPositionSizingMode.RiskPercent, RiskPercent = 2m, MarginPerLot = 0m, BrokerProfitResolver = request => (request.ClosePrice - request.OpenPrice) * request.VolumeLots * 100m };
+
+        var exception = await Assert.ThrowsAsync<Mt5NativeEconomicsUnavailableException>(() => h.RunAsync());
+
+        Assert.Equal(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, exception.FailureReason);
+        Assert.Equal("CalculateMargin", exception.Diagnostic?.Operation);
+    }
+
+    [Fact]
+    public async Task NativeEngine_InvalidRiskConfigurationAbortsClearly()
+    {
+        var h = new NativeHarness { SizingMode = PaperPositionSizingMode.RiskPercent, RiskPercent = 0m };
+
+        await Assert.ThrowsAsync<Mt5RiskPercentConfigurationException>(() => h.RunAsync());
+        Assert.Empty(h.Calculator.MarginCalls);
+    }
+
     [Theory]
     [InlineData(InstrumentTradeMode.Disabled)]
     [InlineData(InstrumentTradeMode.CloseOnly)]

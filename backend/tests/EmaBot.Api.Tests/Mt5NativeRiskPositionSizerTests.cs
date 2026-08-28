@@ -68,24 +68,65 @@ public sealed class Mt5NativeRiskPositionSizerTests
         Assert.Equal(.02m, calculator.MarginRequests.Single().VolumeLots);
     }
 
+    [Fact]
+    public async Task RiskPercent_ProfitCalculatorExceptionPreservesSafeDiagnosticContext()
+    {
+        var result = await new Mt5NativeRiskPositionSizer(new Calculator { ThrowOnProfit = true }).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1_000m, 1m), CancellationToken.None);
+
+        Assert.Equal(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, result.FailureReason);
+        Assert.Equal("CalculateProfit", result.Diagnostic?.Operation);
+        Assert.Equal("BTCUSDm", result.Diagnostic?.BrokerSymbol);
+        Assert.Equal("InvalidOperationException", result.Diagnostic?.ExceptionType);
+        Assert.Equal(100m, result.Diagnostic?.EntryPrice);
+        Assert.Equal(95m, result.Diagnostic?.InitialStopPrice);
+    }
+
+    [Fact]
+    public async Task RiskPercent_MarginCalculatorExceptionPreservesSafeDiagnosticContext()
+    {
+        var result = await new Mt5NativeRiskPositionSizer(new Calculator { ThrowOnMargin = true }).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1_000m, 1m), CancellationToken.None);
+
+        Assert.Equal(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, result.FailureReason);
+        Assert.Equal("CalculateMargin", result.Diagnostic?.Operation);
+        Assert.Equal(.02m, result.Diagnostic?.Lots);
+        Assert.Equal("InvalidOperationException", result.Diagnostic?.ExceptionType);
+    }
+
+    [Fact]
+    public async Task RiskPercent_NonPositiveBrokerResultsAreAttributedToTheirOperations()
+    {
+        var profit = await new Mt5NativeRiskPositionSizer(new Calculator { ProfitOverride = 0m }).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1_000m, 1m), CancellationToken.None);
+        var margin = await new Mt5NativeRiskPositionSizer(new Calculator { MarginPerLot = 0m }).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1_000m, 1m), CancellationToken.None);
+
+        Assert.Equal(Mt5NativeRiskSizingFailure.RiskCalculationUnavailable, profit.FailureReason);
+        Assert.Equal("CalculateProfit", profit.Diagnostic?.Operation);
+        Assert.Equal(Mt5NativeRiskSizingFailure.MarginCalculationUnavailable, margin.FailureReason);
+        Assert.Equal("CalculateMargin", margin.Diagnostic?.Operation);
+    }
+
     private static Mt5NativeRiskSizingRequest Request(SignalDirection direction, decimal entry, decimal stop, decimal equity, decimal riskPercent, decimal volumeMax = 1m, decimal? volumeLimit = null)
         => new("BTCUSDm", direction, entry, stop, equity, riskPercent, .01m, volumeMax, .01m, volumeLimit);
 
     private sealed class Calculator : IMt5TradeCalculator
     {
         public decimal MarginPerLot { get; set; } = 100m;
+        public bool ThrowOnProfit { get; set; }
+        public bool ThrowOnMargin { get; set; }
+        public decimal? ProfitOverride { get; set; }
         public List<Mt5CalculateProfitRequest> ProfitRequests { get; } = [];
         public List<Mt5CalculateMarginRequest> MarginRequests { get; } = [];
         public Task<Mt5MarginCalculationPayload> CalculateMarginAsync(Mt5CalculateMarginRequest request, CancellationToken token)
         {
             MarginRequests.Add(request);
+            if (ThrowOnMargin) throw new InvalidOperationException("test margin transport failure");
             return Task.FromResult(new Mt5MarginCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.VolumeLots * MarginPerLot, "USD"));
         }
         public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken token)
         {
             ProfitRequests.Add(request);
+            if (ThrowOnProfit) throw new InvalidOperationException("test profit transport failure");
             var perLot = request.Direction == "Long" ? request.ClosePrice - request.OpenPrice : request.OpenPrice - request.ClosePrice;
-            return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, perLot * request.VolumeLots * 100m, "USD"));
+            return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, ProfitOverride ?? perLot * request.VolumeLots * 100m, "USD"));
         }
     }
 }
