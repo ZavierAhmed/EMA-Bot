@@ -43,7 +43,7 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
             .GroupBy(x => x.Time).ToDictionary(x => x.Key, x => x.Last());
         var trades = new List<BacktestTrade>(); var equity = settings.PaperStartingBalance; var occupiedUntil = -1; var reenteredRegimes = new HashSet<DateTimeOffset>();
         var snapshotsByIndex = evaluation.Snapshots.Where(snapshot => byClose.ContainsKey(snapshot.Time)).ToDictionary(snapshot => byClose[snapshot.Time]);
-        var rejectedStop = 0; var rejectedCosts = 0; var invalid = 0; var skipped = 0; var noEntry = 0; var rejectedTradeMode = 0; var rejectedInsufficientMargin = 0; var rejectedInvalidVolume = 0;
+        var rejectedStop = 0; var rejectedCosts = 0; var invalid = 0; var skipped = 0; var noEntry = 0; var rejectedTradeMode = 0; var rejectedInsufficientMargin = 0; var rejectedInvalidVolume = 0; var rejectedRiskBelowMinimumVolume = 0;
         var timer = Stopwatch.StartNew(); var metrics = new EconomicsMetrics();
         foreach (var signal in evaluation.Events.Where(x => x.Status is SignalStatus.LongSignal or SignalStatus.ShortSignal).OrderBy(x => x.Time))
         {
@@ -61,11 +61,13 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
             if ((direction == SignalDirection.Long && stop.Price >= entry) || (direction == SignalDirection.Short && stop.Price <= entry)) { invalid++; continue; }
             if (settings.MaxStopDistancePercent > 0m && TradeMath.StopDistancePercent(entry, stop.Price) > settings.MaxStopDistancePercent) { rejectedStop++; continue; }
             if (!DemoStrategyExecutionRules.StopAndTargetMeetBrokerMinimum(instrument.Spec, direction, entry, entryBar.BidOpen, entryBar.AskOpen, stop.Price, target)) { rejectedStop++; continue; }
-            var sizing = await SizeAsync(instrument.Spec, direction, entry, equity, settings, metrics, token);
+            var sizing = await SizeAsync(instrument.Spec, direction, entry, stop.Price, equity, settings, metrics, token);
             if (!sizing.Success)
             {
                 if (sizing.FailureReason == NativeSizingFailure.InsufficientMargin) rejectedInsufficientMargin++;
                 else if (sizing.FailureReason == NativeSizingFailure.InvalidVolume) rejectedInvalidVolume++;
+                else if (sizing.FailureReason == NativeSizingFailure.RiskBelowMinimumVolume) rejectedRiskBelowMinimumVolume++;
+                else throw new InvalidOperationException("MT5 RiskPercent sizing could not be established safely.");
                 continue;
             }
             var sizedLots = sizing.Lots!;
@@ -94,11 +96,13 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
                     if ((direction == SignalDirection.Long ? reentryStop.Price >= reentryEntry : reentryStop.Price <= reentryEntry) ||
                         settings.MaxStopDistancePercent > 0m && TradeMath.StopDistancePercent(reentryEntry, reentryStop.Price) > settings.MaxStopDistancePercent ||
                         !DemoStrategyExecutionRules.StopAndTargetMeetBrokerMinimum(instrument.Spec, direction, reentryEntry, reentryQuote.BidOpen, reentryQuote.AskOpen, reentryStop.Price, reentryTarget)) break;
-                    var reentrySizing = await SizeAsync(instrument.Spec, direction, reentryEntry, equity, settings, metrics, token);
+                    var reentrySizing = await SizeAsync(instrument.Spec, direction, reentryEntry, reentryStop.Price, equity, settings, metrics, token);
                     if (!reentrySizing.Success)
                     {
                         if (reentrySizing.FailureReason == NativeSizingFailure.InsufficientMargin) rejectedInsufficientMargin++;
                         else if (reentrySizing.FailureReason == NativeSizingFailure.InvalidVolume) rejectedInvalidVolume++;
+                        else if (reentrySizing.FailureReason == NativeSizingFailure.RiskBelowMinimumVolume) rejectedRiskBelowMinimumVolume++;
+                        else throw new InvalidOperationException("MT5 RiskPercent sizing could not be established safely.");
                         break;
                     }
                     var reentryLots = reentrySizing.Lots!;
@@ -118,7 +122,7 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
             evaluation.Events.Count(x => x.Status == SignalStatus.LongSignal), evaluation.Events.Count(x => x.Status == SignalStatus.ShortSignal),
             evaluation.Events.Count(x => x.Status == SignalStatus.RejectedByEma100Filter), evaluation.Events.Count(x => x.Status == SignalStatus.RejectedByEmaGap), rejectedStop, 0,
             evaluation.Events.Count(x => x.Status == SignalStatus.ConfirmationFailed), invalid, skipped, noEntry,
-            0, rejectedInsufficientMargin, rejectedInvalidVolume, rejectedTradeMode);
+            0, rejectedInsufficientMargin, rejectedInvalidVolume, rejectedTradeMode, rejectedRiskBelowMinimumVolume);
         return new(trades, diagnostics, equity, rejectedCosts, metrics.Calls, timer.ElapsedMilliseconds, evaluationStopwatch.ElapsedMilliseconds);
     }
 
@@ -155,32 +159,52 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
         events.Add(new() { TimeUtc = bars[exitIndex].CloseTimeUtc, EffectiveTimeUtc = bars[exitIndex].CloseTimeUtc, Type = BacktestTradeEventType.Exit, MarketPrice = exit });
         var snap = signal.Snapshot;
         var trade = new BacktestTrade { Direction = direction, CrossoverTimeUtc = candles[crossoverIndex].CloseTimeUtc, SignalTimeUtc = signal.Time, EntryTimeUtc = bars[entryIndex].OpenTimeUtc, ExitTimeUtc = reason == BacktestExitReason.OppositeCrossover ? bars[exitIndex].OpenTimeUtc : bars[exitIndex].CloseTimeUtc, EntryPrice = entry, ExitPrice = exit, Quantity = sizing.Lots, PositionSizingMode = settings.PositionSizingMode, InitialStopLoss = initialStop.Price, FinalStopLoss = stop, StopSourceType = initialStop.Source, StopSourceTimeUtc = initialStop.Time, OriginalTakeProfit = originalTarget, FinalTakeProfit = target, TakeProfitExtended = extended, ExitReason = reason, SameCandleExitConflict = conflict, GrossPnlUsdt = gross, NetPnlUsdt = net, EntryFeeUsdt = sideCommission, ExitFeeUsdt = sideCommission, TotalFeesUsdt = sideCommission * 2m, NetPnlPercent = sizing.Equity == 0 ? 0 : net / sizing.Equity * 100m, GrossRMultiple = risk == 0 ? 0 : gross / risk, NetRMultiple = risk == 0 ? 0 : net / risk, MfePrice = direction == SignalDirection.Long ? best - entry : entry - best, MaePrice = direction == SignalDirection.Long ? entry - worst : worst - entry, SignalOpen = snap.Open, SignalClose = snap.Close, SignalEma9 = snap.Ema9, SignalEma15 = snap.Ema15, SignalEma100 = snap.Ema100, SignalGapPercent = snap.GapPercent, SignalGapState = snap.GapState, HtfTimeframe = htf?.Timeframe, SignalHtfCandleCloseTimeUtc = htf?.CandleCloseTimeUtc, SignalHtfEma100Slope20Percent = htf?.Ema100Slope20Percent, SignalHtfAtr14Percent = htf?.Atr14Percent, UseAdaptiveInitialStop = initialStop.UseAdaptiveInitialStop, SignalAtr14 = initialStop.Atr14, ReversalPowerScore = initialStop.ReversalPowerScore, ReversalPowerBand = initialStop.ReversalPowerBand, StopAnchorPrice = initialStop.AnchorPrice, StopBuffer = initialStop.Buffer, Events = events,
-            Lots = sizing.Lots, EntryBid = entryQuote.BidOpen, EntryAsk = entryQuote.AskOpen, EntrySpread = entryQuote.Spread, ExitBid = reason is BacktestExitReason.StopLoss or BacktestExitReason.TakeProfit or BacktestExitReason.TrailingStop ? (direction == SignalDirection.Long ? exit : exit - exitQuote.Spread) : exitQuote.BidClose, ExitAsk = reason is BacktestExitReason.StopLoss or BacktestExitReason.TakeProfit or BacktestExitReason.TrailingStop ? (direction == SignalDirection.Short ? exit : exit + exitQuote.Spread) : exitQuote.AskClose, ExitSpread = exitQuote.Spread, RequiredMargin = sizing.Margin, MarginUsed = sizing.Margin, AccountEquityAtEntry = sizing.Equity, EntryCommission = sideCommission, ExitCommission = sideCommission, RoundTripCommission = sideCommission * 2m, GrossPnl = gross, NetPnl = net, InitialRiskAmount = risk };
+            Lots = sizing.Lots, EntryBid = entryQuote.BidOpen, EntryAsk = entryQuote.AskOpen, EntrySpread = entryQuote.Spread, ExitBid = reason is BacktestExitReason.StopLoss or BacktestExitReason.TakeProfit or BacktestExitReason.TrailingStop ? (direction == SignalDirection.Long ? exit : exit - exitQuote.Spread) : exitQuote.BidClose, ExitAsk = reason is BacktestExitReason.StopLoss or BacktestExitReason.TakeProfit or BacktestExitReason.TrailingStop ? (direction == SignalDirection.Short ? exit : exit + exitQuote.Spread) : exitQuote.AskClose, ExitSpread = exitQuote.Spread, RequiredMargin = sizing.Margin, MarginUsed = sizing.Margin, AccountEquityAtEntry = sizing.Equity, EntryCommission = sideCommission, ExitCommission = sideCommission, RoundTripCommission = sideCommission * 2m, GrossPnl = gross, NetPnl = net, InitialRiskAmount = risk, TargetRiskPercent = sizing.TargetRiskPercent, TargetRiskAmount = sizing.TargetRiskAmount, ActualInitialRiskPercent = sizing.Equity > 0m ? risk / sizing.Equity * 100m : null };
         return new(trade, exitIndex);
     }
 
-    private async Task<NativeSizingResult> SizeAsync(InstrumentSpec spec, SignalDirection direction, decimal entry, decimal equity, TradingSettings settings, EconomicsMetrics metrics, CancellationToken token)
+    private async Task<NativeSizingResult> SizeAsync(InstrumentSpec spec, SignalDirection direction, decimal entry, decimal initialStop, decimal equity, TradingSettings settings, EconomicsMetrics metrics, CancellationToken token)
     {
-        if (settings.PaperPositionSizingMode == PaperPositionSizingMode.FixedLots)
+        switch (settings.PaperPositionSizingMode)
         {
-            if (DemoStrategyExecutionRules.ValidateFixedLots(spec, settings.PaperFixedLots) is not null) return NativeSizingResult.InvalidVolume;
-            var margin = await MarginAsync(spec.BrokerSymbol, direction, settings.PaperFixedLots, entry, metrics, token);
-            return margin <= equity ? NativeSizingResult.For(new(settings.PaperFixedLots, margin, equity)) : NativeSizingResult.InsufficientMargin;
+            case PaperPositionSizingMode.FixedLots:
+            {
+                if (DemoStrategyExecutionRules.ValidateFixedLots(spec, settings.PaperFixedLots) is not null) return NativeSizingResult.InvalidVolume;
+                var margin = await MarginAsync(spec.BrokerSymbol, direction, settings.PaperFixedLots, entry, metrics, token);
+                return margin <= equity ? NativeSizingResult.For(new(settings.PaperFixedLots, margin, equity)) : NativeSizingResult.InsufficientMargin;
+            }
+            case PaperPositionSizingMode.MarginPercent:
+            {
+                var budget = equity * settings.PaperMarginPerTradePercent / 100m;
+                if (budget <= 0m) return NativeSizingResult.InsufficientMargin;
+                var probeMargin = await MarginAsync(spec.BrokerSymbol, direction, spec.VolumeMin, entry, metrics, token);
+                if (probeMargin <= 0m || probeMargin > budget) return NativeSizingResult.InsufficientMargin;
+                var lots = NormalizeDown(Math.Min(spec.VolumeMax, spec.VolumeMin * budget / probeMargin), spec);
+                if (spec.VolumeLimit is > 0m) lots = Math.Min(lots, spec.VolumeLimit.Value);
+                if (lots < spec.VolumeMin) return NativeSizingResult.InvalidVolume;
+                for (var attempt = 0; attempt < 4 && lots >= spec.VolumeMin; attempt++)
+                {
+                    var margin = await MarginAsync(spec.BrokerSymbol, direction, lots, entry, metrics, token);
+                    if (margin <= budget && margin <= equity) return NativeSizingResult.For(new(lots, margin, equity));
+                    lots = NormalizeDown(lots - spec.VolumeStep, spec);
+                }
+                return NativeSizingResult.InsufficientMargin;
+            }
+            case PaperPositionSizingMode.RiskPercent:
+            {
+                var result = await new Mt5NativeRiskPositionSizer(calculator).SizeAsync(new(spec.BrokerSymbol, direction, entry, initialStop, equity, settings.PaperRiskPerTradePercent, spec.VolumeMin, spec.VolumeMax, spec.VolumeStep, spec.VolumeLimit), token);
+                metrics.Calls += result.CalculationCalls;
+                if (result.IsSuccess) return NativeSizingResult.For(new(result.Lots!.Value, result.RequiredMargin!.Value, equity, result.TargetRiskPercent, result.TargetRiskAmount));
+                return result.FailureReason switch
+                {
+                    Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume => NativeSizingResult.RiskBelowMinimumVolume,
+                    Mt5NativeRiskSizingFailure.InsufficientMargin => NativeSizingResult.InsufficientMargin,
+                    Mt5NativeRiskSizingFailure.InvalidVolume => NativeSizingResult.InvalidVolume,
+                    _ => NativeSizingResult.Unavailable
+                };
+            }
+            default: return NativeSizingResult.Unavailable;
         }
-        var budget = equity * settings.PaperMarginPerTradePercent / 100m;
-        if (budget <= 0m) return NativeSizingResult.InsufficientMargin;
-        var probeMargin = await MarginAsync(spec.BrokerSymbol, direction, spec.VolumeMin, entry, metrics, token);
-        if (probeMargin <= 0m || probeMargin > budget) return NativeSizingResult.InsufficientMargin;
-        var lots = NormalizeDown(Math.Min(spec.VolumeMax, spec.VolumeMin * budget / probeMargin), spec);
-        if (spec.VolumeLimit is > 0m) lots = Math.Min(lots, spec.VolumeLimit.Value);
-        if (lots < spec.VolumeMin) return NativeSizingResult.InvalidVolume;
-        for (var attempt = 0; attempt < 4 && lots >= spec.VolumeMin; attempt++)
-        {
-            var margin = await MarginAsync(spec.BrokerSymbol, direction, lots, entry, metrics, token);
-            if (margin <= budget && margin <= equity) return NativeSizingResult.For(new(lots, margin, equity));
-            lots = NormalizeDown(lots - spec.VolumeStep, spec);
-        }
-        return NativeSizingResult.InsufficientMargin;
     }
 
     private async Task<decimal> EconomicBreakEvenAsync(string symbol, SignalDirection direction, decimal lots, decimal entry, decimal commission, InstrumentSpec spec, EconomicsMetrics metrics, CancellationToken token)
@@ -209,15 +233,17 @@ public sealed class Mt5HistoricalBacktestEngine(EmaSignalEngine strategy, IMt5Tr
         return settings.MinEmaGapPercent == 0m || snapshot.GapPercent >= settings.MinEmaGapPercent;
     }
     private static QuoteBar Quote(Mt5HistoricalExecutionBar bar, decimal point) { var spread = bar.SpreadPoints * point; return new(bar.Open, bar.High, bar.Low, bar.Close, bar.Open + spread, bar.High + spread, bar.Low + spread, bar.Close + spread, spread); }
-    private enum NativeSizingFailure { InsufficientMargin, InvalidVolume }
+    private enum NativeSizingFailure { InsufficientMargin, InvalidVolume, RiskBelowMinimumVolume, Unavailable }
     private sealed record NativeSizingResult(Mt5Lots? Lots, NativeSizingFailure? FailureReason)
     {
         public bool Success => Lots is not null;
         public static NativeSizingResult For(Mt5Lots lots) => new(lots, null);
         public static NativeSizingResult InsufficientMargin { get; } = new(null, NativeSizingFailure.InsufficientMargin);
         public static NativeSizingResult InvalidVolume { get; } = new(null, NativeSizingFailure.InvalidVolume);
+        public static NativeSizingResult RiskBelowMinimumVolume { get; } = new(null, NativeSizingFailure.RiskBelowMinimumVolume);
+        public static NativeSizingResult Unavailable { get; } = new(null, NativeSizingFailure.Unavailable);
     }
-    private sealed record Mt5Lots(decimal Lots, decimal Margin, decimal Equity);
+    private sealed record Mt5Lots(decimal Lots, decimal Margin, decimal Equity, decimal? TargetRiskPercent = null, decimal? TargetRiskAmount = null);
     private sealed record Mt5HistoricalExecution(BacktestTrade Trade, int ExitIndex);
     private sealed record QuoteBar(decimal BidOpen, decimal BidHigh, decimal BidLow, decimal BidClose, decimal AskOpen, decimal AskHigh, decimal AskLow, decimal AskClose, decimal Spread);
     private sealed class EconomicsMetrics { public int Calls; }

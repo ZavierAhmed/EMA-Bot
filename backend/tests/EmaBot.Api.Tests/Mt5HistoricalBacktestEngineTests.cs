@@ -177,6 +177,89 @@ public sealed class Mt5HistoricalBacktestEngineTests
         Assert.Equal(first.RequiredMargin, second.RequiredMargin);
     }
 
+    [Fact]
+    public async Task NativeEngine_RiskPercentUsesExecutableEntryAndInitialStopForNativeSizing()
+    {
+        var h = new NativeHarness
+        {
+            SizingMode = PaperPositionSizingMode.RiskPercent,
+            RiskPercent = 2m,
+            StartingBalance = 1_000m,
+            BrokerProfitResolver = request => (request.ClosePrice - request.OpenPrice) * request.VolumeLots * 100m
+        };
+
+        var trade = Assert.Single((await h.RunAsync()).Trades);
+
+        Assert.Equal(2m, trade.TargetRiskPercent);
+        Assert.Equal(20m, trade.TargetRiskAmount);
+        Assert.Equal(15.2m, trade.InitialRiskAmount);
+        Assert.Equal(1.52m, trade.ActualInitialRiskPercent);
+        Assert.Contains(h.Calculator.ProfitCalls, request =>
+            request.Direction == "Long" && request.OpenPrice == trade.EntryPrice && request.ClosePrice == trade.InitialStopLoss);
+        Assert.NotEmpty(h.Calculator.MarginCalls);
+    }
+
+    [Fact]
+    public async Task NativeEngine_RiskPercentBelowMinimumVolumeIsRejectedDistinctly()
+    {
+        var h = new NativeHarness
+        {
+            SizingMode = PaperPositionSizingMode.RiskPercent,
+            RiskPercent = 1m,
+            StartingBalance = 1_000m,
+            BrokerProfitResolver = request => (request.ClosePrice - request.OpenPrice) * request.VolumeLots * 100m
+        };
+
+        var result = await h.RunAsync();
+
+        Assert.Empty(result.Trades);
+        Assert.True(result.Diagnostics.RejectedByRiskBelowMinimumVolume > 0);
+        Assert.Equal(0, result.Diagnostics.RejectedByInsufficientMargin);
+    }
+
+    [Fact]
+    public async Task NativeEngine_RiskPercentReentryUsesCurrentEquityAndItsOwnExecutableStop()
+    {
+        var h = new NativeHarness
+        {
+            SizingMode = PaperPositionSizingMode.RiskPercent,
+            RiskPercent = 2m,
+            StartingBalance = 1_000m,
+            ForceSameBarStopAndTarget = true,
+            SameTrendReentry = true,
+            BrokerProfitResolver = request => (request.ClosePrice - request.OpenPrice) * request.VolumeLots * 100m
+        };
+
+        var trades = (await h.RunAsync()).Trades;
+        var original = Assert.Single(trades, trade => !trade.IsReentry);
+        var reentry = Assert.Single(trades, trade => trade.IsReentry);
+
+        Assert.True(reentry.TargetRiskAmount < original.TargetRiskAmount);
+        Assert.Contains(h.Calculator.ProfitCalls, request =>
+            request.Direction == "Long" && request.OpenPrice == reentry.EntryPrice && request.ClosePrice == reentry.InitialStopLoss);
+    }
+
+    [Fact]
+    public async Task NativeEngine_UnknownSizingModeFailsClosedInsteadOfUsingMarginPercent()
+    {
+        var h = new NativeHarness { SizingMode = (PaperPositionSizingMode)999 };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.RunAsync());
+        Assert.Empty(h.Calculator.MarginCalls);
+    }
+
+    [Fact]
+    public async Task NativeEngine_RiskPercentDoesNotCallBrokerEconomicsForNoSignalFlatTail()
+    {
+        var h = new NativeHarness { SizingMode = PaperPositionSizingMode.RiskPercent, NoSignals = true, TotalBars = 14_400 };
+
+        var result = await h.RunAsync();
+
+        Assert.Empty(result.Trades);
+        Assert.Empty(h.Calculator.MarginCalls);
+        Assert.Empty(h.Calculator.ProfitCalls);
+    }
+
     [Theory]
     [InlineData(InstrumentTradeMode.Disabled)]
     [InlineData(InstrumentTradeMode.CloseOnly)]
@@ -699,6 +782,7 @@ public sealed class Mt5HistoricalBacktestEngineTests
         public decimal FeePercent { get; init; }
         public decimal StartingBalance { get; init; } = 1000m;
         public decimal MarginPercent { get; init; } = 10m;
+        public decimal RiskPercent { get; init; } = 1m;
         public decimal Leverage { get; init; } = 5m;
         public decimal FixedOrderSize { get; init; } = 100m;
         public PaperPositionSizingMode SizingMode { get; init; } = PaperPositionSizingMode.FixedLots;
@@ -735,7 +819,7 @@ public sealed class Mt5HistoricalBacktestEngineTests
             => new()
             {
                 WaitForConfirmationCandle = false, MinEmaGapPercent = 0m, RiskReward = RiskReward,
-                PaperPositionSizingMode = SizingMode, PaperFixedLots = FixedLots, PaperMarginPerTradePercent = MarginPercent,
+                PaperPositionSizingMode = SizingMode, PaperFixedLots = FixedLots, PaperMarginPerTradePercent = MarginPercent, PaperRiskPerTradePercent = RiskPercent,
                 PaperStartingBalance = StartingBalance, FeePercentPerSide = FeePercent, Leverage = Leverage,
                 FixedOrderSizeUsdt = FixedOrderSize, MaxStopDistancePercent = 0m, SameTrendReentryEnabled = SameTrendReentry, MaxReentryAgeBars = MaxReentryAgeBars, TrailingStopEnabled = Trailing, ExitOnOppositeCrossover = ExitOnOpposite
             };

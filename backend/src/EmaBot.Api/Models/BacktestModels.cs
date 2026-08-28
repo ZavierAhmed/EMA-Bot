@@ -94,6 +94,8 @@ public sealed class BacktestRun
     public PaperPositionSizingMode? NativePositionSizingMode { get; set; }
     public decimal? NativeFixedLots { get; set; }
     public decimal? NativeMarginPerTradePercent { get; set; }
+    // Frozen only for new native runs; historical rows deliberately remain unknown.
+    public decimal? NativeRiskPerTradePercent { get; set; }
     public decimal? EndingBalance { get; set; }
     public decimal? GrossProfitFactor { get; set; }
     public decimal? NetProfitFactor { get; set; }
@@ -103,6 +105,8 @@ public sealed class BacktestRun
     public int RejectedByInsufficientMargin { get; set; }
     public int RejectedByInvalidVolume { get; set; }
     public int RejectedByTradeMode { get; set; }
+    // Nullable distinguishes historical rows with no captured sizing diagnostics from a captured zero.
+    public int? RejectedByRiskBelowMinimumVolume { get; set; }
     public int Mt5EconomicsCallCount { get; set; }
     public long Mt5EconomicsElapsedMilliseconds { get; set; }
     public List<BacktestTrade> Trades { get; set; } = [];
@@ -126,6 +130,10 @@ public sealed class BacktestTrade
     public PositionSizingMode PositionSizingMode { get; set; }
     // Nullable native sizing provenance avoids fabricating a mode for historical trades.
     public PaperPositionSizingMode? NativePositionSizingMode { get; set; }
+    public decimal? TargetRiskPercent { get; set; }
+    public decimal? TargetRiskAmount { get; set; }
+    // InitialRiskAmount remains the authoritative MT5 price-risk amount; this is its percentage of entry equity.
+    public decimal? ActualInitialRiskPercent { get; set; }
     public decimal? AccountEquityAtEntryUsdt { get; set; }
     public decimal? MarginUsedUsdt { get; set; }
     public decimal? Leverage { get; set; }

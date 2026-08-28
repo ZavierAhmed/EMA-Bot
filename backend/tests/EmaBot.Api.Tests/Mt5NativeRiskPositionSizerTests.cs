@@ -1,0 +1,91 @@
+using EmaBot.Api.Models;
+using EmaBot.Api.Mt5Bridge;
+using EmaBot.Api.Services;
+using EmaBot.Api.Strategy;
+
+namespace EmaBot.Api.Tests;
+
+public sealed class Mt5NativeRiskPositionSizerTests
+{
+    [Theory]
+    [InlineData(SignalDirection.Long, 100, 95)]
+    [InlineData(SignalDirection.Short, 100, 105)]
+    public async Task RiskPercent_UsesBrokerProfitAtExecutableEntryAndStop(SignalDirection direction, decimal entry, decimal stop)
+    {
+        var calculator = new Calculator();
+        var result = await new Mt5NativeRiskPositionSizer(calculator).SizeAsync(Request(direction, entry, stop, 1000m, 1m), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(.02m, result.Lots);
+        Assert.Equal(10m, result.TargetRiskAmount);
+        Assert.Equal(10m, result.ActualInitialRiskAmount);
+        Assert.Equal(1m, result.ActualInitialRiskPercent);
+        Assert.Equal(direction.ToString(), calculator.ProfitRequests[0].Direction);
+        Assert.Equal(entry, calculator.ProfitRequests[0].OpenPrice);
+        Assert.Equal(stop, calculator.ProfitRequests[0].ClosePrice);
+    }
+
+    [Fact]
+    public async Task RiskPercent_NormalizesDownAndNeverExceedsBudget()
+    {
+        var result = await new Mt5NativeRiskPositionSizer(new Calculator()).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 800m, 1m), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(.01m, result.Lots);
+        Assert.Equal(5m, result.ActualInitialRiskAmount);
+        Assert.True(result.ActualInitialRiskAmount <= result.TargetRiskAmount);
+    }
+
+    [Fact]
+    public async Task RiskPercent_BelowMinimumVolumeRejectsWithoutRoundingUp()
+    {
+        var result = await new Mt5NativeRiskPositionSizer(new Calculator()).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 400m, 1m), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume, result.FailureReason);
+        Assert.Equal(4m, result.TargetRiskAmount);
+    }
+
+    [Fact]
+    public async Task RiskPercent_CapsAtBrokerMaximumAndReportsUnderRisk()
+    {
+        var result = await new Mt5NativeRiskPositionSizer(new Calculator()).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 10_000m, 1m, volumeMax: .03m, volumeLimit: .02m), CancellationToken.None);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(.02m, result.Lots);
+        Assert.Equal(10m, result.ActualInitialRiskAmount);
+        Assert.Equal(100m, result.TargetRiskAmount);
+    }
+
+    [Fact]
+    public async Task RiskPercent_AffordableRiskLotsWithExcessMarginRejectsWithoutShrinking()
+    {
+        var calculator = new Calculator { MarginPerLot = 100_000m };
+        var result = await new Mt5NativeRiskPositionSizer(calculator).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1000m, 1m), CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(Mt5NativeRiskSizingFailure.InsufficientMargin, result.FailureReason);
+        Assert.Equal(.02m, calculator.MarginRequests.Single().VolumeLots);
+    }
+
+    private static Mt5NativeRiskSizingRequest Request(SignalDirection direction, decimal entry, decimal stop, decimal equity, decimal riskPercent, decimal volumeMax = 1m, decimal? volumeLimit = null)
+        => new("BTCUSDm", direction, entry, stop, equity, riskPercent, .01m, volumeMax, .01m, volumeLimit);
+
+    private sealed class Calculator : IMt5TradeCalculator
+    {
+        public decimal MarginPerLot { get; set; } = 100m;
+        public List<Mt5CalculateProfitRequest> ProfitRequests { get; } = [];
+        public List<Mt5CalculateMarginRequest> MarginRequests { get; } = [];
+        public Task<Mt5MarginCalculationPayload> CalculateMarginAsync(Mt5CalculateMarginRequest request, CancellationToken token)
+        {
+            MarginRequests.Add(request);
+            return Task.FromResult(new Mt5MarginCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.VolumeLots * MarginPerLot, "USD"));
+        }
+        public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken token)
+        {
+            ProfitRequests.Add(request);
+            var perLot = request.Direction == "Long" ? request.ClosePrice - request.OpenPrice : request.OpenPrice - request.ClosePrice;
+            return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, perLot * request.VolumeLots * 100m, "USD"));
+        }
+    }
+}

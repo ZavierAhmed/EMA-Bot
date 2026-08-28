@@ -49,6 +49,8 @@ public sealed class PaperSession
     public int RejectedByInsufficientMargin { get; set; }
     public int RejectedByInvalidVolume { get; set; }
     public int RejectedByExecutableStop { get; set; }
+    // Nullable preserves the fact that historical Paper sessions did not capture this reason.
+    public int? RejectedByRiskBelowMinimumVolume { get; set; }
     public int ConfirmationFailed { get; set; }
     public int InvalidStopLoss { get; set; }
     public int SkippedWhilePositionOpen { get; set; }
@@ -59,6 +61,7 @@ public sealed class PaperSession
     public PaperPositionSizingMode PaperPositionSizingMode { get; set; } = PaperPositionSizingMode.FixedLots;
     public decimal PaperFixedLots { get; set; }
     public decimal PaperMarginPerTradePercent { get; set; }
+    public decimal PaperRiskPerTradePercent { get; set; } = 1m;
     public decimal StartingBalance { get; set; }
     public decimal CurrentBalance { get; set; }
     public decimal UsedMargin { get; set; }
@@ -217,6 +220,9 @@ public sealed class PaperTrade
     public decimal? AccountEquityAtEntry { get; set; }
     public decimal? MarginUsed { get; set; }
     public decimal? InitialRiskAmount { get; set; }
+    public decimal? TargetRiskPercent { get; set; }
+    public decimal? TargetRiskAmount { get; set; }
+    public decimal? ActualInitialRiskPercent { get; set; }
     public bool UseAdaptiveInitialStop { get; set; }
     public decimal? SignalAtr14 { get; set; }
     public decimal? ReversalPowerScore { get; set; }

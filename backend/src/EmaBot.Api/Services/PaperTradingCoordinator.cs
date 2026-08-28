@@ -448,7 +448,7 @@ public sealed class PaperTradingCoordinator(
         }
 
         Mt5PaperSize size;
-        try { size = await SizeMt5PositionAsync(state, runtime.Symbol, pending.Direction, entry.Value, token); }
+        try { size = await SizeMt5PositionAsync(state, runtime.Symbol, pending.Direction, entry.Value, pending.Stop, token); }
         catch (PaperSizingException failure) when (failure.Kind is PaperSizingFailureKind.InvalidFixedLotsBelowMinimum or PaperSizingFailureKind.InvalidFixedLotsAboveMaximum or PaperSizingFailureKind.InvalidVolumeStep)
         {
             await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, failure.Kind.ToString(), pending.Direction, failure.Message, EntryPrice: entry.Value, Lots: failure.RequestedLots), token);
@@ -460,6 +460,13 @@ public sealed class PaperTradingCoordinator(
         {
             await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "InsufficientMargin", pending.Direction, failure.Message, EntryPrice: entry.Value, Lots: failure.RequestedLots, RequiredMargin: failure.RequiredMargin), token);
             await UpdateSessionAsync(state.Session.Id, session => session.RejectedByInsufficientMargin++);
+            await PersistRuntimeSymbolAsync(runtime, token);
+            return;
+        }
+        catch (PaperSizingException failure) when (failure.Kind == PaperSizingFailureKind.RiskBelowMinimumVolume)
+        {
+            await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "RiskBelowMinimumVolume", pending.Direction, failure.Message, EntryPrice: entry.Value, Lots: failure.RequestedLots), token);
+            await UpdateSessionAsync(state.Session.Id, session => session.RejectedByRiskBelowMinimumVolume = (session.RejectedByRiskBelowMinimumVolume ?? 0) + 1);
             await PersistRuntimeSymbolAsync(runtime, token);
             return;
         }
@@ -512,7 +519,7 @@ public sealed class PaperTradingCoordinator(
             SignalGapPercent = pending.Snapshot.GapPercent, SignalGapState = pending.Snapshot.GapState, IsReentry = pending.IsReentry,
             TrendRegimeCrossoverTimeUtc = pending.TrendRegimeCrossoverTimeUtc, ReentryAgeBars = pending.ReentryAgeBars, Lots = size.Lots, EntryBid = update.Bid, EntryAsk = update.Ask,
             EntrySpread = update.Ask!.Value - update.Bid!.Value, RequiredMargin = size.RequiredMargin, MarginUsed = size.RequiredMargin,
-            AccountEquityAtEntry = state.Session.CurrentBalance, RoundTripCommission = commission, GrossPnl = 0m, NetPnl = -commission, InitialRiskAmount = initialRisk,
+            AccountEquityAtEntry = size.Equity, RoundTripCommission = commission, GrossPnl = 0m, NetPnl = -commission, InitialRiskAmount = initialRisk, TargetRiskPercent = size.TargetRiskPercent, TargetRiskAmount = size.TargetRiskAmount, ActualInitialRiskPercent = size.Equity > 0m ? initialRisk / size.Equity * 100m : null,
             UseAdaptiveInitialStop = pending.InitialStop.UseAdaptiveInitialStop, SignalAtr14 = pending.InitialStop.Atr14, ReversalPowerScore = pending.InitialStop.ReversalPowerScore, ReversalPowerBand = pending.InitialStop.ReversalPowerBand, StopAnchorPrice = pending.InitialStop.AnchorPrice, StopBuffer = pending.InitialStop.Buffer
         };
         SetOpenTrade(runtime, trade);
@@ -768,36 +775,56 @@ public sealed class PaperTradingCoordinator(
             ? stop < entry && target > entry && bid - stop >= minimum && target - bid >= minimum
             : stop > entry && target < entry && stop - ask >= minimum && ask - target >= minimum;
     }
-    private async Task<Mt5PaperSize> SizeMt5PositionAsync(RuntimeSession state, PaperSessionSymbol symbol, SignalDirection direction, decimal entry, CancellationToken token)
+    private async Task<Mt5PaperSize> SizeMt5PositionAsync(RuntimeSession state, PaperSessionSymbol symbol, SignalDirection direction, decimal entry, decimal initialStop, CancellationToken token)
     {
         if (symbol.VolumeMin is not > 0m || symbol.VolumeMax is not > 0m || symbol.VolumeStep is not > 0m)
             throw new PaperSizingException(PaperSizingFailureKind.MarginCalculationUnavailable, "MT5 broker volume rules are unavailable.");
         var available = state.Session.CurrentBalance - state.Session.UsedMargin;
-        var budget = Math.Min(state.Session.CurrentBalance * state.Session.PaperMarginPerTradePercent / 100m, available);
-        decimal requested;
-        if (state.Session.PaperPositionSizingMode == PaperPositionSizingMode.FixedLots)
+        switch (state.Session.PaperPositionSizingMode)
         {
-            requested = state.Session.PaperFixedLots;
-            if (requested < symbol.VolumeMin) throw new PaperSizingException(PaperSizingFailureKind.InvalidFixedLotsBelowMinimum, $"Configured fixed lots {requested} are below the broker minimum {symbol.VolumeMin} for {symbol.Symbol}.", requested);
-            if (requested > symbol.VolumeMax) throw new PaperSizingException(PaperSizingFailureKind.InvalidFixedLotsAboveMaximum, $"Configured fixed lots {requested} exceed the broker maximum {symbol.VolumeMax} for {symbol.Symbol}.", requested);
-            if (!IsVolumeStep(requested, symbol)) throw new PaperSizingException(PaperSizingFailureKind.InvalidVolumeStep, $"Configured fixed lots {requested} do not match broker volume step {symbol.VolumeStep} for {symbol.Symbol} (minimum {symbol.VolumeMin}, maximum {symbol.VolumeMax}).", requested);
-            if (available <= 0m) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {requested}; required margin was not calculated because available simulated free margin is {available}.", requested, null, available);
-            var margin = await MarginAsync(symbol, direction, requested, entry, token);
-            if (margin > available) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {requested}; required margin {margin}; available simulated free margin {available}.", requested, margin, available);
-            return new Mt5PaperSize(requested, margin);
+            case PaperPositionSizingMode.FixedLots:
+            {
+                var requested = state.Session.PaperFixedLots;
+                if (requested < symbol.VolumeMin) throw new PaperSizingException(PaperSizingFailureKind.InvalidFixedLotsBelowMinimum, $"Configured fixed lots {requested} are below the broker minimum {symbol.VolumeMin} for {symbol.Symbol}.", requested);
+                if (requested > symbol.VolumeMax) throw new PaperSizingException(PaperSizingFailureKind.InvalidFixedLotsAboveMaximum, $"Configured fixed lots {requested} exceed the broker maximum {symbol.VolumeMax} for {symbol.Symbol}.", requested);
+                if (!IsVolumeStep(requested, symbol)) throw new PaperSizingException(PaperSizingFailureKind.InvalidVolumeStep, $"Configured fixed lots {requested} do not match broker volume step {symbol.VolumeStep} for {symbol.Symbol} (minimum {symbol.VolumeMin}, maximum {symbol.VolumeMax}).", requested);
+                if (available <= 0m) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {requested}; required margin was not calculated because available simulated free margin is {available}.", requested, null, available);
+                var margin = await MarginAsync(symbol, direction, requested, entry, token);
+                if (margin > available) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {requested}; required margin {margin}; available simulated free margin {available}.", requested, margin, available);
+                return new Mt5PaperSize(requested, margin, state.Session.CurrentBalance);
+            }
+            case PaperPositionSizingMode.MarginPercent:
+            {
+                var budget = Math.Min(state.Session.CurrentBalance * state.Session.PaperMarginPerTradePercent / 100m, available);
+                if (budget <= 0m) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots are not available because simulated free margin is {available}.", null, null, available);
+                var probe = symbol.VolumeMin.Value;
+                var probeMargin = await MarginAsync(symbol, direction, probe, entry, token);
+                if (probeMargin <= 0m || probeMargin > budget) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {probe}; required margin {probeMargin}; available simulated free margin {available}.", probe, probeMargin, available);
+                var requested = NormalizeVolumeDown(Math.Min(symbol.VolumeMax.Value, probe * budget / probeMargin), symbol);
+                for (var attempt = 0; attempt < 4 && requested >= symbol.VolumeMin; attempt++)
+                {
+                    var margin = await MarginAsync(symbol, direction, requested, entry, token);
+                    if (margin <= budget && margin <= available) return new Mt5PaperSize(requested, margin, state.Session.CurrentBalance);
+                    requested = NormalizeVolumeDown(requested - symbol.VolumeStep.Value, symbol);
+                }
+                throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {requested}; no broker volume fits the available simulated free margin {available}.", requested, null, available);
+            }
+            case PaperPositionSizingMode.RiskPercent:
+            {
+                var result = await new Mt5NativeRiskPositionSizer(Calculator()).SizeAsync(new(symbol.BrokerSymbol ?? symbol.Symbol, direction, entry, initialStop, state.Session.CurrentBalance, state.Session.PaperRiskPerTradePercent, symbol.VolumeMin.Value, symbol.VolumeMax.Value, symbol.VolumeStep.Value, symbol.VolumeLimit), token);
+                if (result.IsSuccess) return new Mt5PaperSize(result.Lots!.Value, result.RequiredMargin!.Value, state.Session.CurrentBalance, result.TargetRiskPercent, result.TargetRiskAmount);
+                var kind = result.FailureReason switch
+                {
+                    Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume => PaperSizingFailureKind.RiskBelowMinimumVolume,
+                    Mt5NativeRiskSizingFailure.InsufficientMargin => PaperSizingFailureKind.InsufficientFreeMargin,
+                    Mt5NativeRiskSizingFailure.InvalidVolume => PaperSizingFailureKind.InvalidVolumeStep,
+                    _ => PaperSizingFailureKind.RiskCalculationUnavailable
+                };
+                throw new PaperSizingException(kind, kind == PaperSizingFailureKind.RiskBelowMinimumVolume ? "Entry rejected because broker minimum volume would exceed the configured initial-stop risk budget." : "Entry rejected because MT5 RiskPercent sizing could not be established safely.");
+            }
+            default:
+                throw new PaperSizingException(PaperSizingFailureKind.UnsupportedSizingMode, "The selected Paper sizing mode is unsupported; no Paper trade was created.");
         }
-        if (budget <= 0m) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots are not available because simulated free margin is {available}.", null, null, available);
-        var probe = symbol.VolumeMin.Value;
-        var probeMargin = await MarginAsync(symbol, direction, probe, entry, token);
-        if (probeMargin <= 0m || probeMargin > budget) throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {probe}; required margin {probeMargin}; available simulated free margin {available}.", probe, probeMargin, available);
-        requested = NormalizeVolumeDown(Math.Min(symbol.VolumeMax.Value, probe * budget / probeMargin), symbol);
-        for (var attempt = 0; attempt < 4 && requested >= symbol.VolumeMin; attempt++)
-        {
-            var margin = await MarginAsync(symbol, direction, requested, entry, token);
-            if (margin <= budget && margin <= available) return new Mt5PaperSize(requested, margin);
-            requested = NormalizeVolumeDown(requested - symbol.VolumeStep.Value, symbol);
-        }
-        throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested lots {requested}; no broker volume fits the available simulated free margin {available}.", requested, null, available);
     }
     private async Task<decimal> MarginAsync(PaperSessionSymbol symbol, SignalDirection direction, decimal lots, decimal entry, CancellationToken token)
     {
@@ -846,8 +873,8 @@ public sealed class PaperTradingCoordinator(
     private sealed class RuntimeSymbol(PaperSessionSymbol symbol, PaperTrade? openTrade) { public PaperSessionSymbol Symbol { get; } = symbol; public List<Candle> Candles { get; } = []; public List<PaperDecisionRuntimeEvent> RecentDecisions { get; } = []; public PaperTrade? OpenTrade { get; set; } = openTrade; public PendingEntry? Pending { get; set; } = symbol.PendingDirection is { } direction && symbol.PendingCrossoverTimeUtc is { } crossover && symbol.PendingSignalTimeUtc is { } signal && symbol.PendingStopPrice is { } stop && symbol.PendingStopSourceType is { } source && symbol.PendingStopSourceTimeUtc is { } stopTime ? new PendingEntry(direction, crossover, signal, new InitialStopSelection(stop, source, stopTime, symbol.PaperSession?.UseAdaptiveInitialStop ?? false, symbol.PendingSignalAtr14, symbol.PendingReversalPowerScore, symbol.PendingReversalPowerBand, symbol.PendingStopAnchorPrice, symbol.PendingStopBuffer), new IndicatorSnapshot(signal, symbol.PendingSignalClose ?? 0m, symbol.PendingSignalEma9, symbol.PendingSignalEma15, symbol.PendingSignalEma100, symbol.PendingSignalGapPercent, symbol.PendingSignalGapState ?? GapState.Unchanged, TrendDirection.Neutral, symbol.PendingSignalOpen ?? 0m), symbol.PendingIsReentry, symbol.PendingTrendRegimeCrossoverTimeUtc, null) : null; public PendingOppositeExit? PendingOppositeExit { get; set; } public SignalDirection? TrendRegimeDirection { get; set; } = symbol.TrendRegimeDirection; public DateTimeOffset? TrendRegimeCrossoverTimeUtc { get; set; } = symbol.TrendRegimeCrossoverTimeUtc; public bool ReentryEligible { get; set; } = symbol.ReentryEligible; public bool ReentryConsumed { get; set; } = symbol.ReentryConsumed; public decimal? LatestPrice { get; set; } = symbol.LastKnownPrice; public decimal? LatestBid { get; set; } public decimal? LatestAsk { get; set; } public DateTimeOffset? LastMarketEventUtc { get; set; } = symbol.LastMarketEventUtc; public DateTimeOffset? LastClosedCandleUtc { get; set; } = symbol.LastProcessedClosedCandleUtc; public PaperRuntimeCandle? FormingCandle { get; set; } public IndicatorSnapshot? Indicator { get; set; } public DateTimeOffset? LastPnlCalculationUtc { get; set; } public bool PnlCalculationInProgress { get; set; } public long? PnlCalculationGeneration { get; set; } public long PnlGeneration { get; set; } = 1; public PaperLivePnlRuntimeSnapshot? CurrentPnl { get; set; } }
     private sealed record PendingEntry(SignalDirection Direction, DateTimeOffset CrossoverTimeUtc, DateTimeOffset SignalTimeUtc, InitialStopSelection InitialStop, IndicatorSnapshot Snapshot, bool IsReentry, DateTimeOffset? TrendRegimeCrossoverTimeUtc, int? ReentryAgeBars) { public decimal Stop => InitialStop.Price; public StopSourceType StopSource => InitialStop.Source; public DateTimeOffset StopTimeUtc => InitialStop.Time; }
     private sealed record PendingOppositeExit(DateTimeOffset SignalTimeUtc, SignalDirection Direction);
-    private sealed record Mt5PaperSize(decimal Lots, decimal RequiredMargin);
-    private enum PaperSizingFailureKind { InvalidFixedLotsBelowMinimum, InvalidFixedLotsAboveMaximum, InvalidVolumeStep, InsufficientFreeMargin, MarginCalculationUnavailable }
+    private sealed record Mt5PaperSize(decimal Lots, decimal RequiredMargin, decimal Equity, decimal? TargetRiskPercent = null, decimal? TargetRiskAmount = null);
+    private enum PaperSizingFailureKind { InvalidFixedLotsBelowMinimum, InvalidFixedLotsAboveMaximum, InvalidVolumeStep, InsufficientFreeMargin, MarginCalculationUnavailable, RiskBelowMinimumVolume, RiskCalculationUnavailable, UnsupportedSizingMode }
     private sealed class PaperSizingException(PaperSizingFailureKind kind, string message, decimal? requestedLots = null, decimal? requiredMargin = null, decimal? availableFreeMargin = null, Exception? innerException = null) : Exception(message, innerException)
     {
         public PaperSizingFailureKind Kind { get; } = kind;
