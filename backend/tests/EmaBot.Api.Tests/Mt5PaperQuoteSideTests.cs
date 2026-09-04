@@ -358,6 +358,32 @@ public sealed class Mt5PaperQuoteSideTests : IClassFixture<EmaBotApiFactory>
     }
 
     [Fact]
+    public async Task RiskPercent_RejectsWhenExistingPaperMarginLeavesInsufficientFreeMargin()
+    {
+        var calculator = new TestCalculator();
+        var coordinator = CreateCoordinator(calculator);
+        var signal = DateTimeOffset.UnixEpoch.AddHours(8).AddMilliseconds(-1);
+        var session = await CreateSessionAsync(SignalDirection.Long, pendingSignal: signal);
+        await ConfigureAsync(session.Id, (value, _) =>
+        {
+            value.PaperPositionSizingMode = PaperPositionSizingMode.RiskPercent;
+            value.PaperRiskPerTradePercent = 1m;
+            value.CurrentBalance = 1000m;
+            value.UsedMargin = 990m;
+        });
+        await coordinator.StartSessionAsync(session.Id, false, CancellationToken.None);
+
+        await coordinator.ProcessUpdateForTestAsync(Update(signal.AddMilliseconds(1), 100m, 100.2m));
+
+        Assert.Null(coordinator.GetRuntimeSnapshot()!.Symbols["XAUUSDm"].OpenTrade);
+        Assert.Equal(.01m, calculator.MarginRequests.Single().VolumeLots);
+        using var scope = factory.Services.CreateScope();
+        var persisted = await scope.ServiceProvider.GetRequiredService<EmaBotDbContext>().PaperSessions.SingleAsync(item => item.Id == session.Id);
+        Assert.Equal(1, persisted.RejectedByInsufficientMargin);
+        await coordinator.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task DirectionAndStopsLevelGuards_RejectInvalidMt5Entries()
     {
         var calculator = new TestCalculator();

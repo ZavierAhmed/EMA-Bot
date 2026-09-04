@@ -500,7 +500,7 @@ public sealed class PaperTradingCoordinator(
             var stopLoss = await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol, pending.Direction.ToString(), size.Lots, entry.Value, pending.Stop), token);
             initialRisk = decimal.Abs(stopLoss.Profit);
         }
-        catch (Exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             await AddDecisionAsync(state, runtime, new PaperDecisionRuntimeEvent(update.EventTimeUtc, null, "ProfitCalculationUnavailable", pending.Direction, "Entry rejected because MT5 profit calculation is unavailable.", EntryPrice: entry.Value, Lots: size.Lots), token);
             await FaultSessionAsync(state, "MT5 profit calculation is unavailable; no Paper trade was created.", token);
@@ -600,7 +600,7 @@ public sealed class PaperTradingCoordinator(
         var normal = TradeMath.TrailingStop(trade.EntryPrice, trade.OriginalTakeProfit, direction, lockPercent);
         decimal economicBreakEven;
         try { economicBreakEven = await EconomicBreakEvenAsync(runtime.Symbol, trade, token); }
-        catch (Exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             await FaultSessionAsync(state, "MT5 profit calculation is unavailable while managing a Paper trade.", token);
             return;
@@ -678,7 +678,7 @@ public sealed class PaperTradingCoordinator(
         var trade = runtime.OpenTrade!;
         EmaBot.Api.Mt5Bridge.Mt5ProfitCalculationPayload profit;
         try { profit = await Calculator().CalculateProfitAsync(new EmaBot.Api.Mt5Bridge.Mt5CalculateProfitRequest(runtime.Symbol.BrokerSymbol ?? runtime.Symbol.Symbol, trade.Direction.ToString(), trade.Lots ?? 0m, trade.EntryPrice, exit), token); }
-        catch (Exception) { await FaultSessionAsync(state, "MT5 profit calculation is unavailable; the open Paper trade was preserved for diagnosis.", token); return; }
+        catch (Exception exception) when (exception is not OperationCanceledException) { await FaultSessionAsync(state, "MT5 profit calculation is unavailable; the open Paper trade was preserved for diagnosis.", token); return; }
         trade.Status = PaperTradeStatus.Closed; trade.ExitPrice = exit; trade.ExitTimeUtc = at; trade.FinalStopLoss = trade.CurrentStopLoss; trade.FinalTakeProfit = trade.CurrentTakeProfit; trade.ExitReason = reason;
         trade.ExitBid = runtime.LatestBid; trade.ExitAsk = runtime.LatestAsk; trade.ExitSpread = runtime.LatestAsk - runtime.LatestBid;
         trade.GrossPnl = profit.Profit; trade.NetPnl = profit.Profit - (trade.RoundTripCommission ?? 0m);
@@ -812,7 +812,13 @@ public sealed class PaperTradingCoordinator(
             case PaperPositionSizingMode.RiskPercent:
             {
                 var result = await new Mt5NativeRiskPositionSizer(Calculator()).SizeAsync(new(symbol.BrokerSymbol ?? symbol.Symbol, direction, entry, initialStop, state.Session.CurrentBalance, state.Session.PaperRiskPerTradePercent, symbol.VolumeMin.Value, symbol.VolumeMax.Value, symbol.VolumeStep.Value, symbol.VolumeLimit), token);
-                if (result.IsSuccess) return new Mt5PaperSize(result.Lots!.Value, result.RequiredMargin!.Value, state.Session.CurrentBalance, result.TargetRiskPercent, result.TargetRiskAmount);
+                if (result.IsSuccess)
+                {
+                    var riskFreeMargin = state.Session.CurrentBalance - state.Session.UsedMargin;
+                    if (result.RequiredMargin!.Value > riskFreeMargin)
+                        throw new PaperSizingException(PaperSizingFailureKind.InsufficientFreeMargin, $"Requested risk-sized lots {result.Lots}; required margin {result.RequiredMargin}; available simulated free margin {riskFreeMargin}.", result.Lots, result.RequiredMargin, riskFreeMargin);
+                    return new Mt5PaperSize(result.Lots!.Value, result.RequiredMargin!.Value, state.Session.CurrentBalance, result.TargetRiskPercent, result.TargetRiskAmount);
+                }
                 var kind = result.FailureReason switch
                 {
                     Mt5NativeRiskSizingFailure.RiskBelowMinimumVolume => PaperSizingFailureKind.RiskBelowMinimumVolume,
