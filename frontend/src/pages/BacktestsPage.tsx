@@ -5,7 +5,8 @@ import type { BacktestRun, BacktestRunSummary, MonitoredSymbol, Mt5HistoricalBac
 import { ApiError, downloadBacktestExcel, getBacktests, getMonitoredSymbols, getMt5HistoricalBacktestEconomicsPreview, runBacktest } from '../api'
 
 const intervals = ['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '1w', '1M']
-const backtestTimeoutMilliseconds = 630_000
+// The backend permits up to 30 minutes for bounded native-economics research; retain one minute for response delivery.
+const backtestTimeoutMilliseconds = 1_860_000
 
 export function BacktestsPage() {
   const [symbols, setSymbols] = useState<MonitoredSymbol[]>([])
@@ -42,7 +43,7 @@ export function BacktestsPage() {
       setSelected(await runBacktest({ symbol, interval, startUtc: `${start}T00:00:00.000Z`, endUtc: `${end}T23:59:59.999Z` }, controller.signal))
       await refresh()
     } catch (requestError) {
-      setError(controller.signal.aborted ? 'Backtest did not complete within the maximum client wait time. Retry or use a smaller date range.' : requestError instanceof Error ? requestError.message : 'Backtest failed.')
+      setError(controller.signal.aborted ? 'Backtest did not complete within the maximum client wait time. Verify MT5 availability and retry.' : requestError instanceof Error ? requestError.message : 'Backtest failed.')
     } finally {
       window.clearTimeout(timeout)
       setBusy(false)

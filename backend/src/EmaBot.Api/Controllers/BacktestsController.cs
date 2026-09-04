@@ -17,9 +17,12 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
     public async Task<ActionResult<BacktestRunDetailResponse>> Run(BacktestRequest request, CancellationToken token)
     {
         if (!Mt5NativeTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use an MT5-native interval and a valid UTC date range. The 3d timeframe is not available for MT5 research."));
-        var symbol = request.Symbol.Trim(); if (string.IsNullOrWhiteSpace(symbol) || !await database.MonitoredSymbols.AnyAsync(x => x.Source == MarketDataSource.Mt5Exness && x.Symbol == symbol && x.IsEnabled, token)) return BadRequest(new ApiMessage("The exact MT5 instrument must be monitored and enabled."));
-        var budget = BacktestRequestBudgetCalculator.Calculate(request.Interval, request.StartUtc, request.EndUtc, timeoutOptions.Value);
-        logger?.LogInformation("Backtest workload budget for {BrokerSymbol} {Timeframe} from {StartUtc} to {EndUtc}: executionPages={ExecutionPages}, htf={PotentialHigherTimeframe}, htfPages={HigherTimeframePages}, totalPages={TotalPages}, timeoutMs={TimeoutMilliseconds}.", symbol, request.Interval, request.StartUtc, request.EndUtc, budget.EstimatedExecutionHistoryPages, budget.PotentialHigherTimeframe, budget.EstimatedHigherTimeframeHistoryPages, budget.EstimatedTotalHistoryPages, budget.ChosenRequestTimeout.TotalMilliseconds);
+        var symbol = request.Symbol.Trim();
+        var monitored = string.IsNullOrWhiteSpace(symbol) ? null : await database.MonitoredSymbols.AsNoTracking().SingleOrDefaultAsync(x => x.Source == MarketDataSource.Mt5Exness && x.Symbol == symbol && x.IsEnabled, token);
+        if (monitored is null) return BadRequest(new ApiMessage("The exact MT5 instrument must be monitored and enabled."));
+        var nativeSizingMode = await service.GetNativePositionSizingModeAsync(token);
+        var budget = BacktestRequestBudgetCalculator.Calculate(request.Interval, request.StartUtc, request.EndUtc, nativeSizingMode, monitored.PaperCommissionPerLotPerSide ?? 0m, timeoutOptions.Value);
+        logger?.LogInformation("Backtest workload budget for {BrokerSymbol} {Timeframe} from {StartUtc} to {EndUtc}: executionPages={ExecutionPages}, htf={PotentialHigherTimeframe}, htfPages={HigherTimeframePages}, historicalBudgetMs={HistoricalBudgetMilliseconds}, nativeSizingMode={NativeSizingMode}, executionCandles={ExecutionCandles}, nativeCandidates={NativeCandidates}, nativeLogicalOperations={NativeLogicalOperations}, nativeBudgetMs={NativeBudgetMilliseconds}, timeoutMs={TimeoutMilliseconds}.", symbol, request.Interval, request.StartUtc, request.EndUtc, budget.EstimatedExecutionHistoryPages, budget.PotentialHigherTimeframe, budget.EstimatedHigherTimeframeHistoryPages, budget.HistoricalDataBudget.TotalMilliseconds, budget.NativePositionSizingMode, budget.EstimatedExecutionCandleCount, budget.EstimatedNativeEconomicsCandidates, budget.EstimatedNativeEconomicsLogicalOperations, budget.NativeExecutionBudget.TotalMilliseconds, budget.ChosenRequestTimeout.TotalMilliseconds);
         var requestAborted = ControllerContext.HttpContext?.RequestAborted ?? token;
         using var deadline = new CancellationTokenSource(budget.ChosenRequestTimeout);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token, requestAborted, deadline.Token);
@@ -32,7 +35,7 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new ApiMessage($"MT5 RiskPercent {operationName} calculation became unavailable. No backtest was saved. Verify the MT5 bridge is connected and retry."));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested || requestAborted.IsCancellationRequested) { throw; }
-        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest exceeded its allowed processing time for this research window. Retry, or use a smaller date range if the problem persists.")); }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest exceeded its workload-aware processing deadline. Verify MT5 availability and retry.")); }
         catch (MarketDataProviderException exception) { return StatusCode(exception.Kind == MarketDataErrorKind.RateLimited ? 429 : exception.Kind == MarketDataErrorKind.Timeout ? 504 : 503, new ApiMessage(exception.Message.Contains("history", StringComparison.OrdinalIgnoreCase) ? "MT5 history is still loading. Retry shortly." : "MT5 historical market data is currently unavailable.")); }
     }
     [HttpGet("economics-preview")]

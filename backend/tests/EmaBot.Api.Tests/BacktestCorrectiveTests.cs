@@ -360,7 +360,7 @@ public sealed class BacktestTimeoutTests
 
         var response = Assert.IsType<ObjectResult>(result.Result);
         Assert.Equal(StatusCodes.Status504GatewayTimeout, response.StatusCode);
-        Assert.Equal("Backtest exceeded its allowed processing time for this research window. Retry, or use a smaller date range if the problem persists.", Assert.IsType<ApiMessage>(response.Value).Message);
+        Assert.Equal("Backtest exceeded its workload-aware processing deadline. Verify MT5 availability and retry.", Assert.IsType<ApiMessage>(response.Value).Message);
         Assert.Equal(0, await harness.Database.BacktestRuns.CountAsync());
         Assert.True(historical.CancellationObserved);
     }
@@ -368,7 +368,7 @@ public sealed class BacktestTimeoutTests
     [Fact]
     public async Task LargeRange_UsesCalculatedWorkloadDeadlineRatherThanTheSmallRangeMinimum()
     {
-        var options = new BacktestRequestTimeoutOptions { MinimumRequestTimeout = TimeSpan.FromMilliseconds(100), BaseProcessingBudget = TimeSpan.Zero, PerEstimatedHistoryPageBudget = TimeSpan.FromMilliseconds(50), MaximumRequestTimeout = TimeSpan.FromSeconds(2) };
+        var options = new BacktestRequestTimeoutOptions { MinimumRequestTimeout = TimeSpan.FromMilliseconds(100), BaseProcessingBudget = TimeSpan.Zero, PerEstimatedHistoryPageBudget = TimeSpan.FromMilliseconds(50), NativeExecutionBaseBudget = TimeSpan.Zero, PerNativeEconomicsTransportAttemptBudget = TimeSpan.FromMilliseconds(1), MaximumRequestTimeout = TimeSpan.FromSeconds(2) };
         await using var small = await Harness.CreateAsync(new DelayedHistorical(TimeSpan.FromMilliseconds(200)), options);
 
         var smallResult = await small.Controller.Run(small.Request, CancellationToken.None);

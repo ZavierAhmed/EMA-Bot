@@ -62,6 +62,9 @@ public sealed class BacktestService
         return run;
     }
 
+    public async Task<PaperPositionSizingMode> GetNativePositionSizingModeAsync(CancellationToken token)
+        => (await settingsService.GetAsync(token)).PaperPositionSizingMode;
+
     public async Task<Mt5HistoricalBacktestEconomicsPreview> GetMt5EconomicsPreviewAsync(string symbol, CancellationToken token)
     {
         var monitored = await database.MonitoredSymbols.AsNoTracking().SingleOrDefaultAsync(item => item.Source == MarketDataSource.Mt5Exness && item.IsEnabled && item.Symbol == symbol, token);
