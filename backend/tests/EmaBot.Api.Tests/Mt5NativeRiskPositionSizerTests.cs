@@ -1,4 +1,5 @@
 using EmaBot.Api.Models;
+using EmaBot.Api.Market;
 using EmaBot.Api.Mt5Bridge;
 using EmaBot.Api.Services;
 using EmaBot.Api.Strategy;
@@ -93,6 +94,18 @@ public sealed class Mt5NativeRiskPositionSizerTests
     }
 
     [Fact]
+    public async Task RiskPercent_ProviderFailurePreservesSafeProviderAndRootDiagnosticTypes()
+    {
+        var calculator = new Calculator { ProfitException = new MarketDataProviderException("MT5 trade calculation", MarketDataErrorKind.Unavailable, "The MT5 bridge is not connected.", new IOException("pipe reset")) };
+
+        var result = await new Mt5NativeRiskPositionSizer(calculator).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1_000m, 1m), CancellationToken.None);
+
+        Assert.Equal("MarketDataProviderException", result.Diagnostic?.ExceptionType);
+        Assert.Equal("Unavailable", result.Diagnostic?.ProviderKind);
+        Assert.Equal("IOException", result.Diagnostic?.RootExceptionType);
+    }
+
+    [Fact]
     public async Task RiskPercent_NonPositiveBrokerResultsAreAttributedToTheirOperations()
     {
         var profit = await new Mt5NativeRiskPositionSizer(new Calculator { ProfitOverride = 0m }).SizeAsync(Request(SignalDirection.Long, 100m, 95m, 1_000m, 1m), CancellationToken.None);
@@ -112,6 +125,7 @@ public sealed class Mt5NativeRiskPositionSizerTests
         public decimal MarginPerLot { get; set; } = 100m;
         public bool ThrowOnProfit { get; set; }
         public bool ThrowOnMargin { get; set; }
+        public Exception? ProfitException { get; set; }
         public decimal? ProfitOverride { get; set; }
         public List<Mt5CalculateProfitRequest> ProfitRequests { get; } = [];
         public List<Mt5CalculateMarginRequest> MarginRequests { get; } = [];
@@ -124,6 +138,7 @@ public sealed class Mt5NativeRiskPositionSizerTests
         public Task<Mt5ProfitCalculationPayload> CalculateProfitAsync(Mt5CalculateProfitRequest request, CancellationToken token)
         {
             ProfitRequests.Add(request);
+            if (ProfitException is not null) throw ProfitException;
             if (ThrowOnProfit) throw new InvalidOperationException("test profit transport failure");
             var perLot = request.Direction == "Long" ? request.ClosePrice - request.OpenPrice : request.OpenPrice - request.ClosePrice;
             return Task.FromResult(new Mt5ProfitCalculationPayload(request.BrokerSymbol, request.Direction, request.VolumeLots, request.OpenPrice, request.ClosePrice, ProfitOverride ?? perLot * request.VolumeLots * 100m, "USD"));

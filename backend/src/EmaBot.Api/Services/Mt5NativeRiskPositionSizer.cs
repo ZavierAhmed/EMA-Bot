@@ -1,4 +1,5 @@
 using EmaBot.Api.Models;
+using EmaBot.Api.Market;
 using EmaBot.Api.Mt5Bridge;
 using EmaBot.Api.Strategy;
 
@@ -25,7 +26,7 @@ public sealed class Mt5NativeRiskPositionSizer(IMt5TradeCalculator calculator)
         if (targetRisk <= 0m) return Mt5NativeRiskSizingResult.Failure(Mt5NativeRiskSizingFailure.InvalidRiskConfiguration);
         var calls = 0;
         Mt5NativeRiskSizingDiagnostic Diagnostic(string operation, decimal lots, Exception? exception = null, string? detail = null)
-            => new(operation, request.BrokerSymbol, request.Direction, request.EntryPrice, request.InitialStopPrice, lots, request.Equity, request.RiskPercent, targetRisk, exception?.GetType().Name, exception?.Message ?? detail);
+            => new(operation, request.BrokerSymbol, request.Direction, request.EntryPrice, request.InitialStopPrice, lots, request.Equity, request.RiskPercent, targetRisk, exception?.GetType().Name, exception?.Message ?? detail, (exception as MarketDataProviderException)?.Kind.ToString(), exception?.InnerException?.GetType().Name);
         async Task<(decimal? Loss, Mt5NativeRiskSizingDiagnostic? Diagnostic)> LossAsync(decimal lots)
         {
             try
@@ -73,7 +74,7 @@ public sealed class Mt5NativeRiskPositionSizer(IMt5TradeCalculator calculator)
 
 public sealed record Mt5NativeRiskSizingRequest(string BrokerSymbol, SignalDirection Direction, decimal EntryPrice, decimal InitialStopPrice, decimal Equity, decimal RiskPercent, decimal VolumeMin, decimal VolumeMax, decimal VolumeStep, decimal? VolumeLimit);
 public enum Mt5NativeRiskSizingFailure { InvalidRiskConfiguration, InvalidVolume, RiskBelowMinimumVolume, RiskCannotBeSafelySized, RiskCalculationUnavailable, MarginCalculationUnavailable, InsufficientMargin }
-public sealed record Mt5NativeRiskSizingDiagnostic(string Operation, string BrokerSymbol, SignalDirection Direction, decimal EntryPrice, decimal InitialStopPrice, decimal Lots, decimal Equity, decimal RiskPercent, decimal TargetRiskAmount, string? ExceptionType, string? SafeMessage);
+public sealed record Mt5NativeRiskSizingDiagnostic(string Operation, string BrokerSymbol, SignalDirection Direction, decimal EntryPrice, decimal InitialStopPrice, decimal Lots, decimal Equity, decimal RiskPercent, decimal TargetRiskAmount, string? ExceptionType, string? SafeMessage, string? ProviderKind = null, string? RootExceptionType = null);
 public sealed class Mt5NativeEconomicsUnavailableException(Mt5NativeRiskSizingFailure failureReason, Mt5NativeRiskSizingDiagnostic? diagnostic) : InvalidOperationException($"MT5 RiskPercent {failureReason}.")
 { public Mt5NativeRiskSizingFailure FailureReason { get; } = failureReason; public Mt5NativeRiskSizingDiagnostic? Diagnostic { get; } = diagnostic; }
 public sealed class Mt5RiskPercentConfigurationException : InvalidOperationException { public Mt5RiskPercentConfigurationException() : base("MT5 RiskPercent configuration is invalid.") { } }

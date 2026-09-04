@@ -83,10 +83,20 @@ internal static class Mt5BridgeProviderErrors
     public static MarketDataProviderException Account(Exception exception) => Translate("MT5 account", exception);
     public static MarketDataProviderException TradeCalculation(Exception exception) => Translate("MT5 trade calculation", exception);
 
+    internal static MarketDataErrorKind? KindFor(Exception exception) => exception switch
+    {
+        Mt5BridgeUnavailableException or Mt5BridgeDisconnectedException or IOException => MarketDataErrorKind.Unavailable,
+        Mt5BridgeRequestTimeoutException => MarketDataErrorKind.Timeout,
+        Mt5BridgeRemoteException remote when remote.Code is "NotFound" or "SymbolUnavailable" or "TerminalUnavailable" => MarketDataErrorKind.Unavailable,
+        Mt5BridgeRemoteException => MarketDataErrorKind.InvalidResponse,
+        ArgumentException => MarketDataErrorKind.InvalidResponse,
+        _ => null
+    };
+
     private static MarketDataProviderException Translate(string provider, Exception exception) => exception switch
     {
         MarketDataProviderException market => market,
-        Mt5BridgeUnavailableException or Mt5BridgeDisconnectedException => new(provider, MarketDataErrorKind.Unavailable, "The MT5 bridge is not connected.", exception),
+        Mt5BridgeUnavailableException or Mt5BridgeDisconnectedException or IOException => new(provider, MarketDataErrorKind.Unavailable, "The MT5 bridge is not connected.", exception),
         Mt5BridgeRequestTimeoutException => new(provider, MarketDataErrorKind.Timeout, "The MT5 bridge request timed out.", exception),
         Mt5BridgeRemoteException remote when remote.Code is "NotFound" or "SymbolUnavailable" or "TerminalUnavailable" => new(provider, MarketDataErrorKind.Unavailable, "The requested MT5 data is unavailable.", exception),
         Mt5BridgeRemoteException remote => new(provider, MarketDataErrorKind.InvalidResponse, remote.Message, exception),
