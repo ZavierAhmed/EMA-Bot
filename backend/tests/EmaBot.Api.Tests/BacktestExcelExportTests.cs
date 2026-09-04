@@ -108,7 +108,56 @@ public sealed class BacktestExcelExportTests
         Assert.Equal("0", diagnostics["ExecutedTradeCount"]); Assert.Equal("0", diagnostics["NormalExecutedTradeCount"]); Assert.Equal("0", diagnostics["ReentryTradeCount"]); Assert.Null(diagnostics["TradeExecutionRatePercent"]);
     }
 
+    [Theory]
+    [InlineData(PaperPositionSizingMode.RiskPercent)]
+    [InlineData(PaperPositionSizingMode.FixedLots)]
+    [InlineData(PaperPositionSizingMode.MarginPercent)]
+    public async Task NativeSummary_SeparatesLegacyCompatibilityAndNativeStartingBalances(PaperPositionSizingMode sizingMode)
+    {
+        await using var database = Database();
+        var run = NativeBalanceRun(sizingMode); database.BacktestRuns.Add(run); await database.SaveChangesAsync();
+
+        var export = await BacktestExcelExport.CreateAsync(database, run.Id, CancellationToken.None);
+        var entries = Read(Assert.IsType<BacktestExcelWorkbook>(export).Bytes);
+        var summary = FieldRows(entries["xl/worksheets/sheet1.xml"]);
+        var settings = FieldRows(entries["xl/worksheets/sheet2.xml"]);
+
+        Assert.Equal("100", summary["LegacyCompatibilityStartingBalanceUsdt"]);
+        Assert.Equal("1000", summary["NativeStartingBalance"]);
+        Assert.False(summary.ContainsKey("StartingBalanceUsdt"));
+        Assert.Equal("100", settings["LegacyCompatibilityStartingBalanceUsdt"]);
+        Assert.Equal("1000", settings["NativeStartingBalance"]);
+        Assert.Equal(100m, run.StartingBalanceUsdt);
+        Assert.Equal(1000m, run.StartingBalance);
+        Assert.Equal(770.40m, run.EndingBalanceUsdt);
+        Assert.Equal(-229.60m, run.NetPnlUsdt);
+    }
+
+    [Fact]
+    public async Task LegacySummary_KeepsItsStartingBalanceUsdtLabelWithoutNativeEvidence()
+    {
+        await using var database = Database();
+        var run = await SeedCompletedRunAsync(database);
+
+        var export = await BacktestExcelExport.CreateAsync(database, run.Id, CancellationToken.None);
+        var summary = FieldRows(Read(Assert.IsType<BacktestExcelWorkbook>(export).Bytes)["xl/worksheets/sheet1.xml"]);
+
+        Assert.Equal("1000", summary["StartingBalanceUsdt"]);
+        Assert.False(summary.ContainsKey("LegacyCompatibilityStartingBalanceUsdt"));
+        Assert.Null(summary["NativeStartingBalance"]);
+    }
+
     private static EmaBotDbContext Database() => new(new DbContextOptionsBuilder<EmaBotDbContext>().UseInMemoryDatabase(Guid.NewGuid().ToString()).Options);
+
+    private static BacktestRun NativeBalanceRun(PaperPositionSizingMode sizingMode)
+    {
+        var now = new DateTimeOffset(2026, 7, 31, 23, 57, 0, TimeSpan.Zero);
+        return new BacktestRun
+        {
+            MarketDataSource = MarketDataSource.Mt5Exness, Symbol = "BTCUSDm", BrokerSymbol = "BTCUSDm", Interval = "3m", RequestedStartUtc = now.AddDays(-31), RequestedEndUtc = now, CreatedAtUtc = now, CompletedAtUtc = now, Status = BacktestRunStatus.Completed,
+            EconomicsMode = BacktestEconomicsMode.Mt5HistoricalBidAsk, AccountCurrency = "USD", StartingBalanceUsdt = 100m, StartingBalance = 1000m, EndingBalanceUsdt = 770.40m, EndingBalance = 770.40m, NetPnlUsdt = -229.60m, NativePositionSizingMode = sizingMode
+        };
+    }
 
     private static BacktestsController Controller(EmaBotDbContext database, CountingHistorical historical) => new(database, new BacktestService(database, historical, new TradingSettingsService(database, Options.Create(new TradingDefaultsOptions())), new BacktestEngine(new EmaSignalEngine())), Options.Create(new BacktestRequestTimeoutOptions()));
 
