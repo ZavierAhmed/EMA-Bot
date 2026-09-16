@@ -11,11 +11,13 @@ using Microsoft.Extensions.Options;
 namespace EmaBot.Api.Controllers;
 
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/backtests")]
-public sealed class BacktestsController(EmaBotDbContext database, BacktestService service, IOptions<BacktestRequestTimeoutOptions> timeoutOptions, ILogger<BacktestsController>? logger = null) : ControllerBase
+public sealed class BacktestsController(EmaBotDbContext database, BacktestService service, IOptions<BacktestRequestTimeoutOptions> timeoutOptions, ILogger<BacktestsController>? logger = null, GridBacktestService? gridService = null) : ControllerBase
 {
     [HttpPost]
     public async Task<ActionResult<BacktestRunDetailResponse>> Run(BacktestRequest request, CancellationToken token)
     {
+        if (request.StrategyId == HistoricalStrategyIds.Grid) return await RunGrid(request, token);
+        if (request.StrategyId is not null && request.StrategyId != HistoricalStrategyIds.Ema) return BadRequest(new ApiMessage("Unsupported historical StrategyId."));
         if (!Mt5NativeTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use an MT5-native interval and a valid UTC date range. The 3d timeframe is not available for MT5 research."));
         var symbol = request.Symbol.Trim();
         var monitored = string.IsNullOrWhiteSpace(symbol) ? null : await database.MonitoredSymbols.AsNoTracking().SingleOrDefaultAsync(x => x.Source == MarketDataSource.Mt5Exness && x.Symbol == symbol && x.IsEnabled, token);
@@ -37,6 +39,30 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
         catch (OperationCanceledException) when (token.IsCancellationRequested || requestAborted.IsCancellationRequested) { throw; }
         catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(StatusCodes.Status504GatewayTimeout, new ApiMessage("Backtest exceeded its workload-aware processing deadline. Verify MT5 availability and retry.")); }
         catch (MarketDataProviderException exception) { return StatusCode(exception.Kind == MarketDataErrorKind.RateLimited ? 429 : exception.Kind == MarketDataErrorKind.Timeout ? 504 : 503, new ApiMessage(exception.Message.Contains("history", StringComparison.OrdinalIgnoreCase) ? "MT5 history is still loading. Retry shortly." : "MT5 historical market data is currently unavailable.")); }
+    }
+    private async Task<ActionResult<BacktestRunDetailResponse>> RunGrid(BacktestRequest request, CancellationToken token)
+    {
+        if (!Mt5NativeTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc || request.StartingBalance is not > 0m)
+            return BadRequest(new ApiMessage("Grid requires a valid timeframe/date range and positive StartingBalance."));
+        if (gridService is null) return StatusCode(503, new ApiMessage("Grid service is unavailable."));
+        var aborted = ControllerContext.HttpContext?.RequestAborted ?? token;
+        using var deadline = new CancellationTokenSource(GridBacktestBudget.Calculate(request.Interval, request.StartUtc, request.EndUtc, timeoutOptions.Value));
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(token, aborted, deadline.Token);
+        try
+        {
+            var run = await gridService.RunAsync(request.Symbol, request.Interval, request.StartUtc, request.EndUtc, request.StartingBalance.Value, operation.Token);
+            return Created($"/api/backtests/grid/{run.Id}", GridBacktestResponses.ToDetail(run));
+        }
+        catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested || aborted.IsCancellationRequested) { throw; }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested) { return StatusCode(504, new ApiMessage("Grid backtest exceeded its workload deadline. No run was saved.")); }
+        catch (MarketDataProviderException exception) { return StatusCode(exception.Kind == MarketDataErrorKind.RateLimited ? 429 : exception.Kind == MarketDataErrorKind.Timeout ? 504 : 503, new ApiMessage("MT5 history or economics are unavailable. No Grid run was saved.")); }
+        catch (GridHistoricalExecutionException exception)
+        {
+            return StatusCode(exception.Diagnostic.Code is "InvalidRequest" or "InvalidSettings" or "InvalidNativeInstrument" or "InvalidNativeBar" ? 400 : 503,
+                new ApiMessage($"Grid execution failed ({exception.Diagnostic.Code}). No run was saved."));
+        }
+        catch (GridNativeEconomicsUnavailableException) { return StatusCode(503, new ApiMessage("Grid native economics are unavailable. No run was saved.")); }
     }
     [HttpGet("economics-preview")]
     public async Task<IActionResult> EconomicsPreview([FromQuery] string symbol, CancellationToken token)
@@ -62,4 +88,10 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
         return string.IsNullOrEmpty(safe) ? "unknown" : safe;
     }
 }
-public sealed record BacktestRequest(string Symbol, string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc);
+public static class HistoricalStrategyIds
+{
+    public const string Ema = "EMA_TREND_V1";
+    public const string Grid = "GRID_RANGE_V1";
+}
+public sealed record BacktestRequest(string Symbol, string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc,
+    string? StrategyId = null, decimal? StartingBalance = null);

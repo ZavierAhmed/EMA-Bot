@@ -108,9 +108,9 @@ public static class BacktestExcelExport
     private static IEnumerable<object?[]> Fields(params (string Field, object? Value)[] fields) => [new object?[] { "Field", "Value" }, .. fields.Select(item => new object?[] { item.Field, item.Value })];
 
     private sealed record TradeEventRow(BacktestTrade Trade, BacktestTradeEvent Event);
-    private sealed record Sheet(string Name, IEnumerable<object?[]> Rows);
+    internal sealed record Sheet(string Name, IEnumerable<object?[]> Rows);
 
-    private static byte[] Workbook(IReadOnlyList<Sheet> sheets)
+    internal static byte[] Workbook(IReadOnlyList<Sheet> sheets)
     {
         using var stream = new MemoryStream();
         using (var zip = new ZipArchive(stream, ZipArchiveMode.Create, true))

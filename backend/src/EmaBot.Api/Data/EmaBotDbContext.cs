@@ -13,6 +13,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     public DbSet<MonitoredSymbol> MonitoredSymbols => Set<MonitoredSymbol>();
     public DbSet<TradingSettings> TradingSettings => Set<TradingSettings>();
     public DbSet<BacktestRun> BacktestRuns => Set<BacktestRun>();
+    public DbSet<GridBacktestRun> GridBacktestRuns => Set<GridBacktestRun>();
     public DbSet<BacktestTrade> BacktestTrades => Set<BacktestTrade>();
     public DbSet<BacktestTradeEvent> BacktestTradeEvents => Set<BacktestTradeEvent>();
     public DbSet<PaperSession> PaperSessions => Set<PaperSession>();
@@ -35,6 +36,7 @@ public sealed class EmaBotDbContext(DbContextOptions<EmaBotDbContext> options)
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
+        GridBacktestModelConfiguration.Configure(builder);
 
         builder.Entity<EmaUser>(entity =>
         {

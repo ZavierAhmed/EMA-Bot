@@ -131,6 +131,11 @@ export const removeMonitoredSymbol = (id: number) => protectedRequest<void>(`/ap
 export const getTradingSettings = () => request<TradingSettings>('/api/settings/trading')
 export const updateTradingSettings = (settings: Omit<TradingSettings, 'updatedAtUtc'>) => protectedRequest<TradingSettings>('/api/settings/trading', 'PUT', settings)
 export const getBacktests = () => request<BacktestRunSummary[]>('/api/backtests')
+export const getGridBacktests = () => request<import('./gridBacktestTypes').GridRun[]>('/api/backtests/grid')
+export const getGridBacktest = (id: number) => request<import('./gridBacktestTypes').GridBacktestDetail>(`/api/backtests/grid/${id}`)
+export const runGridBacktest = (body: { strategyId: 'GRID_RANGE_V1'; symbol: string; interval: string; startUtc: string; endUtc: string; startingBalance: number }, signal?: AbortSignal) => protectedRequest<import('./gridBacktestTypes').GridBacktestDetail>('/api/backtests', 'POST', body, signal)
+export const deleteGridBacktest = (id: number) => protectedRequest<void>(`/api/backtests/grid/${id}`, 'DELETE')
+export async function downloadGridBacktestExcel(id: number) { await download(`/api/backtests/grid/${id}/export/excel`, `grid-range-v1-backtest-${id}.xlsx`) }
 export const getMt5HistoricalBacktestEconomicsPreview = (symbol: string) => request<Mt5HistoricalBacktestEconomicsPreview>(`/api/backtests/economics-preview?symbol=${encodeURIComponent(symbol)}`)
 export const getBacktest = (id: number) => request<BacktestRun>(`/api/backtests/${id}`)
 export const runBacktest = (requestBody: { symbol: string; interval: string; startUtc: string; endUtc: string }, signal?: AbortSignal) => protectedRequest<BacktestRun>('/api/backtests', 'POST', requestBody, signal)
