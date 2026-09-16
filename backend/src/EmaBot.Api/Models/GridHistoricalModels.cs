@@ -12,7 +12,7 @@ public enum GridHistoricalEventType { Qualified, Fill, Exit, AmbiguousFirstSide,
 public sealed record GridHistoricalBasketEvent(DateTimeOffset Time, GridHistoricalEventType Type,
     int? Level = null, decimal? ExecutablePrice = null, string? Detail = null);
 public sealed record GridHistoricalPlannedLevel(int Number, GridBasketDirection Direction, decimal Price,
-    decimal Lots, decimal InitialStopRisk, decimal RequiredMargin, bool Allowed);
+    decimal Lots, decimal? InitialStopRisk, decimal? RequiredMargin, bool Allowed);
 public sealed record GridHistoricalCycleSnapshot(GridRangeIndicatorSnapshot Indicators, decimal Anchor,
     decimal Spacing, decimal LongStop, decimal ShortStop, decimal TargetRiskPercent, decimal EntryEquity,
     GridRangeSizing Sizing, IReadOnlyList<GridHistoricalPlannedLevel> PlannedLevels);
@@ -31,8 +31,8 @@ public sealed record GridHistoricalBasket(GridHistoricalCycleSnapshot Cycle, Gri
     public decimal NetPnl => GrossPnl - Commission;
     public decimal UsedMargin => Legs.Sum(l => l.RequiredMargin);
     public decimal ActualFilledInitialStopRisk => Legs.Sum(l => l.InitialStopRisk);
-    public decimal PlannedWorstCasePriceRisk => Direction == GridBasketDirection.Long ? Cycle.Sizing.LongRisk : Cycle.Sizing.ShortRisk;
-    public decimal PlannedWorstCaseMargin => Direction == GridBasketDirection.Long ? Cycle.Sizing.LongMargin : Cycle.Sizing.ShortMargin;
+    public decimal? PlannedWorstCasePriceRisk => Direction == GridBasketDirection.Long ? Cycle.Sizing.LongRisk : Cycle.Sizing.ShortRisk;
+    public decimal? PlannedWorstCaseMargin => Direction == GridBasketDirection.Long ? Cycle.Sizing.LongMargin : Cycle.Sizing.ShortMargin;
     public decimal ExitBid => Direction == GridBasketDirection.Long ? ExitPrice : ExitPrice - ExitSpread;
     public decimal ExitAsk => Direction == GridBasketDirection.Short ? ExitPrice : ExitPrice + ExitSpread;
 }

@@ -57,17 +57,25 @@ no knowledge of live broker positions.
 ## Trade mode and frozen economics
 
 Disabled, CloseOnly and Unknown modes do not create cycles or call the calculator.
-Full permits both candidates. LongOnly/ShortOnly cancel the prohibited side in
-G1 before G0 observes fill bars, without pre-locking basket direction or fabricating
-two-sided ambiguity. G0's conservative symmetric five-level preflight remains
-unchanged: both sides must be calculable, and the common lots are safe for either.
-No broker-disallowed direction can fill.
+Full permits both candidates and retains symmetric five-level preflight: common
+lots must be safe for either side. E11.8G1.1 maps LongOnly/ShortOnly to the domain's
+GridAllowedDirections policy BEFORE sizing. Only the allowed side is calculated,
+used to normalize lots, and tested against risk/margin limits. Prohibited-side
+economics cannot constrain or reject a cycle and are never called. The domain
+cancels prohibited candidates at construction, without pre-locking direction or
+fabricating ambiguity. Default domain policy remains Both for existing G0 callers.
+An empty/invalid domain policy fails closed without economics calls.
 
 The result snapshots both sides' five planned prices, selected common lots,
 native stop-risk and native required margin per level, side eligibility, range,
 anchor, ATR/ADX, spacing, stops, target risk percent/amount and entry equity.
 Actual fills retain their own time, planned executable price, lots, native margin,
 initial stop-risk evidence, commission and eventual native gross/net P/L.
+Prohibited-side planned levels have Allowed=false and null stop-risk/margin.
+Directional sizing totals are nullable too: null means uncalculated, never a
+fabricated zero. G1 never indexes calculator evidence for prohibited directions.
+VolumeLimit includes existing exposure only for allowed directions; isolated G1
+still explicitly supplies zero outside exposure on each side.
 
 At each actual fill, CalculateMargin is called with the frozen executable entry
 and lots. It must match the saved per-level preflight within 0.00000001 account
@@ -124,7 +132,8 @@ cleared between qualification attempts, retaining only bounded current-cycle dat
 
 Sorting costs O(N log N); indicator processing costs O(50*N) with O(50) rolling
 indicator storage. There are no whole-prefix rescans in production. Results/events
-naturally use O(N) space. A successful preflight costs 30 shared calculator calls;
+naturally use O(N) space. A successful Full preflight costs 30 shared calculator
+calls; LongOnly/ShortOnly costs 15 (ten profit and five margin calculations);
 each filled leg adds one actual-margin and one closing-profit call. A 15,000-bar
 unresolved-cycle test stays at 30 total calls. Multiple-cycle tests verify fresh
 equity/sizing, cooldown, range/ATR changes and exact realized metrics.

@@ -7,6 +7,8 @@ public sealed record GridRangeSettings(int LevelCount = 5, decimal GridBasketRis
 }
 
 public enum GridBasketDirection { Long, Short }
+[Flags]
+public enum GridAllowedDirections { None = 0, Long = 1, Short = 2, Both = Long | Short }
 public enum GridLevelStatus { Candidate, Filled, Canceled, Closed }
 public enum GridExitReason { TakeProfit, EmergencyStop }
 public enum GridCycleDiagnostics
@@ -28,13 +30,17 @@ public sealed record GridRangeQualification(GridRangeIndicatorSnapshot Snapshot,
 public sealed record GridRangeLevel(int Number, GridBasketDirection Direction, decimal Price, decimal Lots,
     GridLevelStatus Status = GridLevelStatus.Candidate, DateTimeOffset? FillTime = null);
 public sealed record GridRiskAccount(decimal Equity, decimal FreeMargin, decimal VolumeMin, decimal VolumeMax,
-    decimal VolumeStep, decimal? VolumeLimit = null, decimal ExistingLongVolume = 0m, decimal ExistingShortVolume = 0m);
+    decimal VolumeStep, decimal? VolumeLimit = null, decimal ExistingLongVolume = 0m, decimal ExistingShortVolume = 0m,
+    GridAllowedDirections AllowedDirections = GridAllowedDirections.Both);
 public sealed record GridRiskDiagnostic(string Operation, string Symbol, GridBasketDirection Direction,
     decimal Lots, decimal Entry, decimal Stop, string Detail);
-public sealed record GridRangeSizing(decimal Lots, decimal TargetRiskAmount, decimal LongRisk, decimal ShortRisk,
-    decimal LongMargin, decimal ShortMargin, GridCycleDiagnostics? Failure = null, GridRiskDiagnostic? Diagnostic = null)
+public sealed record GridRangeSizing(decimal Lots, decimal TargetRiskAmount, decimal? LongRisk, decimal? ShortRisk,
+    decimal? LongMargin, decimal? ShortMargin, GridCycleDiagnostics? Failure = null, GridRiskDiagnostic? Diagnostic = null,
+    GridAllowedDirections AllowedDirections = GridAllowedDirections.Both)
 {
     public bool IsSuccess => Failure is null && Lots > 0m;
+    public bool Allows(GridBasketDirection direction) => (AllowedDirections &
+        (direction == GridBasketDirection.Long ? GridAllowedDirections.Long : GridAllowedDirections.Short)) != 0;
 }
 
 // Construction and transitions are owned by the engine; callers cannot mutate frozen prices or legs.
@@ -47,7 +53,8 @@ public sealed class GridRangeCycle
         LongStop = Anchor - 6m * Spacing; ShortStop = Anchor + 6m * Spacing;
         Levels = Array.AsReadOnly(Enum.GetValues<GridBasketDirection>().SelectMany(direction =>
             Enumerable.Range(1, settings.LevelCount).Select(n => new GridRangeLevel(n, direction,
-                Anchor + (direction == GridBasketDirection.Long ? -n : n) * Spacing, sizing.Lots))).ToArray());
+                Anchor + (direction == GridBasketDirection.Long ? -n : n) * Spacing, sizing.Lots,
+                sizing.Allows(direction) ? GridLevelStatus.Candidate : GridLevelStatus.Canceled))).ToArray());
     }
     public string Symbol { get; }
     public GridRangeSettings Settings { get; }

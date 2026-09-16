@@ -41,7 +41,14 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
         var balance = request.StartingBalance; var peak = balance; decimal drawdown = 0m;
         int qualified = 0, rejected = 0, ambiguous = 0, noFill = 0, modeBlocked = 0, count = 0, warmup = 0;
         Mt5HistoricalExecutionBar? first = null, last = null;
-        var canOpen = instrument.TradeMode is InstrumentTradeMode.Full or InstrumentTradeMode.LongOnly or InstrumentTradeMode.ShortOnly;
+        var allowedDirections = instrument.TradeMode switch
+        {
+            InstrumentTradeMode.Full => GridAllowedDirections.Both,
+            InstrumentTradeMode.LongOnly => GridAllowedDirections.Long,
+            InstrumentTradeMode.ShortOnly => GridAllowedDirections.Short,
+            _ => GridAllowedDirections.None
+        };
+        var canOpen = allowedDirections != GridAllowedDirections.None;
 
         void Event(GridHistoricalBasketEvent item) { events.Add(item); cycleEvents.Add(item); }
         async Task CloseAsync(GridHistoricalExitReason reason, decimal exit, Mt5HistoricalExecutionBar bar)
@@ -94,6 +101,8 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
             foreach (var fill in transition.NewFills)
             {
                 var planned = snapshot!.PlannedLevels.Single(l => l.Direction == fill.Direction && l.Number == fill.Number);
+                if (!planned.Allowed || planned.RequiredMargin is not { } plannedMargin || planned.InitialStopRisk is not { } plannedRisk)
+                    throw Failure("MissingAllowedSideEvidence", bar.CloseTimeUtc, "A filled level requires allowed-side native risk/margin evidence.", snapshot);
                 decimal margin;
                 try
                 {
@@ -106,12 +115,12 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                         new("CalculateMargin", request.Symbol, fill.Direction, fill.Lots, fill.Price,
                             fill.Direction == GridBasketDirection.Long ? snapshot.LongStop : snapshot.ShortStop, ex.Message), ex);
                 }
-                if (Math.Abs(margin - planned.RequiredMargin) > .00000001m)
+                if (Math.Abs(margin - plannedMargin) > .00000001m)
                     throw Failure("MarginPreflightMismatch", bar.CloseTimeUtc,
                         $"Level {fill.Number}: preflight {planned.RequiredMargin}, actual {margin}.", snapshot);
                 if (legs.Sum(l => l.RequiredMargin) + margin > balance)
                     throw Failure("InsufficientActualMargin", bar.CloseTimeUtc, "Filled aggregate margin exceeds simulated free balance.", snapshot);
-                legs.Add(new(fill.Number, fill.FillTime!.Value, fill.Price, fill.Lots, margin, planned.InitialStopRisk,
+                legs.Add(new(fill.Number, fill.FillTime!.Value, fill.Price, fill.Lots, margin, plannedRisk,
                     fill.Lots * request.PaperCommissionPerLotPerSide, 0m, 0m));
                 Event(new(bar.CloseTimeUtc, GridHistoricalEventType.Fill, fill.Number, fill.Price));
             }
@@ -124,7 +133,7 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
             economics.ClearEvidence();
             var creation = await engine.TryCreateAsync(indicator, settings,
                 new(balance, balance, spec.VolumeMin, spec.VolumeMax, spec.VolumeStep, spec.VolumeLimit,
-                    ExistingLongVolume: 0m, ExistingShortVolume: 0m), token);
+                    ExistingLongVolume: 0m, ExistingShortVolume: 0m, AllowedDirections: allowedDirections), token);
             if (creation.Cycle is not { } accepted)
             {
                 if (creation.Failure is GridCycleDiagnostics.ActiveCycle or GridCycleDiagnostics.Cooldown) continue;
@@ -134,15 +143,13 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                 continue;
             }
             qualified++;
-            // Broker restrictions are orchestration eligibility, not a direction
-            // lock. Cancel disallowed candidates BEFORE G0 sees any fill bar.
-            bool Allowed(GridBasketDirection d) => instrument.TradeMode == InstrumentTradeMode.Full
-                || (d == GridBasketDirection.Long ? instrument.TradeMode == InstrumentTradeMode.LongOnly : instrument.TradeMode == InstrumentTradeMode.ShortOnly);
+            // Policy is mapped before sizing. Prohibited candidates are already
+            // canceled by the domain and intentionally have no economics evidence.
             var plannedLevels = accepted.Levels.Select(l => new GridHistoricalPlannedLevel(l.Number, l.Direction, l.Price, l.Lots,
-                decimal.Abs(economics.Profits[new(request.Symbol, l.Direction.ToString(), l.Lots, l.Price,
-                    l.Direction == GridBasketDirection.Long ? accepted.LongStop : accepted.ShortStop)]),
-                economics.Margins[new(request.Symbol, l.Direction.ToString(), l.Lots, l.Price)], Allowed(l.Direction))).ToArray();
-            accepted.Levels = Array.AsReadOnly(accepted.Levels.Select(l => Allowed(l.Direction) ? l : l with { Status = GridLevelStatus.Canceled }).ToArray());
+                accepted.Sizing.Allows(l.Direction) ? decimal.Abs(economics.Profits[new(request.Symbol, l.Direction.ToString(), l.Lots, l.Price,
+                    l.Direction == GridBasketDirection.Long ? accepted.LongStop : accepted.ShortStop)]) : null,
+                accepted.Sizing.Allows(l.Direction) ? economics.Margins[new(request.Symbol, l.Direction.ToString(), l.Lots, l.Price)] : null,
+                accepted.Sizing.Allows(l.Direction))).ToArray();
             snapshot = new(accepted.Snapshot, accepted.Anchor, accepted.Spacing, accepted.LongStop, accepted.ShortStop,
                 settings.GridBasketRiskPercent, balance, accepted.Sizing, Array.AsReadOnly(plannedLevels));
             cycles.Add(snapshot); cycleEvents = []; legs = [];

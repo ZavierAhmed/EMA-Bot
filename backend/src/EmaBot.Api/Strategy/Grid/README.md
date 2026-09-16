@@ -31,8 +31,12 @@ whole-basket TP is anchor. No EMA settings or entry/exit logic are involved.
 
 Target price risk is equity * risk percent / 100 (default 1%). Each of the five
 planned executable prices is passed to native CalculateProfit with the hard stop.
-Both candidate directions must pass, using ONE common lot size safe for either
-direction. Native minimum-volume loss estimates the candidate, rounded DOWN on
+By default both candidate directions must pass, using ONE common lot size safe for
+either direction. E11.8G1.1 adds GridRiskAccount.AllowedDirections (default Both):
+only allowed sides participate in native risk/margin and aggregate volume checks.
+Prohibited candidates are canceled at construction and their economics are null.
+The pure domain does not depend on broker TradeMode. Native minimum-volume loss
+estimates the candidate, rounded DOWN on
 the existing native volume lattice `VolumeMin + N * VolumeStep`. Every candidate
 leg is then revalidated with native profit; any unsafe revalidation fails closed.
 There is no risk tolerance permitting budget overshoot, synthetic economics,
@@ -42,7 +46,7 @@ VolumeMax caps each leg. Positive VolumeLimit caps all five planned legs plus
 existing same-direction volume; null/zero means no broker aggregate cap, matching
 the native convention. Minimum-volume over-risk is specifically diagnosed as
 RiskBelowMinimumVolume. An impossible volume or unsafe revalidation is
-RiskCannotBeSafelySized. CalculateMargin sums all five entries on EACH candidate
+RiskCannotBeSafelySized. CalculateMargin sums all five entries on EACH allowed candidate
 side. Each mutually exclusive basket must fit min(equity, free margin). A shortage
 rejects without reducing lots, level count, or changing sizing mode. Commission
 is separate from the price-risk budget; later accounting must subtract costs from
