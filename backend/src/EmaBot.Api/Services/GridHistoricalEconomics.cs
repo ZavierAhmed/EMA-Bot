@@ -7,6 +7,12 @@ namespace EmaBot.Api.Services;
 // the shared MT5 calculator remains the sole retry authority.
 internal sealed class GridHistoricalEconomics(IMt5TradeCalculator authority, string currency) : IMt5TradeCalculator
 {
+    // V1 Number(double) serializes with DoubleToString(value, 10). Allow at
+    // most one unit of that representation, independent of price/volume scale.
+    // Only validate the echo: retain the original request and all Grid prices.
+    private static bool Mt5BridgeNumberMatches(decimal requested, decimal echoed)
+        => decimal.Abs(requested - echoed) <= 0.0000000001m;
+
     private readonly Stopwatch elapsed = new();
     public int Calls { get; private set; }
     public long ElapsedMilliseconds => elapsed.ElapsedMilliseconds;
@@ -21,8 +27,8 @@ internal sealed class GridHistoricalEconomics(IMt5TradeCalculator authority, str
         {
             var result = await authority.CalculateProfitAsync(request, token);
             token.ThrowIfCancellationRequested();
-            if (result.BrokerSymbol != request.BrokerSymbol || result.Direction != request.Direction || result.VolumeLots != request.VolumeLots
-                || result.OpenPrice != request.OpenPrice || result.ClosePrice != request.ClosePrice || result.AccountCurrency != currency)
+            if (result.BrokerSymbol != request.BrokerSymbol || result.Direction != request.Direction || !Mt5BridgeNumberMatches(request.VolumeLots, result.VolumeLots)
+                || !Mt5BridgeNumberMatches(request.OpenPrice, result.OpenPrice) || !Mt5BridgeNumberMatches(request.ClosePrice, result.ClosePrice) || result.AccountCurrency != currency)
                 throw new InvalidOperationException("MT5 profit response does not match requested economics/account currency.");
             Profits[request] = result.Profit;
             return result;
@@ -36,8 +42,8 @@ internal sealed class GridHistoricalEconomics(IMt5TradeCalculator authority, str
         {
             var result = await authority.CalculateMarginAsync(request, token);
             token.ThrowIfCancellationRequested();
-            if (result.BrokerSymbol != request.BrokerSymbol || result.Direction != request.Direction || result.VolumeLots != request.VolumeLots
-                || result.OpenPrice != request.OpenPrice || result.AccountCurrency != currency || result.RequiredMargin <= 0m)
+            if (result.BrokerSymbol != request.BrokerSymbol || result.Direction != request.Direction || !Mt5BridgeNumberMatches(request.VolumeLots, result.VolumeLots)
+                || !Mt5BridgeNumberMatches(request.OpenPrice, result.OpenPrice) || result.AccountCurrency != currency || result.RequiredMargin <= 0m)
                 throw new InvalidOperationException("MT5 margin response is invalid or does not match requested economics/account currency.");
             Margins[request] = result.RequiredMargin;
             return result;

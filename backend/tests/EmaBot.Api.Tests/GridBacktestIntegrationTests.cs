@@ -34,7 +34,7 @@ public sealed class GridBacktestIntegrationTests
         db.MonitoredSymbols.Add(new() { Symbol = "TESTm", Source = MarketDataSource.Mt5Exness, IsEnabled = true, PaperCommissionPerLotPerSide = 2m });
         await db.SaveChangesAsync();
     }
-    private static GridBacktestService Service(EmaBotDbContext db, Native native) => new(db, native, native, native, new(native));
+    private static GridBacktestService Service(EmaBotDbContext db, Native native) => new(db, native, native, native, new(native), Microsoft.Extensions.Logging.Abstractions.NullLogger<GridBacktestService>.Instance);
     private static BacktestsController Controller(EmaBotDbContext db, Native native, BacktestRequestTimeoutOptions? timeout = null)
         => new(db, null!, Options.Create(timeout ?? new()), gridService: Service(db, native));
 
@@ -239,6 +239,41 @@ public sealed class GridBacktestIntegrationTests
         var csrf = await client.GetFromJsonAsync<AntiforgeryResponse>("/api/auth/antiforgery");
         using var message = new HttpRequestMessage(method, path); if (body is not null) message.Content = JsonContent.Create(body);
         message.Headers.Add("X-CSRF-TOKEN", csrf!.Token); return await client.SendAsync(message);
+    }
+
+    [Theory]
+    [InlineData("profit", "RiskCalculationUnavailable", "CalculateProfit")]
+    [InlineData("margin", "MarginCalculationUnavailable", "CalculateMargin")]
+    public async Task G21UnavailableEconomicsLogsOnlySafeStructuredEvidence(string failure, string code, string operation)
+    {
+        await using var db = Database(); await Seed(db);
+        var native = new Native { Failure = failure }; var logger = new EvidenceLogger();
+        var service = new GridBacktestService(db, native, native, native, new(native), logger);
+        await Assert.ThrowsAsync<GridNativeEconomicsUnavailableException>(() => service.RunAsync("TESTm", "3m", Start, End, 1000m, default));
+        Assert.NotEmpty(logger.Entries);
+        Assert.All(logger.Entries, entry =>
+        {
+        Assert.Equal(code, entry["DiagnosticCode"]); Assert.Equal(operation, entry["Operation"]);
+        Assert.Equal("TESTm", entry["BrokerSymbol"]); Assert.Equal("Long", entry["Direction"]?.ToString());
+        Assert.True(Assert.IsType<decimal>(entry["Lots"]) > 0m);
+        Assert.Equal(6, entry.Count); // Five whitelisted fields plus logging's OriginalFormat.
+        Assert.DoesNotContain("secret", string.Join(" ", entry.Values));
+        });
+        Assert.Empty(db.GridBacktestRuns);
+    }
+
+    private sealed class EvidenceLogger : Microsoft.Extensions.Logging.ILogger<GridBacktestService>
+    {
+        public List<Dictionary<string, object?>> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel level) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel level, Microsoft.Extensions.Logging.EventId id,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Assert.Null(exception);
+            Assert.Equal(Microsoft.Extensions.Logging.LogLevel.Warning, level);
+            Entries.Add(((IEnumerable<KeyValuePair<string, object?>>)state!).ToDictionary(p => p.Key, p => p.Value));
+        }
     }
 
     private sealed class Native : IGridHistoricalBarSource, IInstrumentCatalogProvider, IMt5AccountReader, IMt5TradeCalculator

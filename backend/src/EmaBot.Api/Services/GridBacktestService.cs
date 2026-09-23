@@ -18,7 +18,7 @@ public sealed class GridHistoricalBarSource(Mt5BridgeHistoricalMarketDataProvide
 public sealed class GridNativeEconomicsUnavailableException() : InvalidOperationException("Grid native economics are unavailable. No run was saved.");
 
 public sealed class GridBacktestService(EmaBotDbContext database, IGridHistoricalBarSource history,
-    IInstrumentCatalogProvider instruments, IMt5AccountReader accountReader, GridHistoricalBacktestEngine engine)
+    IInstrumentCatalogProvider instruments, IMt5AccountReader accountReader, GridHistoricalBacktestEngine engine, ILogger<GridBacktestService> logger)
 {
     public static DateTimeOffset WarmupStart(string interval, DateTimeOffset start)
     {
@@ -45,7 +45,17 @@ public sealed class GridBacktestService(EmaBotDbContext database, IGridHistorica
         // G1 allows diagnostic-only qualification failures. A persisted application
         // run must not report success when required native economics was unavailable.
         if (result.Diagnostics.RiskCalculationUnavailableCount > 0 || result.Diagnostics.MarginCalculationUnavailableCount > 0)
+        {
+            foreach (var diagnostic in result.Diagnostics.Entries.Where(d => d.DomainCode is
+                Strategy.Grid.GridCycleDiagnostics.RiskCalculationUnavailable or Strategy.Grid.GridCycleDiagnostics.MarginCalculationUnavailable))
+            {
+                // Whitelist fields: raw exception detail may contain secrets.
+                var economics = diagnostic.Economics;
+                logger.LogWarning("Grid economics unavailable: {DiagnosticCode}, operation {Operation}, broker symbol {BrokerSymbol}, direction {Direction}, lots {Lots}",
+                    diagnostic.Code, economics?.Operation, economics?.Symbol ?? symbol, economics?.Direction, economics?.Lots);
+            }
             throw new GridNativeEconomicsUnavailableException();
+        }
         token.ThrowIfCancellationRequested();
         var run = GridBacktestPersistence.Map(result, created);
         database.GridBacktestRuns.Add(run);
