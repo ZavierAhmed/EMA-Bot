@@ -13,7 +13,7 @@ public sealed class GridRangeRiskSizer(IMt5TradeCalculator calculator)
         GridRangeSizing Fail(GridCycleDiagnostics failure, GridRiskDiagnostic? diagnostic = null)
             => new(0m, 0m, null, null, null, null, failure, diagnostic, account.AllowedDirections);
         if (string.IsNullOrWhiteSpace(symbol) || !settings.IsValid || !qualification.IsQualified
-            || !GridRangeIndicators.Evaluate(qualification.Snapshot).IsQualified
+            || !GridRangeIndicators.Evaluate(qualification.Snapshot, settings).IsQualified
             || account.Equity <= 0m || account.FreeMargin < 0m || account.VolumeMin <= 0m
             || account.VolumeStep <= 0m || account.VolumeMax < account.VolumeMin
             || account.VolumeLimit < 0m || account.ExistingLongVolume < 0m || account.ExistingShortVolume < 0m
@@ -34,7 +34,7 @@ public sealed class GridRangeRiskSizer(IMt5TradeCalculator calculator)
         async Task<decimal> TotalAsync(GridBasketDirection side, decimal volume, bool margin)
         {
             direction = side; lots = volume; operation = margin ? "CalculateMargin" : "CalculateProfit";
-            stop = qualification.Anchor + (side == GridBasketDirection.Long ? -6m : 6m) * qualification.Spacing;
+            stop = qualification.Anchor + (side == GridBasketDirection.Long ? -settings.EmergencyStopDistanceLevels : settings.EmergencyStopDistanceLevels) * qualification.Spacing;
             decimal total = 0m;
             for (var n = 1; n <= settings.LevelCount; n++)
             {

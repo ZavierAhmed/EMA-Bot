@@ -28,7 +28,7 @@ public static class GridRangeIndicators
         return adx;
     }
 
-    public static GridRangeQualification Qualify(IReadOnlyList<Candle> candles, DateTimeOffset asOf)
+    public static GridRangeQualification Qualify(IReadOnlyList<Candle> candles, DateTimeOffset asOf, GridRangeSettings? settings = null)
     {
         var closed = candles.Where(c => c.IsClosed && c.CloseTimeUtc <= asOf).OrderBy(c => c.CloseTimeUtc).ToArray();
         var empty = new GridRangeIndicatorSnapshot(asOf, 0m, 0m, 0m, null, null, closed.Length);
@@ -38,10 +38,10 @@ public static class GridRangeIndicators
             return new(empty, GridCycleDiagnostics.InvalidCandles);
         var range = closed.TakeLast(50).ToArray();
         return Evaluate(new(closed[^1].CloseTimeUtc, range.Max(c => c.High), range.Min(c => c.Low), closed[^1].Close,
-            AtrCalculator.Wilder14(closed, closed.Length - 1), Adx14(closed, closed.Length - 1), closed.Length));
+            AtrCalculator.Wilder14(closed, closed.Length - 1), Adx14(closed, closed.Length - 1), closed.Length), settings);
     }
 
-    public static GridRangeQualification Evaluate(GridRangeIndicatorSnapshot snapshot)
+    public static GridRangeQualification Evaluate(GridRangeIndicatorSnapshot snapshot, GridRangeSettings? settings = null)
     {
         GridCycleDiagnostics? failure = snapshot.CompletedBars < 50 ? GridCycleDiagnostics.InsufficientWarmup
             : snapshot.Atr is null ? GridCycleDiagnostics.AtrUnavailable
@@ -51,7 +51,7 @@ public static class GridRangeIndicators
             : snapshot.Adx > 20m ? GridCycleDiagnostics.AdxAboveThreshold : null;
         var q = new GridRangeQualification(snapshot, failure);
         if (failure is not null) return q;
-        if (snapshot.RangeLow <= 0m || snapshot.RangeHigh < snapshot.RangeLow || q.Anchor <= 0m || q.Spacing <= 0m || q.Anchor - 6m * q.Spacing <= 0m)
+        if (snapshot.RangeLow <= 0m || snapshot.RangeHigh < snapshot.RangeLow || q.Anchor <= 0m || q.Spacing <= 0m || q.Anchor - (settings ?? new()).EmergencyStopDistanceLevels * q.Spacing <= 0m)
             return q with { Failure = GridCycleDiagnostics.InvalidAnchorOrSpacing };
         return Math.Abs(snapshot.Close - q.Anchor) <= q.Spacing * .50m ? q : q with { Failure = GridCycleDiagnostics.CloseOutsideAnchor };
     }

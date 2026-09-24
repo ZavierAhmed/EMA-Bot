@@ -1,7 +1,8 @@
 // Dedicated Grid API contracts; no EMA trade fields.
+export type GridStrategyId = 'GRID_RANGE_V1' | 'GRID_RANGE_4L_RESEARCH_V1'
 export type GridRun = {
   id: number
-  strategyId: string
+  strategyId: GridStrategyId
   marketDataSource: string
   symbol: string
   brokerSymbol: string
@@ -161,4 +162,4 @@ export type GridDiagnostic = {
   entry: number | null
   stop: number | null
 }
-export type GridBacktestDetail = { strategyId: 'GRID_RANGE_V1'; run: GridRun; cycles: { cycle: GridCycle; plannedLevels: GridPlannedLevel[] }[]; baskets: { basket: GridBasket; legs: GridLeg[] }[]; events: GridEvent[]; diagnostics: GridDiagnostic[] }
+export type GridBacktestDetail = { strategyId: GridStrategyId; run: GridRun; cycles: { cycle: GridCycle; plannedLevels: GridPlannedLevel[] }[]; baskets: { basket: GridBasket; legs: GridLeg[] }[]; events: GridEvent[]; diagnostics: GridDiagnostic[] }

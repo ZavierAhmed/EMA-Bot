@@ -3,7 +3,8 @@ namespace EmaBot.Api.Strategy.Grid;
 public sealed record GridRangeSettings(int LevelCount = 5, decimal GridBasketRiskPercent = 1m, int CooldownBars = 3)
 {
     public const string StrategyId = "GRID_RANGE_V1";
-    public bool IsValid => LevelCount == 5 && GridBasketRiskPercent is > 0m and <= 100m && CooldownBars >= 0;
+    public int EmergencyStopDistanceLevels => LevelCount + 1;
+    public bool IsValid => LevelCount is 4 or 5 && GridBasketRiskPercent is > 0m and <= 100m && CooldownBars >= 0;
 }
 
 public enum GridBasketDirection { Long, Short }
@@ -50,7 +51,7 @@ public sealed class GridRangeCycle
     {
         Symbol = symbol; Settings = settings; Snapshot = qualification.Snapshot; Sizing = sizing;
         Anchor = qualification.Anchor; Spacing = qualification.Spacing;
-        LongStop = Anchor - 6m * Spacing; ShortStop = Anchor + 6m * Spacing;
+        LongStop = Anchor - settings.EmergencyStopDistanceLevels * Spacing; ShortStop = Anchor + settings.EmergencyStopDistanceLevels * Spacing;
         Levels = Array.AsReadOnly(Enum.GetValues<GridBasketDirection>().SelectMany(direction =>
             Enumerable.Range(1, settings.LevelCount).Select(n => new GridRangeLevel(n, direction,
                 Anchor + (direction == GridBasketDirection.Long ? -n : n) * Spacing, sizing.Lots,

@@ -185,8 +185,9 @@ public sealed class GridBacktestIntegrationTests
         Assert.True(operations.OfType<CreateTableOperation>().Single(t => t.Name == "GridBacktestCycles").Columns.Single(c => c.Name == "ShortRisk").IsNullable);
     }
 
-    [Fact]
-    public async Task GridHttpRoutesRequireAdminAndReturnTypedGridOnly()
+    [Theory]
+    [InlineData("GRID_RANGE_V1", 5)] [InlineData("GRID_RANGE_4L_RESEARCH_V1", 4)]
+    public async Task G4AHttpRoutesRequireAdminAndReturnFrozenProfile(string strategyId, int levels)
     {
         using var baseFactory = new EmaBotApiFactory(); var native = new Native();
         await using var factory = baseFactory.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
@@ -202,16 +203,23 @@ public sealed class GridBacktestIntegrationTests
         Assert.Equal(AppRoles.Admin, typeof(GridBacktestsController).GetCustomAttributes(typeof(AuthorizeAttribute), false).Cast<AuthorizeAttribute>().Single().Roles);
         using (var scope = factory.Services.CreateScope()) await Seed(scope.ServiceProvider.GetRequiredService<EmaBotDbContext>());
         await Login(client);
-        var response = await Send(client, HttpMethod.Post, "/api/backtests", new { strategyId = "GRID_RANGE_V1", symbol = "TESTm", interval = "3m", startUtc = Start, endUtc = End, startingBalance = 1000m, accountCurrency = "FAKE", commissionPerLotPerSide = 0 });
+        var response = await Send(client, HttpMethod.Post, "/api/backtests", new { strategyId, levelCount = 99, riskPercent = 50m, cooldownBars = 0, stopLevel = 99, atrMultiplier = 9m, symbol = "TESTm", interval = "3m", startUtc = Start, endUtc = End, startingBalance = 1000m, accountCurrency = "FAKE", commissionPerLotPerSide = 0 });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var text = await response.Content.ReadAsStringAsync(); var json = JsonDocument.Parse(text).RootElement;
-        Assert.Equal("GRID_RANGE_V1", json.GetProperty("strategyId").GetString());
+        Assert.Equal(strategyId, json.GetProperty("strategyId").GetString());
+        Assert.Equal(strategyId, json.GetProperty("run").GetProperty("strategyId").GetString());
+        Assert.Equal(levels, json.GetProperty("run").GetProperty("levelCount").GetInt32());
+        Assert.Equal(1m, json.GetProperty("run").GetProperty("gridBasketRiskPercent").GetDecimal());
+        Assert.Equal(3, json.GetProperty("run").GetProperty("cooldownBars").GetInt32());
         Assert.Equal("USD", json.GetProperty("run").GetProperty("accountCurrency").GetString());
         Assert.Equal(2m, json.GetProperty("run").GetProperty("commissionPerLotPerSide").GetDecimal());
         Assert.DoesNotContain("ema9", text, StringComparison.OrdinalIgnoreCase); Assert.DoesNotContain("crossover", text, StringComparison.OrdinalIgnoreCase);
         var id = json.GetProperty("run").GetProperty("id").GetInt32();
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/backtests/grid/{id}")).StatusCode);
-        Assert.Single((await client.GetFromJsonAsync<JsonElement>("/api/backtests/grid")).EnumerateArray());
+        var listed = Assert.Single((await client.GetFromJsonAsync<JsonElement>("/api/backtests/grid")).EnumerateArray());
+        Assert.Equal(strategyId, listed.GetProperty("strategyId").GetString());
+        var unknown = await Send(client, HttpMethod.Post, "/api/backtests", Request() with { StrategyId = "GRID_RANGE_3L_RESEARCH_V1" });
+        Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/backtests/grid/{id}/export/excel")).StatusCode);
         Assert.Equal(HttpStatusCode.NoContent, (await Send(client, HttpMethod.Delete, $"/api/backtests/grid/{id}")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/backtests/grid/{id}")).StatusCode);
@@ -275,6 +283,46 @@ public sealed class GridBacktestIntegrationTests
             Entries.Add(((IEnumerable<KeyValuePair<string, object?>>)state!).ToDictionary(p => p.Key, p => p.Value));
         }
     }
+
+    [Theory]
+    [InlineData("GRID_RANGE_V1", 5)] [InlineData("GRID_RANGE_4L_RESEARCH_V1", 4)]
+    public async Task G4APersistenceAndExportUseActualProfileAndPreserveOtherSavedRuns(string strategyId, int levels)
+    {
+        await using var db = Database(); await Seed(db);
+        var native = new Native { Mode = InstrumentTradeMode.Full }; var service = Service(db, native);
+        var old = await service.RunAsync("TESTm", "3m", Start, End, 1000m, default);
+        var run = await service.RunAsync("TESTm", "3m", Start, End, 1000m, default, strategyId);
+        db.ChangeTracker.Clear(); run = (await service.GetAsync(run.Id, default))!;
+        Assert.Equal(strategyId, run.StrategyId); Assert.Equal(levels, run.LevelCount);
+        Assert.Equal(1m, run.GridBasketRiskPercent); Assert.Equal(3, run.CooldownBars);
+        var cycle = Assert.Single(run.Cycles);
+        Assert.Equal(2 * levels, cycle.PlannedLevels.Count);
+        Assert.Equal(levels, cycle.PlannedLevels.Count(l => l.Direction == "Long"));
+        Assert.Equal(levels, cycle.PlannedLevels.Count(l => l.Direction == "Short"));
+        Assert.Equal(100m - (levels + 1) * 2m, cycle.LongStop);
+        Assert.Equal(100m + (levels + 1) * 2m, cycle.ShortStop);
+        var calls = native.Calls;
+        var workbook = (await GridBacktestExcelExport.CreateAsync(db, run.Id, default))!;
+        Assert.Equal(calls, native.Calls);
+        using var zip = new ZipArchive(new MemoryStream(workbook.Bytes));
+        static string Read(ZipArchive zip, string path) { using var reader = new StreamReader(zip.GetEntry(path)!.Open()); return reader.ReadToEnd(); }
+        var summary = Read(zip, "xl/worksheets/sheet1.xml");
+        Assert.Contains(strategyId, summary); Assert.Contains($"{levels} equal-lot levels", summary);
+        Assert.Contains($"stop level {levels + 1}", summary);
+        var rows = XDocument.Parse(Read(zip, "xl/worksheets/sheet2.xml")).Descendants().Where(e => e.Name.LocalName == "row").ToArray();
+        var headers = rows[0].Elements().Select(e => e.Value).Where(v => v.EndsWith("PlannedPrice")).ToArray();
+        Assert.Equal(new[] { "Long", "Short" }.SelectMany(d => Enumerable.Range(1, levels).Select(n => $"{d}{n}PlannedPrice")), headers);
+        Assert.Equal(rows[0].Elements().Count(), rows[1].Elements().Count());
+        Assert.True(await service.DeleteAsync(run.Id, default)); db.ChangeTracker.Clear();
+        var baseline = (await service.GetAsync(old.Id, default))!;
+        Assert.Equal("GRID_RANGE_V1", baseline.StrategyId); Assert.Equal(5, baseline.LevelCount);
+        Assert.Equal(10, Assert.Single(baseline.Cycles).PlannedLevels.Count);
+    }
+
+    [Fact]
+    public void G4APublicRequestHasNoRawStrategyParameters()
+        => Assert.Equal(new[] { "Symbol", "Interval", "StartUtc", "EndUtc", "StrategyId", "StartingBalance" },
+            typeof(BacktestRequest).GetProperties().Select(p => p.Name));
 
     private sealed class Native : IGridHistoricalBarSource, IInstrumentCatalogProvider, IMt5AccountReader, IMt5TradeCalculator
     {

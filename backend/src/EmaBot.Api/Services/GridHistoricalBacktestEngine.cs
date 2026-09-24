@@ -15,7 +15,8 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
     {
         token.ThrowIfCancellationRequested();
         ValidateRequest(request, instrument);
-        var settings = request.Settings ?? new GridRangeSettings();
+        var settings = request.Settings ?? GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings;
+        request = request with { Settings = settings };
         var spec = instrument.Spec;
         var bars = input.Where(b => b.IsClosed && (request.RequestedEndUtc is null || b.CloseTimeUtc <= request.RequestedEndUtc))
             .OrderBy(b => b.OpenTimeUtc).ToArray();
@@ -184,9 +185,9 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
             || request.StartingBalance <= 0m || request.PaperCommissionPerLotPerSide < 0m
             || request.RequestedStartUtc >= request.RequestedEndUtc)
             throw Failure("InvalidRequest", null, "Explicit matching symbol, interval, currency, balance, commission and valid dates are required.");
-        var settings = request.Settings ?? new GridRangeSettings();
-        if (!settings.IsValid || settings.CooldownBars != 3)
-            throw Failure("InvalidSettings", null, "G1 requires the frozen five-level, three-bar-cooldown G0 contract.");
+        var settings = request.Settings ?? GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings;
+        if (!settings.IsValid || settings != GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings)
+            throw Failure("InvalidSettings", null, "Historical Grid settings must match the selected frozen profile.");
         // Reuse only the existing strategy-neutral native evidence validator.
         if (Mt5HistoricalBacktestEngine.ValidateNativeInstrument(instrument.Spec) is { } invalid)
             throw Failure("InvalidNativeInstrument", null, invalid);

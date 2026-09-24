@@ -6,7 +6,8 @@ namespace EmaBot.Api.Models;
 // Non-persisted, account-currency models. No EMA settings or legacy fee inputs.
 public sealed record GridHistoricalBacktestRequest(string Symbol, string Interval, decimal StartingBalance,
     string AccountCurrency, decimal PaperCommissionPerLotPerSide, GridRangeSettings? Settings = null,
-    DateTimeOffset? RequestedStartUtc = null, DateTimeOffset? RequestedEndUtc = null);
+    DateTimeOffset? RequestedStartUtc = null, DateTimeOffset? RequestedEndUtc = null,
+    string StrategyId = GridRangeSettings.StrategyId);
 public enum GridHistoricalExitReason { TakeProfit, EmergencyStop, EndOfData }
 public enum GridHistoricalEventType { Qualified, Fill, Exit, AmbiguousFirstSide, CanceledWithoutFills, Rejected }
 public sealed record GridHistoricalBasketEvent(DateTimeOffset Time, GridHistoricalEventType Type,
@@ -55,7 +56,7 @@ public sealed record GridHistoricalBacktestResult(GridHistoricalBacktestRequest 
     IReadOnlyList<GridHistoricalCycleSnapshot> Cycles, GridHistoricalDiagnostics Diagnostics,
     IReadOnlyList<GridHistoricalBasketEvent> Events, int EconomicsCallCount, long EconomicsElapsedMilliseconds)
 {
-    public string StrategyId => GridRangeSettings.StrategyId;
+    public string StrategyId => Request.StrategyId;
     public string Symbol => Request.Symbol;
     public string Interval => Request.Interval;
     public string AccountCurrency => Request.AccountCurrency;

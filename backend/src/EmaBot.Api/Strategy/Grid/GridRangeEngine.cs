@@ -21,13 +21,13 @@ public sealed class GridRangeEngine
 
     public async Task<GridCycleCreation> TryCreateAsync(IReadOnlyList<Candle> candles, DateTimeOffset asOf,
         GridRangeSettings settings, GridRiskAccount account, CancellationToken token = default)
-        => await TryCreateCoreAsync(() => GridRangeIndicators.Qualify(candles, asOf), settings, account, token);
+        => await TryCreateCoreAsync(() => GridRangeIndicators.Qualify(candles, asOf, settings), settings, account, token);
 
     // Historical orchestration supplies an incrementally computed snapshot. The
     // same G0 qualification, ownership, sizing and cooldown gates remain authoritative.
     internal Task<GridCycleCreation> TryCreateAsync(GridRangeIndicatorSnapshot snapshot,
         GridRangeSettings settings, GridRiskAccount account, CancellationToken token)
-        => TryCreateCoreAsync(() => GridRangeIndicators.Evaluate(snapshot), settings, account, token);
+        => TryCreateCoreAsync(() => GridRangeIndicators.Evaluate(snapshot, settings), settings, account, token);
 
     private async Task<GridCycleCreation> TryCreateCoreAsync(Func<GridRangeQualification> qualify,
         GridRangeSettings settings, GridRiskAccount account, CancellationToken token)

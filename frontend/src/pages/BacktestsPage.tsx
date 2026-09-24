@@ -6,7 +6,7 @@ import { ApiError, downloadBacktestExcel, getBacktests, getMonitoredSymbols, get
 import { deleteGridBacktest, downloadGridBacktestExcel, getGridBacktest, getGridBacktests, runGridBacktest } from '../api'
 import type { GridBacktestDetail, GridRun } from '../gridBacktestTypes'
 import { GridBacktestResult } from './GridBacktestResult'
-import { backtestDates, defaultBacktestStrategy, gridStartingBalance } from '../backtestForm'
+import { backtestDates, defaultBacktestStrategy, gridBacktestRequest, isGridStrategy } from '../backtestForm'
 
 const intervals = ['3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '1w', '1M']
 // The backend permits up to 30 minutes for bounded native-economics research; retain one minute for response delivery.
@@ -45,14 +45,14 @@ export function BacktestsPage() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!symbol || !start || !end || busy || !economics?.ready) return
-    if (strategy === 'GRID_RANGE_V1' && (!Number.isFinite(Number(startingBalance)) || Number(startingBalance) <= 0)) { setError('Grid starting balance must be positive.'); return }
+    if (isGridStrategy(strategy) && (!Number.isFinite(Number(startingBalance)) || Number(startingBalance) <= 0)) { setError('Grid starting balance must be positive.'); return }
     const controller = new AbortController()
     const timeout = window.setTimeout(() => controller.abort(), backtestTimeoutMilliseconds)
     setBusy(true)
     setError(null)
     try {
       const dates = backtestDates(symbol, interval, start, end)
-      if (strategy === 'GRID_RANGE_V1') setGridSelected(await runGridBacktest({ ...dates, strategyId: 'GRID_RANGE_V1', startingBalance: gridStartingBalance(startingBalance) }, controller.signal))
+      if (isGridStrategy(strategy)) setGridSelected(await runGridBacktest(gridBacktestRequest(strategy, dates, startingBalance), controller.signal))
       else setSelected(await runBacktest(dates, controller.signal))
       await refresh()
     } catch (requestError) {
@@ -78,7 +78,7 @@ export function BacktestsPage() {
   async function gridAction(id: number, action: 'open' | 'export' | 'delete') {
     setGridBusyId(id); setError(null)
     try {
-      if (action === 'open') { setGridSelected(await getGridBacktest(id)); setStrategy('GRID_RANGE_V1') }
+      if (action === 'open') { const detail = await getGridBacktest(id); setGridSelected(detail); setStrategy(detail.run.strategyId) }
       else if (action === 'export') await downloadGridBacktestExcel(id)
       else { await deleteGridBacktest(id); if (gridSelected?.run.id === id) setGridSelected(null); await refresh() }
     } catch (value) { setError(value instanceof Error ? value.message : 'Grid action failed.') }
@@ -92,19 +92,19 @@ export function BacktestsPage() {
       <p className="mt-2 text-slate-600">New MT5 / Exness backtests use broker-native lots, margin and profit calculations with a historical Bid/Ask bar-spread approximation. Swap and additional slippage are not modeled.</p>
     </div>
     <form onSubmit={submit} className="grid gap-4 rounded-lg border border-slate-200 bg-white p-5 md:grid-cols-4">
-      <label className="text-sm font-medium md:col-span-4">Strategy<select disabled={busy} value={strategy} onChange={e => setStrategy(e.target.value)} className="mt-2 block rounded border border-slate-300 p-2"><option value="EMA_TREND_V1">EMA Trend</option><option value="GRID_RANGE_V1">Grid Range V1</option></select></label>
-      {strategy === 'GRID_RANGE_V1' && <><p className="text-sm text-slate-600 md:col-span-4">Range / mean-reversion, 5 equal-lot levels, non-martingale, 1% total basket risk.</p><label className="text-sm font-medium">Starting balance ({economics?.accountCurrency ?? 'account currency'})<input type="number" required min="0.00000001" step="any" value={startingBalance} onChange={e => setStartingBalance(e.target.value)} className="mt-2 block w-full rounded border border-slate-300 p-2" /></label></>}
+      <label className="text-sm font-medium md:col-span-4">Strategy<select disabled={busy} value={strategy} onChange={e => setStrategy(e.target.value)} className="mt-2 block rounded border border-slate-300 p-2"><option value="EMA_TREND_V1">EMA Trend</option><option value="GRID_RANGE_V1">Grid Range V1</option><option value="GRID_RANGE_4L_RESEARCH_V1">Grid Range Research — 4 Levels</option></select></label>
+      {isGridStrategy(strategy) && <><p className="text-sm text-slate-600 md:col-span-4">{strategy === 'GRID_RANGE_4L_RESEARCH_V1' ? 'RESEARCH ONLY — Research variant: 4 equal-lot levels, emergency stop one spacing beyond Level 4, 1% total basket risk. Not used by Paper/Demo/Live.' : 'Range / mean-reversion, 5 equal-lot levels, non-martingale, 1% total basket risk.'}</p><label className="text-sm font-medium">Starting balance ({economics?.accountCurrency ?? 'account currency'})<input type="number" required min="0.00000001" step="any" value={startingBalance} onChange={e => setStartingBalance(e.target.value)} className="mt-2 block w-full rounded border border-slate-300 p-2" /></label></>}
       <Select label="Symbol" value={symbol} onChange={setSymbol} options={symbols.map(item => item.displayName ? `${item.symbol} — ${item.displayName}` : item.symbol)} values={symbols.map(item => item.symbol)} />
       <Select label="Timeframe" value={interval} onChange={setInterval} options={intervals} />
       <label className="text-sm font-medium">Start date<input className="mt-2 block w-full rounded border border-slate-300 p-2" type="date" value={start} onChange={event => setStart(event.target.value)} required /></label>
       <label className="text-sm font-medium">End date<input className="mt-2 block w-full rounded border border-slate-300 p-2" type="date" value={end} onChange={event => setEnd(event.target.value)} required /></label>
-      <EconomicsPreview value={economics} grid={strategy === 'GRID_RANGE_V1'} />
+      <EconomicsPreview value={economics} grid={isGridStrategy(strategy)} />
       <button disabled={busy || !economics?.ready} className="rounded bg-slate-950 px-4 py-2 text-sm font-medium text-white disabled:opacity-50 md:col-span-4">{busy ? 'Running backtest...' : 'Run Backtest'}</button>
     </form>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     {strategy === 'EMA_TREND_V1' && selected && <Result run={selected} exporting={exportingId === selected.id} exportExcel={exportExcel} />}
-    {strategy === 'GRID_RANGE_V1' && gridSelected && <GridBacktestResult detail={gridSelected} busy={gridBusyId === gridSelected.run.id} exportExcel={() => void gridAction(gridSelected.run.id, 'export')} />}
-    <section className="rounded-lg border border-slate-200 bg-white p-5"><h2 className="font-semibold">Recent Grid Range V1 backtests</h2><div className="overflow-x-auto"><table className="mt-4 w-full text-left text-sm"><thead><tr><th>Strategy</th><th>Symbol / timeframe</th><th>Dates</th><th>Baskets</th><th>Net P/L</th><th>Actions</th></tr></thead><tbody>{gridRuns.map(run => <tr key={run.id} className="border-t"><td className="py-3">{run.strategyId}</td><td>{run.symbol} · {run.interval}</td><td>{run.requestedStartUtc.slice(0, 10)} – {run.requestedEndUtc.slice(0, 10)}</td><td>{run.basketCount}</td><td>{run.netPnl.toFixed(2)} {run.accountCurrency}</td><td className="space-x-2"><button disabled={gridBusyId !== null} onClick={() => void gridAction(run.id, 'open')}>Open</button><button disabled={gridBusyId !== null} onClick={() => void gridAction(run.id, 'export')}>Export Excel</button><button disabled={gridBusyId !== null} onClick={() => { if (window.confirm('Delete this saved Grid backtest?')) void gridAction(run.id, 'delete') }}>Delete</button></td></tr>)}</tbody></table></div>{gridRuns.length === 0 && <p className="mt-3 text-sm text-slate-500">No saved Grid runs.</p>}</section>
+    {isGridStrategy(strategy) && gridSelected && <GridBacktestResult detail={gridSelected} busy={gridBusyId === gridSelected.run.id} exportExcel={() => void gridAction(gridSelected.run.id, 'export')} />}
+    <section className="rounded-lg border border-slate-200 bg-white p-5"><h2 className="font-semibold">Recent Grid backtests</h2><div className="overflow-x-auto"><table className="mt-4 w-full text-left text-sm"><thead><tr><th>Strategy</th><th>Symbol / timeframe</th><th>Dates</th><th>Baskets</th><th>Net P/L</th><th>Actions</th></tr></thead><tbody>{gridRuns.map(run => <tr key={run.id} className="border-t"><td className="py-3">{run.strategyId}</td><td>{run.symbol} · {run.interval}</td><td>{run.requestedStartUtc.slice(0, 10)} – {run.requestedEndUtc.slice(0, 10)}</td><td>{run.basketCount}</td><td>{run.netPnl.toFixed(2)} {run.accountCurrency}</td><td className="space-x-2"><button disabled={gridBusyId !== null} onClick={() => void gridAction(run.id, 'open')}>Open</button><button disabled={gridBusyId !== null} onClick={() => void gridAction(run.id, 'export')}>Export Excel</button><button disabled={gridBusyId !== null} onClick={() => { if (window.confirm('Delete this saved Grid backtest?')) void gridAction(run.id, 'delete') }}>Delete</button></td></tr>)}</tbody></table></div>{gridRuns.length === 0 && <p className="mt-3 text-sm text-slate-500">No saved Grid runs.</p>}</section>
     <section className="rounded-lg border border-slate-200 bg-white p-5">
       <h2 className="font-semibold">Recent EMA Trend backtests</h2>
       <table className="mt-4 w-full text-left text-sm">

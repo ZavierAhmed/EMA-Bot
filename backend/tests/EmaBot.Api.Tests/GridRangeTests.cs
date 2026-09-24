@@ -118,10 +118,10 @@ public sealed class GridRangeTests
     }
 
     [Fact]
-    public async Task Cycle_InvalidSettingsCannotChangeFrozenFiveLevelContract()
+    public async Task Cycle_InvalidSettingsRejectUnapprovedLevelCounts()
     {
         var e = new GridRangeEngine("TEST", new(new Calculator()));
-        foreach (var settings in new[] { new GridRangeSettings(LevelCount: 4), new GridRangeSettings(GridBasketRiskPercent: 0m), new GridRangeSettings(CooldownBars: -1) })
+        foreach (var settings in new[] { new GridRangeSettings(LevelCount: 3), new GridRangeSettings(GridBasketRiskPercent: 0m), new GridRangeSettings(CooldownBars: -1) })
             Assert.Equal(GridCycleDiagnostics.InvalidSettings, (await e.TryCreateAsync(Candles(), Epoch.AddMinutes(50), settings, Account())).Failure);
     }
 

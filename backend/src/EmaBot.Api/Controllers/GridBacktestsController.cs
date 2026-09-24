@@ -19,6 +19,6 @@ public sealed class GridBacktestsController(GridBacktestService service, EmaBotD
     {
         var workbook = await GridBacktestExcelExport.CreateAsync(database, id, token);
         return workbook is null ? NotFound(new ApiMessage("Grid backtest not found."))
-            : File(workbook.Bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"grid-range-v1-backtest-{id}.xlsx");
+            : File(workbook.Bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"grid-backtest-{id}.xlsx");
     }
 }

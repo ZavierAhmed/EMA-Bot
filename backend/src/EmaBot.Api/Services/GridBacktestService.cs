@@ -1,4 +1,5 @@
 using EmaBot.Api.Data;
+using EmaBot.Api.Strategy.Grid;
 using EmaBot.Api.Market;
 using EmaBot.Api.Models;
 using EmaBot.Api.Mt5Bridge;
@@ -26,8 +27,9 @@ public sealed class GridBacktestService(EmaBotDbContext database, IGridHistorica
         var span = Mt5BridgeHistoricalMarketDataProvider.TimeframeSpan(interval) * 100 + TimeSpan.FromDays(7);
         return start.UtcTicks > span.Ticks ? start - span : DateTimeOffset.MinValue;
     }
-    public async Task<GridBacktestRun> RunAsync(string symbol, string interval, DateTimeOffset start, DateTimeOffset end, decimal balance, CancellationToken token)
+    public async Task<GridBacktestRun> RunAsync(string symbol, string interval, DateTimeOffset start, DateTimeOffset end, decimal balance, CancellationToken token, string strategyId = GridRangeSettings.StrategyId)
     {
+        var profile = GridHistoricalStrategyProfile.Resolve(strategyId);
         if (!Mt5NativeTimeframes.IsSupported(interval) || start >= end || balance <= 0m || string.IsNullOrWhiteSpace(symbol))
             throw new ArgumentException("Grid requires an MT5-native timeframe, valid UTC dates, and positive starting balance.");
         var monitored = await database.MonitoredSymbols.AsNoTracking().SingleOrDefaultAsync(s => s.Source == MarketDataSource.Mt5Exness && s.IsEnabled && s.Symbol == symbol, token);
@@ -41,7 +43,7 @@ public sealed class GridBacktestService(EmaBotDbContext database, IGridHistorica
         var created = DateTimeOffset.UtcNow;
         var bars = await history.GetAsync(symbol, interval, WarmupStart(interval, start), end, token);
         var result = await engine.RunAsync(bars, new(symbol, interval, balance, account.Currency, commission,
-            RequestedStartUtc: start, RequestedEndUtc: end), instrument, token);
+            Settings: profile.Settings, RequestedStartUtc: start, RequestedEndUtc: end, StrategyId: profile.StrategyId), instrument, token);
         // G1 allows diagnostic-only qualification failures. A persisted application
         // run must not report success when required native economics was unavailable.
         if (result.Diagnostics.RiskCalculationUnavailableCount > 0 || result.Diagnostics.MarginCalculationUnavailableCount > 0)

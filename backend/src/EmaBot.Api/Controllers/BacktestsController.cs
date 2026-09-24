@@ -16,7 +16,7 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
     [HttpPost]
     public async Task<ActionResult<BacktestRunDetailResponse>> Run(BacktestRequest request, CancellationToken token)
     {
-        if (request.StrategyId == HistoricalStrategyIds.Grid) return await RunGrid(request, token);
+        if (request.StrategyId is HistoricalStrategyIds.Grid or HistoricalStrategyIds.GridResearch) return await RunGrid(request, token);
         if (request.StrategyId is not null && request.StrategyId != HistoricalStrategyIds.Ema) return BadRequest(new ApiMessage("Unsupported historical StrategyId."));
         if (!Mt5NativeTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use an MT5-native interval and a valid UTC date range. The 3d timeframe is not available for MT5 research."));
         var symbol = request.Symbol.Trim();
@@ -50,7 +50,7 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(token, aborted, deadline.Token);
         try
         {
-            var run = await gridService.RunAsync(request.Symbol, request.Interval, request.StartUtc, request.EndUtc, request.StartingBalance.Value, operation.Token);
+            var run = await gridService.RunAsync(request.Symbol, request.Interval, request.StartUtc, request.EndUtc, request.StartingBalance.Value, operation.Token, request.StrategyId!);
             return Created($"/api/backtests/grid/{run.Id}", GridBacktestResponses.ToDetail(run));
         }
         catch (ArgumentException exception) { return BadRequest(new ApiMessage(exception.Message)); }
@@ -91,7 +91,8 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
 public static class HistoricalStrategyIds
 {
     public const string Ema = "EMA_TREND_V1";
-    public const string Grid = "GRID_RANGE_V1";
+    public const string Grid = Strategy.Grid.GridRangeSettings.StrategyId;
+    public const string GridResearch = Strategy.Grid.GridHistoricalStrategyProfile.ResearchStrategyId;
 }
 public sealed record BacktestRequest(string Symbol, string Interval, DateTimeOffset StartUtc, DateTimeOffset EndUtc,
     string? StrategyId = null, decimal? StartingBalance = null);

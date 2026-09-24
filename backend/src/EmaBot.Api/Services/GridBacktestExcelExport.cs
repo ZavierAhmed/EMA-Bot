@@ -14,21 +14,21 @@ public static class GridBacktestExcelExport
         var dto = GridBacktestResponses.ToDetail(run);
         var summary = new List<object?[]>
         {
-            new object?[] { "Strategy", "GRID_RANGE_V1" }, new object?[] { "Market Data", "MT5 / Exness" },
+            new object?[] { "Strategy", run.StrategyId }, new object?[] { "Market Data", "MT5 / Exness" },
             new object?[] { "Monetary units", run.AccountCurrency },
-            new object?[] { "Frozen rules", "5 equal-lot levels; non-martingale; 1% TOTAL basket price-risk; 50-bar range; ATR14 x 0.50; ADX14 <= 20; anchor TP; level-6 emergency stop; 3-bar cooldown" },
+            new object?[] { "Frozen rules", $"{run.LevelCount} equal-lot levels; non-martingale; {run.GridBasketRiskPercent}% TOTAL basket price-risk; {run.RangeLookback}-bar range; ATR{run.AtrPeriod} x {run.AtrSpacingMultiplier}; ADX{run.AdxPeriod} <= {run.AdxThreshold}; anchor TP; emergency stop one spacing beyond deepest configured level (stop level {run.LevelCount + 1}); {run.CooldownBars}-bar cooldown" },
             new object?[] { "Ask reconstruction", "Ask = Bid + captured SpreadPoints * PointSize; spread is not charged again" },
             new object?[] { "NULL semantics", "Blank cell = unavailable/not calculated; numeric 0 = measured zero" },
             new object?[] { "Risk definition", "Commission excluded from initial price-risk; entry and exit commission included in net P/L" }
         };
         summary.AddRange(typeof(GridRunResponse).GetProperties().Select(p => new object?[] { p.Name, p.GetValue(dto.Run) }));
         var cycleRows = Rows(dto.Cycles.Select(c => c.Cycle)).ToList();
-        // Preserve all ten frozen planned prices without replacing cycle rows with legs.
+        // Preserve all configured frozen planned prices without replacing cycle rows with legs.
         var orderedDirections = new[] { "Long", "Short" };
-        var planHeaders = orderedDirections.SelectMany(d => Enumerable.Range(1, 5).Select(n => (object?)$"{d}{n}PlannedPrice")).ToArray();
+        var planHeaders = orderedDirections.SelectMany(d => Enumerable.Range(1, run.LevelCount).Select(n => (object?)$"{d}{n}PlannedPrice")).ToArray();
         cycleRows[0] = cycleRows[0].Concat(planHeaders).ToArray();
         for (var i = 0; i < dto.Cycles.Count; i++)
-            cycleRows[i + 1] = cycleRows[i + 1].Concat(orderedDirections.SelectMany(d => Enumerable.Range(1, 5)
+            cycleRows[i + 1] = cycleRows[i + 1].Concat(orderedDirections.SelectMany(d => Enumerable.Range(1, run.LevelCount)
                 .Select(n => (object?)dto.Cycles[i].PlannedLevels.Single(l => l.Direction == d && l.LevelNumber == n).Price))).ToArray();
         var diagnostics = Rows(dto.Diagnostics).ToList();
         foreach (var e in dto.Events.Where(e => e.Type == "AmbiguousFirstSide"))

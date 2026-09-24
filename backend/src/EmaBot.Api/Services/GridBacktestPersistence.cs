@@ -1,4 +1,5 @@
 using EmaBot.Api.Models;
+using EmaBot.Api.Strategy.Grid;
 
 namespace EmaBot.Api.Services;
 
@@ -7,6 +8,7 @@ public static class GridBacktestPersistence
     public static GridBacktestRun Map(GridHistoricalBacktestResult result, DateTimeOffset createdAt)
     {
         var request = result.Request; var spec = result.Instrument.Spec; var d = result.Diagnostics;
+        var settings = request.Settings ?? GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings;
         var run = new GridBacktestRun
         {
             StrategyId = result.StrategyId, MarketDataSource = "Mt5Exness", Symbol = result.Symbol, BrokerSymbol = spec.BrokerSymbol,
@@ -14,7 +16,7 @@ public static class GridBacktestPersistence
             ActualStartUtc = result.ActualStartUtc, ActualEndUtc = result.ActualEndUtc, CreatedAtUtc = createdAt,
             CompletedAtUtc = DateTimeOffset.UtcNow, Status = "Completed", AccountCurrency = result.AccountCurrency,
             StartingBalance = result.StartingBalance, EndingBalance = result.EndingBalance,
-            GridBasketRiskPercent = 1m, LevelCount = 5, CooldownBars = 3, RangeLookback = 50, AtrPeriod = 14, AdxPeriod = 14,
+            GridBasketRiskPercent = settings.GridBasketRiskPercent, LevelCount = settings.LevelCount, CooldownBars = settings.CooldownBars, RangeLookback = 50, AtrPeriod = 14, AdxPeriod = 14,
             AdxThreshold = 20m, AtrSpacingMultiplier = .50m, CommissionPerLotPerSide = request.PaperCommissionPerLotPerSide,
             HistoricalSpreadModel = Mt5HistoricalBacktestEngine.SpreadModel, HistoricalChartMode = spec.HistoricalChartMode.ToString(),
             ContractSize = spec.ContractSize, VolumeMin = spec.VolumeMin, VolumeMax = spec.VolumeMax, VolumeStep = spec.VolumeStep,
