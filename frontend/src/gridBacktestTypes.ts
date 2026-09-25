@@ -1,5 +1,5 @@
 // Dedicated Grid API contracts; no EMA trade fields.
-export type GridStrategyId = 'GRID_RANGE_V1' | 'GRID_RANGE_4L_RESEARCH_V1' | 'GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1'
+export type GridStrategyId = 'GRID_RANGE_V1' | 'GRID_RANGE_4L_RESEARCH_V1' | 'GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1' | 'GRID_RANGE_BREAKOUT_GUARD_L4_RESEARCH_V1'
 export type GridRun = {
   id: number
   strategyId: GridStrategyId

@@ -13,6 +13,7 @@ public static class GridBacktestExcelExport
         var run = await GridBacktestService.Graph(database).Include(r => r.Cycles).ThenInclude(c => c.Telemetry).AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, token);
         if (run is null) return null;
         var dto = GridBacktestResponses.ToDetail(run);
+        var guard = GridHistoricalBreakoutGuard.Resolve(GridHistoricalStrategyProfile.Resolve(run.StrategyId).GuardId);
         var summary = new List<object?[]>
         {
             new object?[] { "Strategy", run.StrategyId }, new object?[] { "Market Data", "MT5 / Exness" },
@@ -24,14 +25,14 @@ public static class GridBacktestExcelExport
             new object?[] { "NULL semantics", "Blank cell = unavailable/not calculated; numeric 0 = measured zero" },
             new object?[] { "Risk definition", "Commission excluded from initial price-risk; entry and exit commission included in net P/L" }
         };
-        if (run.StrategyId == GridHistoricalStrategyProfile.BreakoutGuardStrategyId)
+        if (guard is not null)
             summary.AddRange(new object?[][]
             {
                 ["Research", "HISTORICAL RESEARCH ONLY; not approved for Paper/Demo/Live"],
-                ["Breakout guard", GridBreakoutGuardRules.Id],
-                ["Monitor from level", GridBreakoutGuardRules.MinimumFilledLevel],
-                ["Minimum ADX increase", GridBreakoutGuardRules.MinimumAdxDelta],
-                ["Minimum consecutive adverse closes", GridBreakoutGuardRules.MinimumConsecutiveAdverseCloses],
+                ["Breakout guard", guard.Id],
+                ["Monitor from level", guard.MinimumFilledLevel],
+                ["Minimum ADX increase", guard.MinimumAdxDelta],
+                ["Minimum consecutive adverse closes", guard.MinimumConsecutiveAdverseCloses],
                 ["BreakoutGuardExits", run.Cycles.SelectMany(c => c.Baskets).Count(b => b.ExitReason == "BreakoutGuard")]
             });
         summary.AddRange(typeof(GridRunResponse).GetProperties().Select(p => new object?[] { p.Name, p.GetValue(dto.Run) }));
@@ -47,7 +48,7 @@ public static class GridBacktestExcelExport
         foreach (var e in dto.Events.Where(e => e.Type == "AmbiguousFirstSide"))
             diagnostics.Add(new object?[] { null, run.Id, e.Sequence, e.Time, e.Type, e.Type, null, null, null, "OHLC cannot establish first side; no fill.", null, null, null });
         var legRows = Rows(dto.Baskets.SelectMany(b => b.Legs)).ToList();
-        if (run.StrategyId == GridHistoricalStrategyProfile.BreakoutGuardStrategyId)
+        if (guard is not null)
         {
             // Guarded research legs expose their basket exit without changing legacy exports.
             legRows[0] = legRows[0].Concat(new object?[] { "ExitReason", "ExitTimeUtc", "ExitPrice" }).ToArray();

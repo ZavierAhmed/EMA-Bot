@@ -188,6 +188,7 @@ public sealed class GridBacktestIntegrationTests
     [Theory]
     [InlineData("GRID_RANGE_V1", 5)] [InlineData("GRID_RANGE_4L_RESEARCH_V1", 4)]
     [InlineData("GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1", 5)]
+    [InlineData("GRID_RANGE_BREAKOUT_GUARD_L4_RESEARCH_V1", 5)]
     public async Task G4AHttpRoutesRequireAdminAndReturnFrozenProfile(string strategyId, int levels)
     {
         using var baseFactory = new EmaBotApiFactory(); var native = new Native();

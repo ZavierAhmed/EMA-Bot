@@ -16,7 +16,7 @@ public sealed class BacktestsController(EmaBotDbContext database, BacktestServic
     [HttpPost]
     public async Task<ActionResult<BacktestRunDetailResponse>> Run(BacktestRequest request, CancellationToken token)
     {
-        if (request.StrategyId is HistoricalStrategyIds.Grid or HistoricalStrategyIds.GridResearch or HistoricalStrategyIds.GridBreakoutGuard) return await RunGrid(request, token);
+        if (request.StrategyId is HistoricalStrategyIds.Grid or HistoricalStrategyIds.GridResearch or HistoricalStrategyIds.GridBreakoutGuard or HistoricalStrategyIds.GridBreakoutGuardL4) return await RunGrid(request, token);
         if (request.StrategyId is not null && request.StrategyId != HistoricalStrategyIds.Ema) return BadRequest(new ApiMessage("Unsupported historical StrategyId."));
         if (!Mt5NativeTimeframes.IsSupported(request.Interval) || request.StartUtc >= request.EndUtc) return BadRequest(new ApiMessage("Use an MT5-native interval and a valid UTC date range. The 3d timeframe is not available for MT5 research."));
         var symbol = request.Symbol.Trim();
@@ -92,6 +92,7 @@ public static class HistoricalStrategyIds
 {
     public const string Ema = "EMA_TREND_V1";
     public const string Grid = Strategy.Grid.GridRangeSettings.StrategyId;
+    public const string GridBreakoutGuardL4 = Strategy.Grid.GridHistoricalStrategyProfile.BreakoutGuardL4StrategyId;
     public const string GridBreakoutGuard = Strategy.Grid.GridHistoricalStrategyProfile.BreakoutGuardStrategyId;
     public const string GridResearch = Strategy.Grid.GridHistoricalStrategyProfile.ResearchStrategyId;
 }

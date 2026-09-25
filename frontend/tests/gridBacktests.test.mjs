@@ -263,3 +263,39 @@ test('G4B3 strict download uses fixed route and filename and preserves source er
     await assert.rejects(api.downloadGridStrictGuardResearch(10), /telemetry-enabled GRID_RANGE_V1/)
   } finally { globalThis.fetch = savedFetch; globalThis.document = savedDocument }
 })
+
+test('G4B4 selector retains separate L3 and L4 research profiles', () => {
+  let state = 0
+  const react = { ...React, useState(initial) { return React.useState(state++ === 0 ? 'GRID_RANGE_BREAKOUT_GUARD_L4_RESEARCH_V1' : initial) } }
+  const { BacktestsPage } = loader(react)('src/pages/BacktestsPage.tsx')
+  const html = renderToStaticMarkup(React.createElement(BacktestsPage))
+  assert.match(html, /Grid Range Research — Breakout Guard/)
+  assert.match(html, /Grid Range Research — L4 Breakout Guard/)
+  assert.match(html, /RESEARCH ONLY/); assert.match(html, /After Level 4/)
+  assert.match(html, /2 consecutive active candles/)
+  assert.equal((html.match(/type="number"/g) ?? []).length, 1)
+})
+
+test('G4B4 API request sends only frozen identity and normal fields', async () => {
+  const saved = globalThis.fetch; const calls = []
+  globalThis.fetch = async (url, init) => { calls.push([url, init]); return new Response(JSON.stringify(url.includes('antiforgery') ? { token: 'test' } : {})) }
+  try {
+    const strategyId = 'GRID_RANGE_BREAKOUT_GUARD_L4_RESEARCH_V1'
+    assert.equal(form.isGridStrategy(strategyId), true)
+    const dates = form.backtestDates('TESTm', '3m', '2026-07-01', '2026-07-31')
+    await api.runGridBacktest(form.gridBacktestRequest(strategyId, dates, '1000'))
+    assert.deepEqual(JSON.parse(calls[1][1].body), { ...dates, strategyId, startingBalance: 1000 })
+  } finally { globalThis.fetch = saved }
+})
+
+test('G4B4 saved result shows L4 and hides both shadow actions', () => {
+  const { GridBacktestResult } = loader()('src/pages/GridBacktestResult.tsx')
+  const run = new Proxy({ strategyId: 'GRID_RANGE_BREAKOUT_GUARD_L4_RESEARCH_V1', levelCount: 5, symbol: 'TESTm', interval: '3m', requestedStartUtc: '2026-07-01', requestedEndUtc: '2026-07-31', accountCurrency: 'USD' }, { get: (o, key) => key in o ? o[key] : 0 })
+  const html = renderToStaticMarkup(React.createElement(GridBacktestResult, { detail: { run, baskets: [], cycles: [] }, busy: false, exportExcel() {}, exportGuardResearch() {}, exportStrictGuardResearch() {} }))
+  assert.match(html, /RESEARCH ONLY/); assert.match(html, /L4_ADX15_ADVERSE2/)
+  assert.match(html, /5 equal-lot levels/); assert.match(html, /stop level 6/)
+  assert.match(html, /Monitor from L4/); assert.match(html, /ADX increase ≥ 1.5/)
+  assert.match(html, /Consecutive adverse closes ≥ 2/); assert.match(html, /future cycles use updated equity/i)
+  assert.match(html, /Export Grid Excel/)
+  assert.doesNotMatch(html, /Export Guard Research|Export Strict Guard Research|L3_ADX15_ADVERSE2/)
+})

@@ -16,6 +16,7 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
         token.ThrowIfCancellationRequested();
         ValidateRequest(request, instrument);
         var profile = GridHistoricalStrategyProfile.Resolve(request.StrategyId);
+        var guard = GridHistoricalBreakoutGuard.Resolve(profile.GuardId);
         var settings = request.Settings ?? profile.Settings;
         request = request with { Settings = settings };
         var spec = instrument.Spec;
@@ -143,8 +144,8 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                 evidence = telemetry.Observe(bar, indicator, spec.PointSize, priorBidClose, locked,
                     maxBeforeBar, maxAfterBar, transition.NewFills.Count, transition.ExitReason);
             }
-            if (transition.ExitReason is null && profile.GuardId == GridBreakoutGuardRules.Id && evidence is not null
-                && GridBreakoutGuardRules.Matches(evidence.MaxFilledLevelAfterBar, evidence.AdxDeltaFromQualification, evidence.ConsecutiveAdverseCloses))
+            if (transition.ExitReason is null && guard is not null && evidence is not null
+                && guard.Matches(evidence.MaxFilledLevelAfterBar, evidence.AdxDeltaFromQualification, evidence.ConsecutiveAdverseCloses))
             {
                 var exit = bar.Close + (engine.Cycle!.Direction == GridBasketDirection.Short ? bar.SpreadPoints * spec.PointSize : 0m);
                 engine.CloseHistoricalResearchBreakoutGuard(bar.CloseTimeUtc, exit);

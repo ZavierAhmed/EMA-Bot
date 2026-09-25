@@ -20,8 +20,8 @@ internal static class GridGuardResearchSourceValidation
     public static void Validate(GridBacktestRun run)
     {
         if (run.Status != "Completed") throw new GridGuardResearchException("Grid breakout research requires a completed Grid run.");
-        if (run.StrategyId == GridHistoricalStrategyProfile.BreakoutGuardStrategyId)
-            throw new GridGuardResearchException("Grid guard-shadow research cannot use an already breakout-guarded historical run.");
+        if (run.StrategyId is not (GridRangeSettings.StrategyId or GridHistoricalStrategyProfile.ResearchStrategyId))
+            throw new GridGuardResearchException("Grid guard-shadow research requires an unguarded historical Grid profile; already breakout-guarded runs are not eligible.");
         GridHistoricalStrategyProfile profile;
         try { profile = GridHistoricalStrategyProfile.Resolve(run.StrategyId); }
         catch (ArgumentException) { throw new GridGuardResearchException("Grid breakout research requires an approved Grid historical profile."); }

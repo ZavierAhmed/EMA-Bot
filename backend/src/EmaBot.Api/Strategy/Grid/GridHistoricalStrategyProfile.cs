@@ -10,6 +10,9 @@ public sealed class GridHistoricalStrategyProfile
     public const string BreakoutGuardStrategyId = "GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1";
     public static GridHistoricalStrategyProfile ResearchBreakoutGuard { get; } = new(BreakoutGuardStrategyId, new(), GridBreakoutGuardRules.Id);
 
+    public const string BreakoutGuardL4StrategyId = "GRID_RANGE_BREAKOUT_GUARD_L4_RESEARCH_V1";
+    public static GridHistoricalStrategyProfile ResearchBreakoutGuardL4 { get; } = new(BreakoutGuardL4StrategyId, new(), GridBreakoutGuardL4Rules.Id);
+
     private GridHistoricalStrategyProfile(string strategyId, GridRangeSettings settings, string? guardId = null)
         => (StrategyId, Settings, GuardId) = (strategyId, settings, guardId);
     public string? GuardId { get; }
@@ -20,6 +23,7 @@ public sealed class GridHistoricalStrategyProfile
         GridRangeSettings.StrategyId => Baseline5Level,
         ResearchStrategyId => Research4Level,
         BreakoutGuardStrategyId => ResearchBreakoutGuard,
+        BreakoutGuardL4StrategyId => ResearchBreakoutGuardL4,
         _ => throw new ArgumentException("Unsupported historical Grid StrategyId.", nameof(strategyId))
     };
 }
