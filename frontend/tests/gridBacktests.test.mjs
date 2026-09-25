@@ -219,3 +219,47 @@ test('G4B2 saved result shows five-level real guard and hides shadow export', ()
   assert.match(html, /Export Grid Excel/)
   assert.doesNotMatch(html, /Export Guard Research|SCREENING ONLY|4 equal-lot levels/)
 })
+
+for (const [strategyId, guard, strict] of [['GRID_RANGE_V1', true, true], ['GRID_RANGE_4L_RESEARCH_V1', true, false], ['GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1', false, false]]) {
+  test(`G4B3 research actions match saved ${strategyId} eligibility`, () => {
+    const { GridBacktestResult } = loader()('src/pages/GridBacktestResult.tsx')
+    const run = new Proxy({ strategyId, levelCount: 5, symbol: 'TESTm', interval: '3m', requestedStartUtc: '2026-07-01', requestedEndUtc: '2026-07-31', accountCurrency: 'USD' }, { get: (o, key) => key in o ? o[key] : 0 })
+    const props = { detail: { run, baskets: [], cycles: [] }, busy: false, exportExcel() {}, exportGuardResearch() {}, exportStrictGuardResearch() {} }
+    const html = renderToStaticMarkup(React.createElement(GridBacktestResult, props))
+    assert.equal(html.includes('Export Guard Research'), guard)
+    assert.equal(html.includes('Export Strict Guard Research'), strict)
+    assert.match(html, /Export Grid Excel/)
+    assert.doesNotMatch(html, /<input|<select/)
+  })
+}
+
+test('G4B3 strict action calls its handler and respects busy state', () => {
+  const { GridBacktestResult } = loader()('src/pages/GridBacktestResult.tsx')
+  const run = new Proxy({ strategyId: 'GRID_RANGE_V1', requestedStartUtc: '2026-07-01', requestedEndUtc: '2026-07-31' }, { get: (o, key) => key in o ? o[key] : 0 })
+  let calls = 0
+  function find(node) {
+    if (!node || typeof node !== 'object') return undefined
+    if (node.type === 'button' && node.props.children === 'Export Strict Guard Research') return node
+    return React.Children.toArray(node.props?.children).map(find).find(Boolean)
+  }
+  for (const busy of [false, true]) {
+    const button = find(GridBacktestResult({ detail: { run, baskets: [], cycles: [] }, busy, exportExcel() {}, exportGuardResearch() {}, exportStrictGuardResearch() { calls++ } }))
+    assert.ok(button); assert.equal(button.props.disabled, busy)
+    if (!busy) button.props.onClick()
+  }
+  assert.equal(calls, 1)
+})
+
+test('G4B3 strict download uses fixed route and filename and preserves source errors', async () => {
+  const savedFetch = globalThis.fetch; const savedDocument = globalThis.document
+  let url; let filename; let fail = false
+  globalThis.fetch = async value => { url = value; return fail ? new Response(JSON.stringify({ message: 'Strict Grid guard research requires a telemetry-enabled GRID_RANGE_V1 backtest.' }), { status: 400 }) : new Response('workbook') }
+  globalThis.document = { createElement() { return { set href(value) {}, set download(value) { filename = value }, click() {} } } }
+  try {
+    await api.downloadGridStrictGuardResearch(10)
+    assert.equal(url, '/api/backtests/grid/10/research/strict-breakout-guards/export/excel')
+    assert.equal(filename, 'grid-strict-guard-research-10.xlsx')
+    fail = true
+    await assert.rejects(api.downloadGridStrictGuardResearch(10), /telemetry-enabled GRID_RANGE_V1/)
+  } finally { globalThis.fetch = savedFetch; globalThis.document = savedDocument }
+})

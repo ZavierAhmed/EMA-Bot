@@ -5,6 +5,13 @@ namespace EmaBot.Api.Services;
 public static class GridBreakoutGuardResearchExcelExport
 {
     public static byte[] Create(GridBreakoutGuardShadowResult result)
+        => BacktestExcelExport.Workbook(new BacktestExcelExport.Sheet[]
+        {
+            new("SUMMARY", Summary(result)), new("CANDIDATES", Rows(result.Candidates)),
+            new("BASKET_RESULTS", Rows(result.Baskets)), new("TRIGGERS", Rows(result.Baskets.Where(b => b.Triggered)))
+        });
+
+    internal static List<object?[]> Summary(GridBreakoutGuardShadowResult result)
     {
         var run = result.Source;
         var baskets = run.Cycles.SelectMany(c => c.Baskets).ToArray();
@@ -31,13 +38,9 @@ public static class GridBreakoutGuardResearchExcelExport
             new object?[] { "Native request counts", "Logical calculator calls (transport retries unchanged). Candidate calls count cache misses in catalog order; candidate unique requests may overlap. Summary counts are simulation-wide." },
             new object?[] { "TriggerLevel", "Candidate monitoring threshold; MaxFilledLevelAtTrigger is the observed deepest filled level." }
         };
-        return BacktestExcelExport.Workbook(new BacktestExcelExport.Sheet[]
-        {
-            new("SUMMARY", summary), new("CANDIDATES", Rows(result.Candidates)),
-            new("BASKET_RESULTS", Rows(result.Baskets)), new("TRIGGERS", Rows(result.Baskets.Where(b => b.Triggered)))
-        });
+        return summary;
     }
-    private static IEnumerable<object?[]> Rows<T>(IEnumerable<T> values)
+    internal static IEnumerable<object?[]> Rows<T>(IEnumerable<T> values)
     {
         var properties = typeof(T).GetProperties();
         yield return properties.Select(p => (object?)p.Name).ToArray();

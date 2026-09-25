@@ -8,6 +8,18 @@ namespace EmaBot.Api.Controllers;
 [ApiController, Authorize(Roles = AppRoles.Admin), Route("api/backtests/grid")]
 public sealed class GridBreakoutGuardResearchController(GridBreakoutGuardShadowSimulator simulator) : ControllerBase
 {
+    [HttpGet("{id:int}/research/strict-breakout-guards/export/excel")]
+    public async Task<IActionResult> ExportStrictExcel(int id, CancellationToken token)
+    {
+        if (Request.Query.Count != 0) return BadRequest(new ApiMessage("Strict Grid guard research uses a frozen server-owned catalog; query parameters are not accepted."));
+        try
+        {
+            var result = await simulator.SimulateStrictAsync(id, token);
+            return File(GridStrictBreakoutGuardResearchExcelExport.Create(result), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", $"grid-strict-guard-research-{id}.xlsx");
+        }
+        catch (GridGuardResearchException exception) { return StatusCode(exception.StatusCode, new ApiMessage(exception.Message)); }
+    }
+
     [HttpGet("{id:int}/research/breakout-guards/export/excel")]
     public async Task<IActionResult> ExportExcel(int id, CancellationToken token)
     {

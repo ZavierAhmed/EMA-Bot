@@ -135,6 +135,7 @@ export const getGridBacktests = () => request<import('./gridBacktestTypes').Grid
 export const getGridBacktest = (id: number) => request<import('./gridBacktestTypes').GridBacktestDetail>(`/api/backtests/grid/${id}`)
 export const runGridBacktest = (body: { strategyId: import('./gridBacktestTypes').GridStrategyId; symbol: string; interval: string; startUtc: string; endUtc: string; startingBalance: number }, signal?: AbortSignal) => protectedRequest<import('./gridBacktestTypes').GridBacktestDetail>('/api/backtests', 'POST', body, signal)
 export const deleteGridBacktest = (id: number) => protectedRequest<void>(`/api/backtests/grid/${id}`, 'DELETE')
+export async function downloadGridStrictGuardResearch(id: number) { await download(`/api/backtests/grid/${id}/research/strict-breakout-guards/export/excel`, `grid-strict-guard-research-${id}.xlsx`) }
 export async function downloadGridGuardResearch(id: number) { await download(`/api/backtests/grid/${id}/research/breakout-guards/export/excel`, `grid-breakout-guard-research-${id}.xlsx`) }
 export async function downloadGridBacktestExcel(id: number) { await download(`/api/backtests/grid/${id}/export/excel`, `grid-backtest-${id}.xlsx`) }
 export const getMt5HistoricalBacktestEconomicsPreview = (symbol: string) => request<Mt5HistoricalBacktestEconomicsPreview>(`/api/backtests/economics-preview?symbol=${encodeURIComponent(symbol)}`)

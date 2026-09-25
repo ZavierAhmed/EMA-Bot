@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import type { BacktestRun, BacktestRunSummary, MonitoredSymbol, Mt5HistoricalBacktestEconomicsPreview } from '../api'
 import { ApiError, downloadBacktestExcel, getBacktests, getMonitoredSymbols, getMt5HistoricalBacktestEconomicsPreview, runBacktest } from '../api'
-import { deleteGridBacktest, downloadGridBacktestExcel, downloadGridGuardResearch, getGridBacktest, getGridBacktests, runGridBacktest } from '../api'
+import { deleteGridBacktest, downloadGridBacktestExcel, downloadGridGuardResearch, downloadGridStrictGuardResearch, getGridBacktest, getGridBacktests, runGridBacktest } from '../api'
 import type { GridBacktestDetail, GridRun } from '../gridBacktestTypes'
 import { GridBacktestResult } from './GridBacktestResult'
 import { backtestDates, defaultBacktestStrategy, gridBacktestRequest, isGridStrategy } from '../backtestForm'
@@ -75,11 +75,12 @@ export function BacktestsPage() {
     }
   }
 
-  async function gridAction(id: number, action: 'open' | 'export' | 'research' | 'delete') {
+  async function gridAction(id: number, action: 'open' | 'export' | 'research' | 'strictResearch' | 'delete') {
     setGridBusyId(id); setError(null)
     try {
       if (action === 'open') { const detail = await getGridBacktest(id); setGridSelected(detail); setStrategy(detail.run.strategyId) }
       else if (action === 'export') await downloadGridBacktestExcel(id)
+      else if (action === 'strictResearch') await downloadGridStrictGuardResearch(id)
       else if (action === 'research') await downloadGridGuardResearch(id)
       else { await deleteGridBacktest(id); if (gridSelected?.run.id === id) setGridSelected(null); await refresh() }
     } catch (value) { setError(value instanceof Error ? value.message : 'Grid action failed.') }
@@ -104,7 +105,7 @@ export function BacktestsPage() {
     </form>
     {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
     {strategy === 'EMA_TREND_V1' && selected && <Result run={selected} exporting={exportingId === selected.id} exportExcel={exportExcel} />}
-    {isGridStrategy(strategy) && gridSelected && <GridBacktestResult detail={gridSelected} busy={gridBusyId === gridSelected.run.id} exportExcel={() => void gridAction(gridSelected.run.id, 'export')} exportGuardResearch={() => void gridAction(gridSelected.run.id, 'research')} />}
+    {isGridStrategy(strategy) && gridSelected && <GridBacktestResult detail={gridSelected} busy={gridBusyId === gridSelected.run.id} exportExcel={() => void gridAction(gridSelected.run.id, 'export')} exportGuardResearch={() => void gridAction(gridSelected.run.id, 'research')} exportStrictGuardResearch={() => void gridAction(gridSelected.run.id, 'strictResearch')} />}
     <section className="rounded-lg border border-slate-200 bg-white p-5"><h2 className="font-semibold">Recent Grid backtests</h2><div className="overflow-x-auto"><table className="mt-4 w-full text-left text-sm"><thead><tr><th>Strategy</th><th>Symbol / timeframe</th><th>Dates</th><th>Baskets</th><th>Net P/L</th><th>Actions</th></tr></thead><tbody>{gridRuns.map(run => <tr key={run.id} className="border-t"><td className="py-3">{run.strategyId}</td><td>{run.symbol} · {run.interval}</td><td>{run.requestedStartUtc.slice(0, 10)} – {run.requestedEndUtc.slice(0, 10)}</td><td>{run.basketCount}</td><td>{run.netPnl.toFixed(2)} {run.accountCurrency}</td><td className="space-x-2"><button disabled={gridBusyId !== null} onClick={() => void gridAction(run.id, 'open')}>Open</button><button disabled={gridBusyId !== null} onClick={() => void gridAction(run.id, 'export')}>Export Excel</button><button disabled={gridBusyId !== null} onClick={() => { if (window.confirm('Delete this saved Grid backtest?')) void gridAction(run.id, 'delete') }}>Delete</button></td></tr>)}</tbody></table></div>{gridRuns.length === 0 && <p className="mt-3 text-sm text-slate-500">No saved Grid runs.</p>}</section>
     <section className="rounded-lg border border-slate-200 bg-white p-5">
       <h2 className="font-semibold">Recent EMA Trend backtests</h2>
