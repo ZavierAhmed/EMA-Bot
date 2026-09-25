@@ -143,3 +143,43 @@ test('G4A mixed recent history preserves both explicit identities', () => {
   const html = renderToStaticMarkup(React.createElement(BacktestsPage))
   for (const row of rows) assert.ok(html.includes(`<td class="py-3">${row.strategyId}</td>`))
 })
+
+test('G4B1 saved Grid result exposes guard research action with screening label', () => {
+  const { GridBacktestResult } = loader()('src/pages/GridBacktestResult.tsx')
+  const run = new Proxy({ id: 7, strategyId: 'GRID_RANGE_V1', levelCount: 5, symbol: 'TESTm', interval: '3m', requestedStartUtc: '2026-07-01', requestedEndUtc: '2026-07-31', accountCurrency: 'USD' }, { get: (o, key) => key in o ? o[key] : 0 })
+  const html = renderToStaticMarkup(React.createElement(GridBacktestResult, { detail: { run, baskets: [], cycles: [] }, busy: false, exportExcel() {}, exportGuardResearch() {} }))
+  assert.match(html, />Export Guard Research<\/button>/)
+  assert.match(html, /SCREENING ONLY/)
+  assert.match(html, /future sizing, qualification and later baskets are not rerun/)
+  assert.doesNotMatch(html, /<input|<select/)
+})
+
+test('G4B1 export uses fixed endpoint and preserves safe old-run error', async () => {
+  const calls = []; const savedFetch = globalThis.fetch; const savedDocument = globalThis.document
+  let fail = false; let downloaded
+  globalThis.fetch = async url => { calls.push(url); return fail ? new Response(JSON.stringify({ message: 'Grid breakout research requires a telemetry-enabled Grid backtest.' }), { status: 400 }) : new Response('test workbook') }
+  globalThis.document = { createElement: () => ({ click() { downloaded = this.download } }) }
+  try {
+    await api.downloadGridGuardResearch(7)
+    assert.equal(downloaded, 'grid-breakout-guard-research-7.xlsx')
+    assert.deepEqual(calls, ['/api/backtests/grid/7/research/breakout-guards/export/excel'])
+    fail = true
+    await assert.rejects(api.downloadGridGuardResearch(8), /requires a telemetry-enabled Grid backtest/)
+  } finally { globalThis.fetch = savedFetch; globalThis.document = savedDocument }
+})
+
+test('G4B1 guard research action calls its handler and is disabled while exporting', () => {
+  const { GridBacktestResult } = loader()('src/pages/GridBacktestResult.tsx')
+  const run = new Proxy({ strategyId: 'GRID_RANGE_4L_RESEARCH_V1', levelCount: 4, symbol: 'TESTm', interval: '3m', requestedStartUtc: '2026-07-01', requestedEndUtc: '2026-07-31', accountCurrency: 'USD' }, { get: (o, key) => key in o ? o[key] : 0 })
+  let called = 0
+  const tree = GridBacktestResult({ detail: { run, baskets: [], cycles: [] }, busy: true, exportExcel() {}, exportGuardResearch() { called++ } })
+  const find = element => {
+    if (!element || typeof element !== 'object') return null
+    if (element.type === 'button' && element.props.children === 'Export Guard Research') return element
+    for (const child of React.Children.toArray(element.props?.children)) { const result = find(child); if (result) return result }
+    return null
+  }
+  const button = find(tree)
+  assert.ok(button); assert.equal(button.props.disabled, true)
+  button.props.onClick(); assert.equal(called, 1)
+})

@@ -98,6 +98,7 @@ builder.Services.AddSingleton<Mt5HistoricalBacktestEngine>();
 builder.Services.AddSingleton<GridHistoricalBacktestEngine>();
 builder.Services.AddSingleton<IGridHistoricalBarSource, GridHistoricalBarSource>();
 builder.Services.AddScoped<GridBacktestService>();
+builder.Services.AddScoped<GridBreakoutGuardShadowSimulator>();
 // New submitted Backtests are explicitly MT5-native; BacktestEngine remains DI-visible for the legacy optimizer.
 builder.Services.AddScoped<BacktestService>(provider => new BacktestService(
     provider.GetRequiredService<EmaBotDbContext>(), provider.GetRequiredService<Mt5BridgeHistoricalMarketDataProvider>(), provider.GetRequiredService<TradingSettingsService>(),
