@@ -56,6 +56,7 @@ public sealed record GridHistoricalBacktestResult(GridHistoricalBacktestRequest 
     IReadOnlyList<GridHistoricalCycleSnapshot> Cycles, GridHistoricalDiagnostics Diagnostics,
     IReadOnlyList<GridHistoricalBasketEvent> Events, int EconomicsCallCount, long EconomicsElapsedMilliseconds)
 {
+    public IReadOnlyList<GridHistoricalTelemetry> Telemetry { get; init; } = [];
     public string StrategyId => Request.StrategyId;
     public string Symbol => Request.Symbol;
     public string Interval => Request.Interval;

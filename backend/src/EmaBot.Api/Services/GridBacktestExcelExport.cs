@@ -9,13 +9,15 @@ public static class GridBacktestExcelExport
 {
     public static async Task<BacktestExcelWorkbook?> CreateAsync(EmaBotDbContext database, int id, CancellationToken token)
     {
-        var run = await GridBacktestService.Graph(database).AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, token);
+        var run = await GridBacktestService.Graph(database).Include(r => r.Cycles).ThenInclude(c => c.Telemetry).AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, token);
         if (run is null) return null;
         var dto = GridBacktestResponses.ToDetail(run);
         var summary = new List<object?[]>
         {
             new object?[] { "Strategy", run.StrategyId }, new object?[] { "Market Data", "MT5 / Exness" },
             new object?[] { "Monetary units", run.AccountCurrency },
+            new object?[] { "TelemetryRows", run.Cycles.Sum(c => c.Telemetry.Count) },
+            new object?[] { "ActiveCyclesWithTelemetry", run.Cycles.Count(c => c.Telemetry.Count > 0) },
             new object?[] { "Frozen rules", $"{run.LevelCount} equal-lot levels; non-martingale; {run.GridBasketRiskPercent}% TOTAL basket price-risk; {run.RangeLookback}-bar range; ATR{run.AtrPeriod} x {run.AtrSpacingMultiplier}; ADX{run.AdxPeriod} <= {run.AdxThreshold}; anchor TP; emergency stop one spacing beyond deepest configured level (stop level {run.LevelCount + 1}); {run.CooldownBars}-bar cooldown" },
             new object?[] { "Ask reconstruction", "Ask = Bid + captured SpreadPoints * PointSize; spread is not charged again" },
             new object?[] { "NULL semantics", "Blank cell = unavailable/not calculated; numeric 0 = measured zero" },
@@ -36,7 +38,22 @@ public static class GridBacktestExcelExport
         var sheets = new BacktestExcelExport.Sheet[]
         {
             new("SUMMARY", summary), new("CYCLES", cycleRows), new("BASKETS", Rows(dto.Baskets.Select(b => b.Basket))),
-            new("LEGS", Rows(dto.Baskets.SelectMany(b => b.Legs))), new("EVENTS", Rows(dto.Events)), new("DIAGNOSTICS", diagnostics)
+            new("LEGS", Rows(dto.Baskets.SelectMany(b => b.Legs))), new("EVENTS", Rows(dto.Events)), new("DIAGNOSTICS", diagnostics),
+            new("TELEMETRY", Rows(run.Cycles.OrderBy(c => c.Sequence).SelectMany(c => c.Telemetry.OrderBy(t => t.Sequence).Select(t => new
+            {
+                CycleId = c.Id, t.Sequence, t.TimeUtc, t.Direction,
+                t.BidOpen, t.BidHigh, t.BidLow, t.BidClose, t.SpreadPoints, t.SpreadPrice,
+                t.CurrentAtr, t.CurrentAdx, QualificationAtr = c.Atr, QualificationAdx = c.Adx,
+                t.AdxDeltaFromQualification, t.AtrRatioToQualification,
+                FrozenRangeHigh = c.RangeHigh, FrozenRangeLow = c.RangeLow, t.CurrentRangeHigh, t.CurrentRangeLow,
+                c.Anchor, c.Spacing, t.FrozenBoundaryPrice,
+                t.DistanceFromAnchorSpacings, t.AdverseDistanceFromAnchorSpacings, t.BreakoutDistanceSpacings,
+                t.CandleBody, t.CandleTrueRange, t.CandleBodyAtrRatio, t.CandleTrueRangeAtrRatio,
+                t.CloseBeyondFrozenBoundary, t.AdverseExtremeBeyondFrozenBoundary,
+                t.ConsecutiveAdverseCloses, t.ConsecutiveClosesBeyondFrozenBoundary,
+                t.MaxFilledLevelBeforeBar, t.MaxFilledLevelAfterBar, t.NewFillCount,
+                t.DeepestConfiguredLevel, t.DeepestLevelFilled, t.ExitReasonThisBar
+            }))))
         };
         return new(run.Symbol, run.Interval, BacktestExcelExport.Workbook(sheets));
     }

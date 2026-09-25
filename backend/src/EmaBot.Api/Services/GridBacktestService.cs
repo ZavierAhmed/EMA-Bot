@@ -74,7 +74,7 @@ public sealed class GridBacktestService(EmaBotDbContext database, IGridHistorica
     public Task<GridBacktestRun?> GetAsync(int id, CancellationToken token) => Graph(database).AsNoTracking().SingleOrDefaultAsync(r => r.Id == id, token);
     public async Task<bool> DeleteAsync(int id, CancellationToken token)
     {
-        var run = await Graph(database).SingleOrDefaultAsync(r => r.Id == id, token);
+        var run = await Graph(database).Include(r => r.Cycles).ThenInclude(c => c.Telemetry).SingleOrDefaultAsync(r => r.Id == id, token);
         if (run is null) return false;
         database.GridBacktestRuns.Remove(run); await database.SaveChangesAsync(token); return true;
     }

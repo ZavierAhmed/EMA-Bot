@@ -100,6 +100,7 @@ public sealed class GridBacktestCycle
     public string AllowedDirections { get; set; } = string.Empty;
     public List<GridBacktestPlannedLevel> PlannedLevels { get; set; } = [];
     public List<GridBacktestBasket> Baskets { get; set; } = [];
+    public List<GridBacktestTelemetry> Telemetry { get; set; } = [];
 }
 
 public sealed class GridBacktestPlannedLevel

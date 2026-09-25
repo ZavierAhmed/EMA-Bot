@@ -32,6 +32,8 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
         var economics = new GridHistoricalEconomics(calculator, request.AccountCurrency);
         var engine = new GridRangeEngine(request.Symbol, new(economics));
         var window = new GridRangeIndicatorWindow();
+        var telemetry = new GridDeepTelemetryObserver();
+        decimal? previousBidClose = null;
         var baskets = new List<GridHistoricalBasket>();
         var cycles = new List<GridHistoricalCycleSnapshot>();
         var entries = new List<GridHistoricalDiagnostic>();
@@ -84,6 +86,7 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
         {
             token.ThrowIfCancellationRequested();
             var indicator = window.Append(bar.ToCandle());
+            var priorBidClose = previousBidClose; previousBidClose = bar.Close;
             // Whole bars only in reporting interval. Earlier supplied bars warm the
             // indicators but cannot qualify/enter a cycle. No partial-bar inference.
             if (request.RequestedStartUtc is { } start && bar.OpenTimeUtc < start) { warmup++; continue; }
@@ -93,6 +96,9 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                 if (modeBlocked++ == 0) entries.Add(new(bar.CloseTimeUtc, "TradeModeBlocked", Detail: instrument.TradeMode.ToString()));
                 continue;
             }
+            // Capture transitions without feeding any observer value into the engine.
+            var closedBeforeBar = engine.Cycle?.ExitReason is not null;
+            var maxBeforeBar = engine.Cycle?.Levels.Where(l => l.FillTime is not null).Select(l => l.Number).DefaultIfEmpty(0).Max() ?? 0;
             var transition = engine.ProcessBar(new(bar.ToCandle(), bar.SpreadPoints, spec.PointSize));
             if (transition.Diagnostic == GridCycleDiagnostics.AmbiguousFirstSide)
             {
@@ -125,6 +131,13 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                     fill.Lots * request.PaperCommissionPerLotPerSide, 0m, 0m));
                 Event(new(bar.CloseTimeUtc, GridHistoricalEventType.Fill, fill.Number, fill.Price));
             }
+            if (!closedBeforeBar && engine.Cycle is { Direction: { } locked } observed
+                && observed.Levels.Any(l => l.FillTime is not null))
+            {
+                var maxAfterBar = observed.Levels.Where(l => l.FillTime is not null).Max(l => l.Number);
+                telemetry.Observe(bar, indicator, spec.PointSize, priorBidClose, locked,
+                    maxBeforeBar, maxAfterBar, transition.NewFills.Count, transition.ExitReason);
+            }
             if (transition.ExitReason is { } reason)
                 await CloseAsync(reason == GridExitReason.TakeProfit ? GridHistoricalExitReason.TakeProfit : GridHistoricalExitReason.EmergencyStop,
                     engine.Cycle!.ExitPrice!.Value, bar);
@@ -154,6 +167,7 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
             snapshot = new(accepted.Snapshot, accepted.Anchor, accepted.Spacing, accepted.LongStop, accepted.ShortStop,
                 settings.GridBasketRiskPercent, balance, accepted.Sizing, Array.AsReadOnly(plannedLevels));
             cycles.Add(snapshot); cycleEvents = []; legs = [];
+            telemetry.StartCycle(snapshot, settings.LevelCount);
             Event(new(bar.CloseTimeUtc, GridHistoricalEventType.Qualified));
         }
         if (last is not null && engine.Cycle is { ExitReason: null } open)
@@ -175,7 +189,7 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
         token.ThrowIfCancellationRequested();
         return new(request, instrument, first?.OpenTimeUtc, last?.CloseTimeUtc, count, warmup, balance, drawdown,
             baskets.AsReadOnly(), cycles.AsReadOnly(), new(qualified, rejected, ambiguous, noFill, modeBlocked, entries.AsReadOnly()),
-            events.AsReadOnly(), economics.Calls, economics.ElapsedMilliseconds);
+            events.AsReadOnly(), economics.Calls, economics.ElapsedMilliseconds) { Telemetry = telemetry.Rows };
     }
 
     private static void ValidateRequest(GridHistoricalBacktestRequest request, InstrumentCatalogItem instrument)

@@ -49,6 +49,43 @@ public static class GridBacktestPersistence
                     RequiredMargin = l.RequiredMargin, Allowed = l.Allowed }).ToList() };
             run.Cycles.Add(row); byTime.Add(i.Time, row);
         }
+        foreach (var t in result.Telemetry)
+            byTime[t.CycleQualificationTimeUtc].Telemetry.Add(new()
+            {
+                Sequence = t.Sequence,
+                TimeUtc = t.TimeUtc,
+                Direction = t.Direction,
+                BidOpen = t.BidOpen,
+                BidHigh = t.BidHigh,
+                BidLow = t.BidLow,
+                BidClose = t.BidClose,
+                SpreadPoints = t.SpreadPoints,
+                SpreadPrice = t.SpreadPrice,
+                CurrentAtr = t.CurrentAtr,
+                CurrentAdx = t.CurrentAdx,
+                CurrentRangeHigh = t.CurrentRangeHigh,
+                CurrentRangeLow = t.CurrentRangeLow,
+                DistanceFromAnchorSpacings = t.DistanceFromAnchorSpacings,
+                AdverseDistanceFromAnchorSpacings = t.AdverseDistanceFromAnchorSpacings,
+                AdxDeltaFromQualification = t.AdxDeltaFromQualification,
+                AtrRatioToQualification = t.AtrRatioToQualification,
+                CandleBody = t.CandleBody,
+                CandleTrueRange = t.CandleTrueRange,
+                CandleBodyAtrRatio = t.CandleBodyAtrRatio,
+                CandleTrueRangeAtrRatio = t.CandleTrueRangeAtrRatio,
+                FrozenBoundaryPrice = t.FrozenBoundaryPrice,
+                CloseBeyondFrozenBoundary = t.CloseBeyondFrozenBoundary,
+                AdverseExtremeBeyondFrozenBoundary = t.AdverseExtremeBeyondFrozenBoundary,
+                BreakoutDistanceSpacings = t.BreakoutDistanceSpacings,
+                ConsecutiveAdverseCloses = t.ConsecutiveAdverseCloses,
+                ConsecutiveClosesBeyondFrozenBoundary = t.ConsecutiveClosesBeyondFrozenBoundary,
+                MaxFilledLevelBeforeBar = t.MaxFilledLevelBeforeBar,
+                MaxFilledLevelAfterBar = t.MaxFilledLevelAfterBar,
+                NewFillCount = t.NewFillCount,
+                DeepestConfiguredLevel = t.DeepestConfiguredLevel,
+                DeepestLevelFilled = t.DeepestLevelFilled,
+                ExitReasonThisBar = t.ExitReasonThisBar,
+            });
         foreach (var b in result.Baskets)
         {
             var cycle = byTime[b.Cycle.Indicators.Time];

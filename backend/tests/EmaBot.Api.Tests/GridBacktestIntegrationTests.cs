@@ -97,7 +97,7 @@ public sealed class GridBacktestIntegrationTests
         await using var db = Database(); await Seed(db); var native = new Native { Failure = failure };
         var action = (await Controller(db, native).Run(Request(), default)).Result;
         Assert.Equal(503, Assert.IsType<ObjectResult>(action).StatusCode);
-        Assert.Empty(db.GridBacktestRuns); Assert.Empty(db.Set<GridBacktestCycle>()); Assert.Empty(db.Set<GridBacktestLeg>());
+        Assert.Empty(db.GridBacktestRuns); Assert.Empty(db.Set<GridBacktestCycle>()); Assert.Empty(db.Set<GridBacktestLeg>()); Assert.Empty(db.Set<GridBacktestTelemetry>());
     }
 
     [Theory]
@@ -131,7 +131,7 @@ public sealed class GridBacktestIntegrationTests
     }
 
     [Fact]
-    public async Task ExportUsesOnlyPersistedDataAndPreservesNullZeroAndSixSheets()
+    public async Task ExportUsesOnlyPersistedDataAndPreservesNullZeroAndSevenSheets()
     {
         await using var db = Database(); await Seed(db); var native = new Native { Mode = InstrumentTradeMode.LongOnly };
         var run = await Service(db, native).RunAsync("TESTm", "3m", Start, End, 1000m, default);
@@ -141,7 +141,7 @@ public sealed class GridBacktestIntegrationTests
         using var zip = new ZipArchive(new MemoryStream(workbook.Bytes));
         static string Read(ZipArchive zip, string name) { using var reader = new StreamReader(zip.GetEntry(name)!.Open()); return reader.ReadToEnd(); }
         var names = XDocument.Parse(Read(zip, "xl/workbook.xml")).Descendants().Where(e => e.Name.LocalName == "sheet").Select(e => e.Attribute("name")!.Value);
-        Assert.Equal(new[] { "SUMMARY", "CYCLES", "BASKETS", "LEGS", "EVENTS", "DIAGNOSTICS" }, names);
+        Assert.Equal(new[] { "SUMMARY", "CYCLES", "BASKETS", "LEGS", "EVENTS", "DIAGNOSTICS", "TELEMETRY" }, names);
         var summary = Read(zip, "xl/worksheets/sheet1.xml");
         Assert.Contains("GRID_RANGE_V1", summary); Assert.Contains("USD", summary); Assert.DoesNotContain("USDT", summary);
         Assert.DoesNotContain("FeePercentPerSide", summary); Assert.Contains("TOTAL basket", summary);
@@ -323,6 +323,35 @@ public sealed class GridBacktestIntegrationTests
     public void G4APublicRequestHasNoRawStrategyParameters()
         => Assert.Equal(new[] { "Symbol", "Interval", "StartUtc", "EndUtc", "StrategyId", "StartingBalance" },
             typeof(BacktestRequest).GetProperties().Select(p => p.Name));
+
+    [Theory]
+    [InlineData("GRID_RANGE_V1")] [InlineData("GRID_RANGE_4L_RESEARCH_V1")]
+    public async Task G4B0ServiceSavesTelemetryInSameSingleGraphSave(string strategyId)
+    {
+        var saves = new TelemetrySaveCounter();
+        await using var db = new EmaBotDbContext(new DbContextOptionsBuilder<EmaBotDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString()).AddInterceptors(saves).Options);
+        await Seed(db); var native = new Native();
+        var run = await Service(db, native).RunAsync("TESTm", "3m", Start, End, 1000m, default, strategyId);
+        Assert.Equal(2, saves.Calls); // Seed plus exactly one complete run graph.
+        Assert.Equal(2, saves.TelemetryRowsInLastSave);
+        Assert.Equal(2, await db.Set<GridBacktestTelemetry>().CountAsync());
+        Assert.All(await db.Set<GridBacktestTelemetry>().ToListAsync(), t => Assert.Equal(run.Cycles.Single().Id, t.GridBacktestCycleId));
+    }
+
+    private sealed class TelemetrySaveCounter : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public int Calls { get; private set; }
+        public int TelemetryRowsInLastSave { get; private set; }
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            Microsoft.EntityFrameworkCore.Diagnostics.DbContextEventData data,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result, CancellationToken token = default)
+        {
+            Calls++;
+            TelemetryRowsInLastSave = data.Context!.ChangeTracker.Entries<GridBacktestTelemetry>().Count(e => e.State == EntityState.Added);
+            return ValueTask.FromResult(result);
+        }
+    }
 
     private sealed class Native : IGridHistoricalBarSource, IInstrumentCatalogProvider, IMt5AccountReader, IMt5TradeCalculator
     {

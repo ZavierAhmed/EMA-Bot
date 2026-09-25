@@ -8,7 +8,7 @@ internal static class GridBacktestModelConfiguration
     public static void Configure(ModelBuilder builder)
     {
         var types = new[] { typeof(GridBacktestRun), typeof(GridBacktestCycle), typeof(GridBacktestPlannedLevel),
-            typeof(GridBacktestBasket), typeof(GridBacktestLeg), typeof(GridBacktestEvent), typeof(GridBacktestDiagnostic) };
+            typeof(GridBacktestBasket), typeof(GridBacktestLeg), typeof(GridBacktestEvent), typeof(GridBacktestDiagnostic), typeof(GridBacktestTelemetry) };
         foreach (var type in types)
         {
             var entity = builder.Entity(type).ToTable(type.Name + "s");
@@ -20,6 +20,10 @@ internal static class GridBacktestModelConfiguration
                     entity.Property(property.Name).HasMaxLength(property.Name is "Detail" or "FailureMessage" ? 1024 : 128);
             }
         }
+        builder.Entity<GridBacktestTelemetry>().ToTable("GridBacktestTelemetry");
+        builder.Entity<GridBacktestCycle>().HasMany(c => c.Telemetry).WithOne().HasForeignKey(t => t.GridBacktestCycleId).OnDelete(DeleteBehavior.Cascade);
+        builder.Entity<GridBacktestTelemetry>().HasIndex(t => new { t.GridBacktestCycleId, t.Sequence }).IsUnique();
+        builder.Entity<GridBacktestTelemetry>().HasIndex(t => new { t.GridBacktestCycleId, t.TimeUtc }).IsUnique();
         builder.Entity<GridBacktestRun>().Property(r => r.Symbol).UseCollation("utf8mb4_bin");
         builder.Entity<GridBacktestRun>().HasIndex(r => r.CreatedAtUtc);
         builder.Entity<GridBacktestRun>().HasMany(r => r.Cycles).WithOne().HasForeignKey(c => c.GridBacktestRunId).OnDelete(DeleteBehavior.Cascade);
