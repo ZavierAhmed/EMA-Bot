@@ -1,7 +1,7 @@
 import type { GridStrategyId } from './gridBacktestTypes'
 
 export function isGridStrategy(value: string): value is GridStrategyId {
-  return value === 'GRID_RANGE_V1' || value === 'GRID_RANGE_4L_RESEARCH_V1'
+  return value === 'GRID_RANGE_V1' || value === 'GRID_RANGE_4L_RESEARCH_V1' || value === 'GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1'
 }
 export function gridBacktestRequest(strategyId: GridStrategyId, dates: ReturnType<typeof backtestDates>, balance: string) {
   return { ...dates, strategyId, startingBalance: gridStartingBalance(balance) }

@@ -8,7 +8,7 @@ public sealed record GridHistoricalBacktestRequest(string Symbol, string Interva
     string AccountCurrency, decimal PaperCommissionPerLotPerSide, GridRangeSettings? Settings = null,
     DateTimeOffset? RequestedStartUtc = null, DateTimeOffset? RequestedEndUtc = null,
     string StrategyId = GridRangeSettings.StrategyId);
-public enum GridHistoricalExitReason { TakeProfit, EmergencyStop, EndOfData }
+public enum GridHistoricalExitReason { TakeProfit, EmergencyStop, EndOfData, BreakoutGuard }
 public enum GridHistoricalEventType { Qualified, Fill, Exit, AmbiguousFirstSide, CanceledWithoutFills, Rejected }
 public sealed record GridHistoricalBasketEvent(DateTimeOffset Time, GridHistoricalEventType Type,
     int? Level = null, decimal? ExecutablePrice = null, string? Detail = null);

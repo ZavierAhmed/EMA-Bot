@@ -52,6 +52,24 @@ public sealed class GridRangeEngine
         finally { gate.Release(); }
     }
 
+    // Only historical research orchestration may close the current completed bar.
+    internal void CloseHistoricalResearchBreakoutGuard(DateTimeOffset time, decimal price)
+    {
+        gate.Wait();
+        try
+        {
+            if (Cycle is not { ExitReason: null, Direction: not null } cycle
+                || !cycle.Levels.Any(l => l.Status == GridLevelStatus.Filled) || time != lastBarTime || price <= 0m)
+                throw new InvalidOperationException("A guard exit requires the current active locked historical basket.");
+            cycle.ExitReason = GridExitReason.BreakoutGuard;
+            cycle.ExitTime = time; cycle.ExitPrice = price;
+            cycle.Levels = Array.AsReadOnly(cycle.Levels.Select(l => l with
+                { Status = l.Status == GridLevelStatus.Filled ? GridLevelStatus.Closed : GridLevelStatus.Canceled }).ToArray());
+            CooldownRemaining = cycle.Settings.CooldownBars;
+        }
+        finally { gate.Release(); }
+    }
+
     // Feed completed bars exactly once, in chronological order. Duplicate bars do
     // not consume cooldown. Three bars after closure are blocked; the next may qualify.
     public GridBarResult ProcessBar(GridHistoricalBar bar)

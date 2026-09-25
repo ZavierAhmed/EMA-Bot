@@ -1,4 +1,5 @@
 using EmaBot.Api.Controllers;
+using EmaBot.Api.Strategy.Grid;
 using EmaBot.Api.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -23,6 +24,16 @@ public static class GridBacktestExcelExport
             new object?[] { "NULL semantics", "Blank cell = unavailable/not calculated; numeric 0 = measured zero" },
             new object?[] { "Risk definition", "Commission excluded from initial price-risk; entry and exit commission included in net P/L" }
         };
+        if (run.StrategyId == GridHistoricalStrategyProfile.BreakoutGuardStrategyId)
+            summary.AddRange(new object?[][]
+            {
+                ["Research", "HISTORICAL RESEARCH ONLY; not approved for Paper/Demo/Live"],
+                ["Breakout guard", GridBreakoutGuardRules.Id],
+                ["Monitor from level", GridBreakoutGuardRules.MinimumFilledLevel],
+                ["Minimum ADX increase", GridBreakoutGuardRules.MinimumAdxDelta],
+                ["Minimum consecutive adverse closes", GridBreakoutGuardRules.MinimumConsecutiveAdverseCloses],
+                ["BreakoutGuardExits", run.Cycles.SelectMany(c => c.Baskets).Count(b => b.ExitReason == "BreakoutGuard")]
+            });
         summary.AddRange(typeof(GridRunResponse).GetProperties().Select(p => new object?[] { p.Name, p.GetValue(dto.Run) }));
         var cycleRows = Rows(dto.Cycles.Select(c => c.Cycle)).ToList();
         // Preserve all configured frozen planned prices without replacing cycle rows with legs.
@@ -35,10 +46,23 @@ public static class GridBacktestExcelExport
         var diagnostics = Rows(dto.Diagnostics).ToList();
         foreach (var e in dto.Events.Where(e => e.Type == "AmbiguousFirstSide"))
             diagnostics.Add(new object?[] { null, run.Id, e.Sequence, e.Time, e.Type, e.Type, null, null, null, "OHLC cannot establish first side; no fill.", null, null, null });
+        var legRows = Rows(dto.Baskets.SelectMany(b => b.Legs)).ToList();
+        if (run.StrategyId == GridHistoricalStrategyProfile.BreakoutGuardStrategyId)
+        {
+            // Guarded research legs expose their basket exit without changing legacy exports.
+            legRows[0] = legRows[0].Concat(new object?[] { "ExitReason", "ExitTimeUtc", "ExitPrice" }).ToArray();
+            var index = 1;
+            foreach (var basket in dto.Baskets)
+            foreach (var leg in basket.Legs)
+            {
+                legRows[index] = legRows[index].Concat(new object?[] { basket.Basket.ExitReason, basket.Basket.ExitTimeUtc, basket.Basket.ExitPrice }).ToArray();
+                index++;
+            }
+        }
         var sheets = new BacktestExcelExport.Sheet[]
         {
             new("SUMMARY", summary), new("CYCLES", cycleRows), new("BASKETS", Rows(dto.Baskets.Select(b => b.Basket))),
-            new("LEGS", Rows(dto.Baskets.SelectMany(b => b.Legs))), new("EVENTS", Rows(dto.Events)), new("DIAGNOSTICS", diagnostics),
+            new("LEGS", legRows), new("EVENTS", Rows(dto.Events)), new("DIAGNOSTICS", diagnostics),
             new("TELEMETRY", Rows(run.Cycles.OrderBy(c => c.Sequence).SelectMany(c => c.Telemetry.OrderBy(t => t.Sequence).Select(t => new
             {
                 CycleId = c.Id, t.Sequence, t.TimeUtc, t.Direction,

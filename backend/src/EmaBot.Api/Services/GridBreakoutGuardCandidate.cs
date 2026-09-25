@@ -1,4 +1,5 @@
 using EmaBot.Api.Models;
+using EmaBot.Api.Strategy.Grid;
 
 namespace EmaBot.Api.Services;
 
@@ -23,7 +24,7 @@ public sealed class GridBreakoutGuardCandidate
         new GridBreakoutGuardCandidate("L3_ADX15_TR15", "AdxDeltaFromQualification >= 1.5 AND CandleTrueRangeAtrRatio >= 1.5", 3,
             t => t.AdxDeltaFromQualification >= 1.5m && t.CandleTrueRangeAtrRatio >= 1.5m),
         new GridBreakoutGuardCandidate("L3_ADX15_ADVERSE2", "AdxDeltaFromQualification >= 1.5 AND ConsecutiveAdverseCloses >= 2", 3,
-            t => t.AdxDeltaFromQualification >= 1.5m && t.ConsecutiveAdverseCloses >= 2),
+            t => GridBreakoutGuardRules.Matches(t.MaxFilledLevelAfterBar, t.AdxDeltaFromQualification, t.ConsecutiveAdverseCloses)),
         new GridBreakoutGuardCandidate("L3_COMPOSITE", "CloseBeyondFrozenBoundary OR (AdxDeltaFromQualification >= 1.5 AND CandleTrueRangeAtrRatio >= 1.5)", 3, Composite),
         new GridBreakoutGuardCandidate("L2_COMPOSITE", "CloseBeyondFrozenBoundary OR (AdxDeltaFromQualification >= 1.5 AND CandleTrueRangeAtrRatio >= 1.5)", 2, Composite)
     });

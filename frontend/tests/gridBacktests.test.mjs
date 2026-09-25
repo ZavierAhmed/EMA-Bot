@@ -183,3 +183,39 @@ test('G4B1 guard research action calls its handler and is disabled while exporti
   assert.ok(button); assert.equal(button.props.disabled, true)
   button.props.onClick(); assert.equal(called, 1)
 })
+
+test('G4B2 selection explains frozen real guard without editable thresholds', () => {
+  let state = 0
+  const react = { ...React, useState(initial) { return React.useState(state++ === 0 ? 'GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1' : initial) } }
+  const { BacktestsPage } = loader(react)('src/pages/BacktestsPage.tsx')
+  const html = renderToStaticMarkup(React.createElement(BacktestsPage))
+  assert.match(html, /Grid Range Research — Breakout Guard/)
+  assert.match(html, /RESEARCH ONLY/)
+  assert.match(html, /ADX has risen by at least 1.5/)
+  assert.match(html, /2 consecutive candles/)
+  assert.equal((html.match(/type="number"/g) ?? []).length, 1)
+})
+
+test('G4B2 request carries only frozen strategy identity and normal fields', async () => {
+  const saved = globalThis.fetch; const calls = []
+  globalThis.fetch = async (url, init) => { calls.push([url, init]); return new Response(JSON.stringify(url.includes('antiforgery') ? { token: 'test' } : {})) }
+  try {
+    const id = 'GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1'
+    assert.equal(form.isGridStrategy(id), true)
+    const dates = form.backtestDates('TESTm', '3m', '2026-07-01', '2026-07-31')
+    await api.runGridBacktest(form.gridBacktestRequest(id, dates, '1000'))
+    assert.deepEqual(JSON.parse(calls[1][1].body), { ...dates, strategyId: id, startingBalance: 1000 })
+  } finally { globalThis.fetch = saved }
+})
+
+test('G4B2 saved result shows five-level real guard and hides shadow export', () => {
+  const { GridBacktestResult } = loader()('src/pages/GridBacktestResult.tsx')
+  const run = new Proxy({ strategyId: 'GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1', levelCount: 5, symbol: 'TESTm', interval: '3m', requestedStartUtc: '2026-07-01', requestedEndUtc: '2026-07-31', accountCurrency: 'USD' }, { get: (o, key) => key in o ? o[key] : 0 })
+  const html = renderToStaticMarkup(React.createElement(GridBacktestResult, { detail: { run, baskets: [], cycles: [] }, busy: false, exportExcel() {}, exportGuardResearch() {} }))
+  assert.match(html, /RESEARCH ONLY/); assert.match(html, /L3_ADX15_ADVERSE2/)
+  assert.match(html, /5 equal-lot levels/); assert.match(html, /stop level 6/)
+  assert.match(html, /Monitor from L3/); assert.match(html, /ADX increase ≥ 1.5/)
+  assert.match(html, /Consecutive adverse closes ≥ 2/)
+  assert.match(html, /Export Grid Excel/)
+  assert.doesNotMatch(html, /Export Guard Research|SCREENING ONLY|4 equal-lot levels/)
+})

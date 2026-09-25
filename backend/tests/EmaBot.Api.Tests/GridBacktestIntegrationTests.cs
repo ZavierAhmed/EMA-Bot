@@ -187,6 +187,7 @@ public sealed class GridBacktestIntegrationTests
 
     [Theory]
     [InlineData("GRID_RANGE_V1", 5)] [InlineData("GRID_RANGE_4L_RESEARCH_V1", 4)]
+    [InlineData("GRID_RANGE_BREAKOUT_GUARD_RESEARCH_V1", 5)]
     public async Task G4AHttpRoutesRequireAdminAndReturnFrozenProfile(string strategyId, int levels)
     {
         using var baseFactory = new EmaBotApiFactory(); var native = new Native();
@@ -203,7 +204,7 @@ public sealed class GridBacktestIntegrationTests
         Assert.Equal(AppRoles.Admin, typeof(GridBacktestsController).GetCustomAttributes(typeof(AuthorizeAttribute), false).Cast<AuthorizeAttribute>().Single().Roles);
         using (var scope = factory.Services.CreateScope()) await Seed(scope.ServiceProvider.GetRequiredService<EmaBotDbContext>());
         await Login(client);
-        var response = await Send(client, HttpMethod.Post, "/api/backtests", new { strategyId, levelCount = 99, riskPercent = 50m, cooldownBars = 0, stopLevel = 99, atrMultiplier = 9m, symbol = "TESTm", interval = "3m", startUtc = Start, endUtc = End, startingBalance = 1000m, accountCurrency = "FAKE", commissionPerLotPerSide = 0 });
+        var response = await Send(client, HttpMethod.Post, "/api/backtests", new { strategyId, minimumFilledLevel = 1, minimumAdxDelta = 0m, minimumConsecutiveAdverseCloses = 0, levelCount = 99, riskPercent = 50m, cooldownBars = 0, stopLevel = 99, atrMultiplier = 9m, symbol = "TESTm", interval = "3m", startUtc = Start, endUtc = End, startingBalance = 1000m, accountCurrency = "FAKE", commissionPerLotPerSide = 0 });
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var text = await response.Content.ReadAsStringAsync(); var json = JsonDocument.Parse(text).RootElement;
         Assert.Equal(strategyId, json.GetProperty("strategyId").GetString());

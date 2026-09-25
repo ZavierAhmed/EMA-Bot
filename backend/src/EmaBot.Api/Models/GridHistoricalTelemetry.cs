@@ -1,6 +1,6 @@
 namespace EmaBot.Api.Models;
 
-// Historical research evidence only; never consumed by strategy decisions.
+// Historical research evidence only; consumed only by the explicit historical breakout research profile.
 public sealed record GridHistoricalTelemetry
 {
     public DateTimeOffset CycleQualificationTimeUtc { get; init; }

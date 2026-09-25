@@ -15,7 +15,8 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
     {
         token.ThrowIfCancellationRequested();
         ValidateRequest(request, instrument);
-        var settings = request.Settings ?? GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings;
+        var profile = GridHistoricalStrategyProfile.Resolve(request.StrategyId);
+        var settings = request.Settings ?? profile.Settings;
         request = request with { Settings = settings };
         var spec = instrument.Spec;
         var bars = input.Where(b => b.IsClosed && (request.RequestedEndUtc is null || b.CloseTimeUtc <= request.RequestedEndUtc))
@@ -96,7 +97,7 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                 if (modeBlocked++ == 0) entries.Add(new(bar.CloseTimeUtc, "TradeModeBlocked", Detail: instrument.TradeMode.ToString()));
                 continue;
             }
-            // Capture transitions without feeding any observer value into the engine.
+            // Normal fills and exits retain priority over the explicit research guard.
             var closedBeforeBar = engine.Cycle?.ExitReason is not null;
             var maxBeforeBar = engine.Cycle?.Levels.Where(l => l.FillTime is not null).Select(l => l.Number).DefaultIfEmpty(0).Max() ?? 0;
             var transition = engine.ProcessBar(new(bar.ToCandle(), bar.SpreadPoints, spec.PointSize));
@@ -131,16 +132,25 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
                     fill.Lots * request.PaperCommissionPerLotPerSide, 0m, 0m));
                 Event(new(bar.CloseTimeUtc, GridHistoricalEventType.Fill, fill.Number, fill.Price));
             }
+            if (transition.ExitReason is { } reason)
+                await CloseAsync(reason == GridExitReason.TakeProfit ? GridHistoricalExitReason.TakeProfit : GridHistoricalExitReason.EmergencyStop,
+                    engine.Cycle!.ExitPrice!.Value, bar);
+            GridHistoricalTelemetry? evidence = null;
             if (!closedBeforeBar && engine.Cycle is { Direction: { } locked } observed
                 && observed.Levels.Any(l => l.FillTime is not null))
             {
                 var maxAfterBar = observed.Levels.Where(l => l.FillTime is not null).Max(l => l.Number);
-                telemetry.Observe(bar, indicator, spec.PointSize, priorBidClose, locked,
+                evidence = telemetry.Observe(bar, indicator, spec.PointSize, priorBidClose, locked,
                     maxBeforeBar, maxAfterBar, transition.NewFills.Count, transition.ExitReason);
             }
-            if (transition.ExitReason is { } reason)
-                await CloseAsync(reason == GridExitReason.TakeProfit ? GridHistoricalExitReason.TakeProfit : GridHistoricalExitReason.EmergencyStop,
-                    engine.Cycle!.ExitPrice!.Value, bar);
+            if (transition.ExitReason is null && profile.GuardId == GridBreakoutGuardRules.Id && evidence is not null
+                && GridBreakoutGuardRules.Matches(evidence.MaxFilledLevelAfterBar, evidence.AdxDeltaFromQualification, evidence.ConsecutiveAdverseCloses))
+            {
+                var exit = bar.Close + (engine.Cycle!.Direction == GridBasketDirection.Short ? bar.SpreadPoints * spec.PointSize : 0m);
+                engine.CloseHistoricalResearchBreakoutGuard(bar.CloseTimeUtc, exit);
+                telemetry.MarkHistoricalBreakoutGuardExit(evidence);
+                await CloseAsync(GridHistoricalExitReason.BreakoutGuard, exit, bar);
+            }
 
             // G0 rejects active/cooldown/stale qualification times before economics.
             if (engine.Cycle is { ExitReason: null } || engine.CooldownRemaining > 0) continue;
@@ -199,8 +209,9 @@ public sealed class GridHistoricalBacktestEngine(IMt5TradeCalculator calculator)
             || request.StartingBalance <= 0m || request.PaperCommissionPerLotPerSide < 0m
             || request.RequestedStartUtc >= request.RequestedEndUtc)
             throw Failure("InvalidRequest", null, "Explicit matching symbol, interval, currency, balance, commission and valid dates are required.");
-        var settings = request.Settings ?? GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings;
-        if (!settings.IsValid || settings != GridHistoricalStrategyProfile.Resolve(request.StrategyId).Settings)
+        var profile = GridHistoricalStrategyProfile.Resolve(request.StrategyId);
+        var settings = request.Settings ?? profile.Settings;
+        if (!settings.IsValid || settings != profile.Settings)
             throw Failure("InvalidSettings", null, "Historical Grid settings must match the selected frozen profile.");
         // Reuse only the existing strategy-neutral native evidence validator.
         if (Mt5HistoricalBacktestEngine.ValidateNativeInstrument(instrument.Spec) is { } invalid)

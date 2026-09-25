@@ -19,7 +19,7 @@ internal sealed class GridDeepTelemetryObserver
         sequence = adverseCloses = boundaryCloses = 0; previousActiveClose = null;
     }
 
-    public void Observe(Mt5HistoricalExecutionBar bar, GridRangeIndicatorSnapshot current,
+    public GridHistoricalTelemetry Observe(Mt5HistoricalExecutionBar bar, GridRangeIndicatorSnapshot current,
         decimal pointSize, decimal? previousBidClose, GridBasketDirection direction,
         int maxBefore, int maxAfter, int newFillCount, GridExitReason? exit)
     {
@@ -34,7 +34,7 @@ internal sealed class GridDeepTelemetryObserver
         var body = Math.Abs(bar.Close - bar.Open);
         decimal? trueRange = previousBidClose is { } previous
             ? Math.Max(bar.High - bar.Low, Math.Max(Math.Abs(bar.High - previous), Math.Abs(bar.Low - previous))) : null;
-        rows.Add(new()
+        var row = new GridHistoricalTelemetry
         {
             CycleQualificationTimeUtc = cycle.Indicators.Time, Sequence = sequence++, TimeUtc = bar.CloseTimeUtc,
             Direction = direction.ToString(), BidOpen = bar.Open, BidHigh = bar.High, BidLow = bar.Low, BidClose = bar.Close,
@@ -54,7 +54,16 @@ internal sealed class GridDeepTelemetryObserver
             MaxFilledLevelBeforeBar = maxBefore, MaxFilledLevelAfterBar = maxAfter, NewFillCount = newFillCount,
             DeepestConfiguredLevel = deepestLevel, DeepestLevelFilled = maxAfter >= deepestLevel,
             ExitReasonThisBar = exit?.ToString()
-        });
+        };
+        rows.Add(row);
+        return row;
+    }
+
+    internal void MarkHistoricalBreakoutGuardExit(GridHistoricalTelemetry row)
+    {
+        if (rows.Count == 0 || !ReferenceEquals(rows[^1], row) || row.ExitReasonThisBar is not null)
+            throw new InvalidOperationException("Only the current unclosed telemetry row may receive a guard exit.");
+        rows[^1] = row with { ExitReasonThisBar = "BreakoutGuard" };
     }
 
     private static decimal? Ratio(decimal? numerator, decimal? denominator)

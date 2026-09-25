@@ -11,7 +11,7 @@ public enum GridBasketDirection { Long, Short }
 [Flags]
 public enum GridAllowedDirections { None = 0, Long = 1, Short = 2, Both = Long | Short }
 public enum GridLevelStatus { Candidate, Filled, Canceled, Closed }
-public enum GridExitReason { TakeProfit, EmergencyStop }
+public enum GridExitReason { TakeProfit, EmergencyStop, BreakoutGuard }
 public enum GridCycleDiagnostics
 {
     InsufficientWarmup, InvalidCandles, InvalidSettings, AtrUnavailable, AdxUnavailable,
